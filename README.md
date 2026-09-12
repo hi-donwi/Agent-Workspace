@@ -28,6 +28,13 @@ This repository is the *how*, kept separate from the *what*:
 
 Nothing here names an organisation. Clone it, run `ws init`, and it is yours.
 
+> **A caveat worth reading before you adopt it.** `core` carries the git workflow, the
+> REST API contract, and the definition of done. The concrete rules for testing, security,
+> and observability currently live in the `java` pack. If your stack is not Java, you get
+> the mechanism and the practice but no binding rules for those three, and you should
+> write a pack rather than assume the Java ones transfer. `ws doctor` tells you this
+> rather than letting you discover it later.
+
 ---
 
 ## Start here
@@ -75,6 +82,7 @@ Three repositories share one directory. Full explanation in [AGENTS.md §1](AGEN
 | [`AGENTS.md`](AGENTS.md) | Working contract for agents + developers. **Read this first.** |
 | [`workspace.conf`](workspace.conf) | The only file that names an organisation |
 | [`.agents/standards/`](.agents/standards/) | Binding standards, in packs (`core`, `java`) |
+| [`test/ws.test.sh`](test/ws.test.sh) | The CLI's test suite — zero dependencies, runs in CI |
 | `.agents/skills.manifest` | Which skills to pull, and from where |
 | [`.agents/templates/`](.agents/templates/) | Templates: ADR, run, memory, endpoint spec |
 | [`.agents/bin/ws`](.agents/bin/ws) | Workspace CLI |

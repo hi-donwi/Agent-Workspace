@@ -14,6 +14,10 @@ git_group = git@gitlab.com:example
 context_dir    = context
 context_remote =
 
-# Standards packs this organisation applies. `core` is always on; a stack pack adds
-# the concrete rules for its language. See .agents/standards/README.md.
+# Standards packs this organisation applies. Each name must match a directory under
+# .agents/standards/ — `ws doctor` fails if one does not exist.
+#
+# `core` carries git workflow, the REST API contract and the definition of done.
+# The concrete testing, security and observability rules live in the stack packs,
+# so `core` alone leaves you without binding rules for those three; doctor says so.
 packs = core, java

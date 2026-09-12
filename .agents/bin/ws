@@ -1094,6 +1094,28 @@ cmd_doctor() {
   done < <(reg_rows)
   echo
 
+  echo "-- Standards --"
+  local pack packs_ok=1
+  for pack in $(conf_get packs core | tr ',' ' '); do
+    pack="$(printf '%s' "$pack" | tr -d '[:space:]')"
+    [ -n "$pack" ] || continue
+    if [ -d "$ROOT/.agents/standards/$pack" ]; then
+      c_grn "ok pack '$pack' ($(find "$ROOT/.agents/standards/$pack" -name '*.md' | wc -l | tr -d ' ') standards)"
+    else
+      c_red "x workspace.conf declares pack '$pack', but .agents/standards/$pack/ does not exist"
+      fail=1; packs_ok=0
+    fi
+  done
+  # core carries git workflow, the API contract and the definition of done. The
+  # concrete testing, security and observability rules live in the stack packs,
+  # so a workspace running core alone has no binding rules for them and should
+  # know it rather than assume the Java ones transfer.
+  if [ "$packs_ok" = 1 ] && [ "$(conf_get packs core | tr -d '[:space:]')" = "core" ]; then
+    c_ylw "! only 'core' is enabled - no binding testing, security or observability rules"
+    c_dim "    add a stack pack, or write one: .agents/standards/README.md"
+  fi
+  echo
+
   echo "-- Skills --"
   if [ ! -f "$MANIFEST" ]; then
     c_ylw "! no .agents/skills.manifest - this workspace pulls no skills"

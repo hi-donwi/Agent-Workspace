@@ -280,7 +280,24 @@ All under `.agents/standards/`, grouped into **packs**. Which packs apply is dec
 
 An organisation working in another stack **adds a pack**; it does not edit `core`. Note
 that the concrete testing, security, and observability rules currently live in the `java`
-pack — a new stack pack must supply its own rather than assume those transfer.
+pack — a new stack pack must supply its own rather than assume those transfer. `ws doctor`
+fails if `workspace.conf` names a pack with no directory, and warns when only `core` is
+enabled, because that combination leaves those three unruled.
+
+### Changing the CLI
+
+`ws` writes hooks into client repositories, edits `.git/info/exclude`, and runs `rm -rf`
+over skill directories. A regression there damages real repos, so it has a test suite:
+
+```bash
+./test/ws.test.sh        # zero dependencies; runs in CI on every push
+```
+
+It builds a throwaway workspace, a fake product repo, and a local skills source in a
+temporary directory — no network, nothing touching your own clone. Two bugs found by hand
+while building this workspace are now regression tests, including one that passed
+`bash -n` cleanly. Add a case whenever you change behaviour; a change to `ws` with a green
+suite and no new case is a change nobody checked.
 
 Deviating from a standard **is allowed**, but through an ADR in `docs/adr/` — not silently
 inside one source file. Template: `.agents/templates/adr.md`.
