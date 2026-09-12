@@ -1,3 +1,10 @@
+# --- Skills: fetched, not vendored ---------------------------------------------
+# .agents/skills/ is materialised by `ws skills sync` from the repository named in
+# .agents/skills.manifest. The manifest and skills.lock are tracked; the fetched
+# copies are not, so skills have exactly one home and one history.
+/.agents/skills/
+/.agents/.cache/
+
 # --- Organisation identity -----------------------------------------------------
 # workspace.conf names the organisation that owns this clone. It is machine- and
 # org-local; workspace.conf.example is what the repository ships.

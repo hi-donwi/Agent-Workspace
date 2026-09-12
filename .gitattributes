@@ -12,3 +12,6 @@ context/registry.tsv merge=union
 
 # .agents/skills/index.json is generated. On a conflict do not merge it by hand —
 # run `ws skills` and commit the regenerated file.
+
+# Work sessions are append-only and written by several people and agents at once.
+context/works/**/*.jsonl merge=union

@@ -29,6 +29,11 @@ REGISTRY="$CONTEXT_DIR/registry.tsv"
 MEM="$CONTEXT_DIR/memory/projects"
 RUNS="$CONTEXT_DIR/runs"
 CONTEXT_SKILLS="$CONTEXT_DIR/skills"
+WORKS="$CONTEXT_DIR/works"
+MANIFEST="$ROOT/.agents/skills.manifest"
+LOCK="$ROOT/.agents/skills.lock"
+SKILL_CACHE="$ROOT/.agents/.cache/skills"
+SKILL_INDEX="$ROOT/.agents/.cache/source-index.json"
 
 c_red()  { printf '\033[31m%s\033[0m\n' "$*"; }
 c_grn()  { printf '\033[32m%s\033[0m\n' "$*"; }
@@ -494,12 +499,356 @@ build_skills_index() {
 }
 
 cmd_skills() {
+  local action="${1:-status}"; shift || true
+  case "$action" in
+    status)    skills_status ;;
+    sync)      skills_sync ;;
+    add)       skills_edit add "$@" ;;
+    remove|rm) skills_edit remove "$@" ;;
+    available) skills_available ;;
+    index)     skills_index ;;
+    *) die "usage: ws skills [status|sync|add <name>|remove <name>|available|index]" ;;
+  esac
+}
+
+skills_index() {
   build_skills_index "$SKILLS/index.json" "$SKILLS"
-  c_grn "-> .agents/skills/index.json updated ($(grep -c '"name"' "$SKILLS/index.json") skills)"
+  c_grn "-> .agents/skills/index.json ($(grep -c '"name"' "$SKILLS/index.json") skills)"
   if [ -d "$CONTEXT_SKILLS" ] && [ -n "$(find "$CONTEXT_SKILLS" -maxdepth 2 -name SKILL.md 2>/dev/null)" ]; then
     build_skills_index "$CONTEXT_SKILLS/index.json" "$CONTEXT_SKILLS"
-    c_grn "-> context/skills/index.json updated ($(grep -c '"name"' "$CONTEXT_SKILLS/index.json") skills)"
+    c_grn "-> context/skills/index.json ($(grep -c '"name"' "$CONTEXT_SKILLS/index.json") skills)"
   fi
+}
+
+skills_status() {
+  local want; want="$(manifest_resolve 2>/dev/null | wc -l | tr -d ' ')"
+  local have; have="$(find "$SKILLS" -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')"
+  c_grn "source: $(conf_manifest source '(none)')  ref: $(conf_manifest ref main)"
+  [ -f "$LOCK" ] && c_dim "  pinned: $(sed -n 's/^commit[[:space:]]*=[[:space:]]*//p' "$LOCK" | head -1)"
+  printf '  %s wanted, %s materialised in .agents/skills/\n' "$want" "$have"
+  [ "$want" = "$have" ] || c_ylw "  ! out of sync - run: ws skills sync"
+  local n=0
+  [ -d "$CONTEXT_SKILLS" ] && n="$(find "$CONTEXT_SKILLS" -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$n" != 0 ] && c_dim "  plus $n domain skill(s) in context/skills/"
+  return 0
+}
+
+# Read a key from the manifest's header (source =, ref =).
+conf_manifest() {
+  local key="$1" default="${2:-}"
+  [ -f "$MANIFEST" ] || { printf '%s' "$default"; return; }
+  local v; v="$(sed -n "s/^[[:space:]]*$key[[:space:]]*=[[:space:]]*//p" "$MANIFEST" | head -1)"
+  v="${v%%#*}"; v="${v%"${v##*[![:space:]]}"}"
+  [ -n "$v" ] && printf '%s' "$v" || printf '%s' "$default"
+}
+
+# The cache is a blobless, checkout-less clone. Only the paths we ask for are
+# ever materialised, which is what makes "take three skills out of forty" cheap.
+skills_cache() {
+  local src; src="$(conf_manifest source)"
+  [ -n "$src" ] || die "no 'source =' in .agents/skills.manifest"
+  local ref; ref="$(conf_manifest ref main)"
+  if [ ! -d "$SKILL_CACHE/.git" ]; then
+    mkdir -p "$(dirname "$SKILL_CACHE")"
+    git clone --quiet --filter=blob:none --no-checkout "$src" "$SKILL_CACHE"
+    git -C "$SKILL_CACHE" sparse-checkout init --cone --quiet 2>/dev/null || true
+  fi
+  git -C "$SKILL_CACHE" remote set-url origin "$src"
+  git -C "$SKILL_CACHE" fetch --quiet origin "$ref"
+  # Cone-mode sparse checkout only understands directories, and the index is a
+  # file at the root - so read it straight out of the object store instead.
+  git -C "$SKILL_CACHE" show FETCH_HEAD:index.json > "$SKILL_INDEX" 2>/dev/null \
+    || die "the source repository has no index.json at its root"
+}
+
+# Expand the manifest's `pack X` / `skill Y` lines into a plain list of names.
+# The remote's index.json is the authority on which skills a pack contains.
+manifest_resolve() {
+  [ -f "$MANIFEST" ] || return 0
+  local idx="$SKILL_INDEX"
+  local kind name
+  while read -r kind name; do
+    case "$kind" in
+      pack)
+        [ -f "$idx" ] || { c_ylw "  ! no cached index - run: ws skills sync" >&2; return 0; }
+        sed -n 's/.*"name": "\([^"]*\)", "pack": "\([^"]*\)".*/\2 \1/p' "$idx" \
+          | awk -v p="$name" '$1==p {print $2}'
+        ;;
+      skill) printf '%s\n' "$name" ;;
+    esac
+  done < <(grep -E '^[[:space:]]*(pack|skill)[[:space:]]+[A-Za-z0-9_-]+' "$MANIFEST" \
+             | sed -E 's/^[[:space:]]*//; s/[[:space:]]+/ /g; s/[[:space:]]*#.*//')
+  return 0
+}
+
+skills_available() {
+  skills_cache
+  local idx="$SKILL_INDEX"
+  printf '%-32s %-7s %s\n' SKILL PACK WANTED
+  local wanted; wanted="$(manifest_resolve | sort -u)"
+  sed -n 's/.*"name": "\([^"]*\)", "pack": "\([^"]*\)".*/\1 \2/p' "$idx" | sort | \
+  while read -r name pack; do
+    local mark="-"
+    printf '%s\n' "$wanted" | grep -qxF "$name" && mark="yes"
+    printf '%-32s %-7s %s\n' "$name" "$pack" "$mark"
+  done
+}
+
+skills_edit() {
+  local op="$1"; shift
+  [ $# -gt 0 ] || die "usage: ws skills $op <name> [name...]"
+  [ -f "$MANIFEST" ] || die "no .agents/skills.manifest"
+  local n
+  for n in "$@"; do
+    case "$op" in
+      add)
+        grep -qE "^[[:space:]]*skill[[:space:]]+$n[[:space:]]*$" "$MANIFEST" \
+          && { c_dim "- $n already in the manifest"; continue; }
+        printf 'skill %s\n' "$n" >> "$MANIFEST"; c_grn "+ $n" ;;
+      remove)
+        if grep -qE "^[[:space:]]*skill[[:space:]]+$n[[:space:]]*$" "$MANIFEST"; then
+          grep -vE "^[[:space:]]*skill[[:space:]]+$n[[:space:]]*$" "$MANIFEST" > "$MANIFEST.tmp"
+          mv "$MANIFEST.tmp" "$MANIFEST"; c_grn "- $n"
+        else
+          c_ylw "! $n is not listed individually (it may come from a pack)"
+        fi ;;
+    esac
+  done
+  skills_sync
+}
+
+# Materialises exactly the wanted skills, then records the commit they came from.
+# .agents/skills/ is generated and git-ignored: the manifest and the lock are the
+# tracked truth, so a teammate gets byte-identical skills from `ws skills sync`.
+skills_sync() {
+  skills_cache
+  local sha; sha="$(git -C "$SKILL_CACHE" rev-parse FETCH_HEAD)"
+
+  local wanted; wanted="$(manifest_resolve | sort -u)"
+  [ -n "$wanted" ] || { c_ylw "manifest lists no skills"; return 0; }
+
+  local paths=()
+  local n
+  while IFS= read -r n; do [ -n "$n" ] && paths+=("skills/$n"); done <<< "$wanted"
+  git -C "$SKILL_CACHE" sparse-checkout set "${paths[@]}" >/dev/null
+  git -C "$SKILL_CACHE" checkout --quiet -B sync FETCH_HEAD
+
+  mkdir -p "$SKILLS"
+  # Remove previously materialised skills that are no longer wanted, leaving any
+  # hand-written local skill (one the manifest never mentions but that has no
+  # counterpart upstream) untouched is NOT safe here - so we only delete what we
+  # know we placed, tracked in the lock's file list.
+  if [ -f "$LOCK" ]; then
+    while IFS= read -r n; do
+      [ -n "$n" ] || continue
+      printf '%s\n' "$wanted" | grep -qxF "$n" || { rm -rf "${SKILLS:?}/$n"; c_dim "- $n removed"; }
+    done < <(sed -n 's/^skill[[:space:]]*=[[:space:]]*//p' "$LOCK")
+  fi
+
+  local added=0
+  while IFS= read -r n; do
+    [ -n "$n" ] || continue
+    if [ ! -d "$SKILL_CACHE/skills/$n" ]; then
+      c_red "x '$n' is not in the source repository"; continue
+    fi
+    rm -rf "${SKILLS:?}/$n"
+    cp -R "$SKILL_CACHE/skills/$n" "$SKILLS/$n"
+    added=$((added+1))
+  done <<< "$wanted"
+
+  { printf '# Generated by `ws skills sync`. Tracked: it pins what everyone gets.\n'
+    printf 'source = %s\n' "$(conf_manifest source)"
+    printf 'ref    = %s\n' "$(conf_manifest ref main)"
+    printf 'commit = %s\n' "$sha"
+    printf 'synced = %s\n' "$(date -u +%FT%TZ)"
+    printf '%s\n' "$wanted" | sed 's/^/skill = /'
+  } > "$LOCK"
+
+  build_skills_index "$SKILLS/index.json" "$SKILLS"
+  c_grn "-> $added skills materialised from ${sha:0:8}"
+}
+
+# ─────────────────────────────────────────────────────────────── clock / agent
+# Two clocks, never one.
+#
+# Human hours are payroll and invoice hours: a person's attention, which cannot
+# run in parallel with itself. Agent hours are machine time: cheap, often several
+# at once, and billed in tokens rather than salary. Adding them produces a number
+# that is wrong for every purpose - it overstates effort to a client, understates
+# cost to finance, and tells a lead nothing about capacity. So they are recorded
+# in separate files and reported in separate columns, and `ws hours` will not
+# print a combined total.
+
+now_iso()  { date +%Y-%m-%dT%H:%M:%S%z | sed -E 's/([0-9]{2})([0-9]{2})$/\1:\2/'; }
+now_ts()   { date +%s; }
+works_file() { printf '%s/%s/%s/%s.jsonl' "$WORKS" "$1" "$2" "$(date +%Y-%m)"; }
+open_file()  { printf '%s/.open-%s-%s.json' "$WORKS" "$1" "$(human_id)"; }
+
+# kind = human | agent
+clock_in() {
+  local kind="$1" key="${2:-}"; shift 2 || true
+  local note="${*:-}"
+  [ -n "$key" ] || die "usage: ws ${kind/human/clock} in <project-key> [note]"
+  [ -d "$MEM/$key" ] || c_ylw "! '$key' has no memory yet - is the key right?"
+  mkdir -p "$WORKS"
+  local of; of="$(open_file "$kind")"
+  if [ -f "$of" ]; then
+    c_ylw "! already clocked in on $(sed -n 's/.*"project":"\([^"]*\)".*/\1/p' "$of") since $(sed -n 's/.*"start":"\([^"]*\)".*/\1/p' "$of")"
+    c_dim "  close it first: ws ${kind/human/clock} out"
+    return 1
+  fi
+  printf '{"kind":"%s","project":"%s","actor":"%s","tool":"%s","start":"%s","start_ts":%s,"note":"%s"}\n' \
+    "$kind" "$key" "$(human_id)" "$(agent_id)" "$(now_iso)" "$(now_ts)" "$note" > "$of"
+  c_grn "-> $kind clock in on $key"
+}
+
+clock_out() {
+  local kind="$1"; shift || true
+  local note="${*:-}"
+  local of; of="$(open_file "$kind")"
+  [ -f "$of" ] || die "not clocked in - start with: ws ${kind/human/clock} in <project-key>"
+
+  local key actor tool start start_ts open_note
+  key="$(sed -n 's/.*"project":"\([^"]*\)".*/\1/p' "$of")"
+  actor="$(sed -n 's/.*"actor":"\([^"]*\)".*/\1/p' "$of")"
+  tool="$(sed -n 's/.*"tool":"\([^"]*\)".*/\1/p' "$of")"
+  start="$(sed -n 's/.*"start":"\([^"]*\)".*/\1/p' "$of")"
+  start_ts="$(sed -n 's/.*"start_ts":\([0-9]*\).*/\1/p' "$of")"
+  open_note="$(sed -n 's/.*"note":"\([^"]*\)".*/\1/p' "$of")"
+  [ -n "$note" ] || note="$open_note"
+
+  local end end_ts mins
+  end="$(now_iso)"; end_ts="$(now_ts)"
+  mins=$(( (end_ts - start_ts) / 60 ))
+
+  local f; f="$(works_file "$kind" "$key")"
+  mkdir -p "$(dirname "$f")"
+  printf '{"kind":"%s","project":"%s","actor":"%s","tool":"%s","start":"%s","end":"%s","start_ts":%s,"end_ts":%s,"minutes":%s,"note":"%s"}\n' \
+    "$kind" "$key" "$actor" "$tool" "$start" "$end" "$start_ts" "$end_ts" "$mins" "$note" >> "$f"
+  rm -f "$of"
+  c_grn "-> $kind $((mins / 60))h $((mins % 60))m on $key"
+  c_dim "   ${f#$ROOT/}"
+}
+
+clock_status() {
+  local kind any=0
+  for kind in human agent; do
+    local of; of="$(open_file "$kind")"
+    if [ -f "$of" ]; then
+      any=1
+      c_grn "$kind: open on $(sed -n 's/.*"project":"\([^"]*\)".*/\1/p' "$of") since $(sed -n 's/.*"start":"\([^"]*\)".*/\1/p' "$of")"
+    fi
+  done
+  [ "$any" = 1 ] || c_dim "no open session"
+  return 0
+}
+
+cmd_clock() {
+  case "${1:-status}" in
+    in)  shift; clock_in human "$@" ;;
+    out) shift; clock_out human "$@" ;;
+    status) clock_status ;;
+    *) die "usage: ws clock [in <project-key> [note] | out [note] | status]" ;;
+  esac
+}
+
+cmd_agent() {
+  case "${1:-status}" in
+    in)  shift; clock_in agent "$@" ;;
+    out) shift; clock_out agent "$@" ;;
+    status) clock_status ;;
+    *) die "usage: ws agent [in <project-key> [note] | out [note] | status]" ;;
+  esac
+}
+
+# Net hours per day: overlapping sessions are merged, so two agents running at
+# once for an hour is one hour of elapsed work, not two. Human and agent are
+# merged independently and never against each other.
+hours_net() {
+  local dir="$1" month="$2" project="$3"
+  [ -d "$dir" ] || return 0
+  local pattern="$dir/*/$month.jsonl"
+  [ "$project" = "-" ] || pattern="$dir/$project/$month.jsonl"
+  # shellcheck disable=SC2086
+  cat $pattern 2>/dev/null | awk '
+    match($0, /"start_ts":[0-9]+/) { st = substr($0, RSTART+12, RLENGTH-12) }
+    match($0, /"end_ts":[0-9]+/)   { en = substr($0, RSTART+10, RLENGTH-10) }
+    match($0, /"start":"[^"]+/)    { d  = substr($0, RSTART+9, 10) }
+    st && en { key = d; n[key]++; S[key, n[key]] = st; E[key, n[key]] = en; st=en=0 }
+    END {
+      total = 0
+      for (d in n) {
+        # insertion sort the day\x27s intervals by start
+        for (i = 2; i <= n[d]; i++) {
+          s = S[d,i]; e = E[d,i]; j = i - 1
+          while (j >= 1 && S[d,j] > s) { S[d,j+1]=S[d,j]; E[d,j+1]=E[d,j]; j-- }
+          S[d,j+1]=s; E[d,j+1]=e
+        }
+        cs = S[d,1]; ce = E[d,1]; day = 0
+        for (i = 2; i <= n[d]; i++) {
+          if (S[d,i] <= ce) { if (E[d,i] > ce) ce = E[d,i] }
+          else { day += ce - cs; cs = S[d,i]; ce = E[d,i] }
+        }
+        day += ce - cs
+        printf "%s %.2f %d\n", d, day/3600, n[d]
+        total += day
+      }
+      printf "TOTAL %.2f 0\n", total/3600
+    }' | sort
+}
+
+cmd_hours() {
+  local month; month="$(date +%Y-%m)"
+  local project="-"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --month) month="${2:?}"; shift 2 ;;
+      --project) project="${2:?}"; shift 2 ;;
+      *) die "usage: ws hours [--month YYYY-MM] [--project <key>]" ;;
+    esac
+  done
+  [ -d "$WORKS" ] || die "no hours recorded yet (context/works/)"
+
+  local scope="all projects"; [ "$project" = "-" ] || scope="$project"
+  echo "Hours for $month - $scope"
+  echo
+
+  local h a
+  h="$(hours_net "$WORKS/human" "$month" "$project")"
+  a="$(hours_net "$WORKS/agent" "$month" "$project")"
+
+  printf '%-12s %10s %10s\n' DAY HUMAN AGENT
+  local d
+  for d in $(printf '%s\n%s\n' "$h" "$a" | awk '$1!="TOTAL"{print $1}' | sort -u); do
+    printf '%-12s %10s %10s\n' "$d" \
+      "$(printf '%s\n' "$h" | awk -v k="$d" '$1==k{print $2; f=1} END{if(!f)print "-"}')" \
+      "$(printf '%s\n' "$a" | awk -v k="$d" '$1==k{print $2; f=1} END{if(!f)print "-"}')"
+  done
+  echo
+  printf '%-12s %10s %10s\n' TOTAL \
+    "$(printf '%s\n' "$h" | awk '$1=="TOTAL"{print $2; f=1} END{if(!f)print "0.00"}')" \
+    "$(printf '%s\n' "$a" | awk '$1=="TOTAL"{print $2; f=1} END{if(!f)print "0.00"}')"
+  echo
+  c_dim "Net hours: overlapping sessions merged within each column."
+  c_dim "The two columns are deliberately not summed - see 'Two clocks' in AGENTS.md."
+}
+
+# ─────────────────────────────────────────────────────────────── ide
+# .vscode/settings.json is git-ignored so nobody's local tweaks are shared. The
+# team defaults therefore have to be copied in once per clone.
+cmd_ide() {
+  local src="$ROOT/.vscode/settings.shared.json" dst="$ROOT/.vscode/settings.json"
+  [ -f "$src" ] || die "no .vscode/settings.shared.json in this workspace"
+  if [ -f "$dst" ]; then
+    if diff -q "$src" "$dst" >/dev/null; then c_dim "- settings.json already matches the shared defaults"
+    else
+      c_ylw "! .vscode/settings.json exists and differs - left untouched"
+      c_dim "  compare with: diff .vscode/settings.shared.json .vscode/settings.json"
+    fi
+    return 0
+  fi
+  cp "$src" "$dst"
+  c_grn "-> .vscode/settings.json written from the shared defaults"
 }
 
 # ─────────────────────────────────────────────────────────────── doctor
@@ -655,20 +1004,40 @@ cmd_doctor() {
   echo
 
   echo "-- Skills --"
-  local n; n="$(find "$SKILLS" -name SKILL.md -maxdepth 2 2>/dev/null | wc -l | tr -d ' ')"
-  c_grn "ok $n skills"
-  if [ ! -f "$SKILLS/index.json" ]; then
-    c_ylw "! index.json not generated - run: ws skills"
+  if [ ! -f "$MANIFEST" ]; then
+    c_ylw "! no .agents/skills.manifest - this workspace pulls no skills"
   else
-    # index.json is generated but committed, so it can drift from the skills themselves.
-    local tmpidx; tmpidx="$(mktemp)"
-    build_skills_index "$tmpidx" "$SKILLS"
-    if diff -q <(grep -v '"generated"' "$SKILLS/index.json") <(grep -v '"generated"' "$tmpidx") >/dev/null; then
-      c_grn "ok index.json is up to date"
+    local want have
+    want="$(manifest_resolve 2>/dev/null | sort -u | wc -l | tr -d ' ')"
+    have="$(find "$SKILLS" -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')"
+    if [ ! -f "$LOCK" ]; then
+      c_ylw "! never synced - run: ws skills sync"
+    elif [ "$want" != "$have" ] || [ "$have" = 0 ]; then
+      c_ylw "! skills out of sync ($want wanted, $have present) - run: ws skills sync"
     else
-      c_ylw "! index.json is stale - run: ws skills"
+      c_grn "ok $have skills at $(sed -n 's/^commit[[:space:]]*=[[:space:]]*//p' "$LOCK" | cut -c1-8)"
     fi
-    rm -f "$tmpidx"
+    # Fetched skills are generated output. If they are tracked here, the source
+    # repository has quietly stopped being the single source.
+    if [ -n "$(git -C "$ROOT" ls-files .agents/skills 2>/dev/null)" ]; then
+      c_red "x .agents/skills/ is tracked - it is generated by 'ws skills sync'"; fail=1
+    fi
+  fi
+  local nctx=0
+  [ -d "$CONTEXT_SKILLS" ] && nctx="$(find "$CONTEXT_SKILLS" -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$nctx" != 0 ] && c_grn "ok $nctx domain skill(s) in context/skills/"
+  echo
+
+  echo "-- Hours --"
+  if [ -d "$WORKS" ]; then
+    local hm am
+    hm="$(find "$WORKS/human" -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ')"
+    am="$(find "$WORKS/agent" -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ')"
+    c_grn "ok human and agent hours recorded separately ($hm / $am month files)"
+    local open; open="$(find "$WORKS" -maxdepth 1 -name '.open-*.json' 2>/dev/null | wc -l | tr -d ' ')"
+    [ "$open" = 0 ] || c_ylw "  ! $open session still clocked in - close it with: ws clock out"
+  else
+    c_dim "- no hours recorded yet (ws clock in <project-key>)"
   fi
   echo
 
@@ -708,7 +1077,11 @@ ws — engineering workspace CLI
   ws log <key> "milestone"         append one row to the project log
   ws sync                          pull the workspace, report product repo state
   ws route "task description"      show which skills apply
-  ws skills                        regenerate .agents/skills/index.json
+  ws skills [status|sync|add <n>|remove <n>|available|index]
+                                    skills pulled from the skills repository
+  ws clock in|out|status            HUMAN working hours
+  ws agent in|out|status            AGENT working hours - never summed with human
+  ws hours [--month M] [--project k]     report both, side by side
   ws ide                           copy the shared VS Code defaults into this clone
   ws where                         print the workspace root from anywhere
   ws doctor [--ci]                 check repo isolation, ignores, toolchain
@@ -729,6 +1102,9 @@ case "${1:-help}" in
   where) shift; cmd_where "$@" ;;
   unlink) shift; cmd_unlink "$@" ;;
   run) shift; cmd_run "$@" ;;
+  clock) shift; cmd_clock "$@" ;;
+  agent) shift; cmd_agent "$@" ;;
+  hours) shift; cmd_hours "$@" ;;
   log) shift; cmd_log "$@" ;;
   sync) shift; cmd_sync "$@" ;;
   route) shift; cmd_route "$@" ;;

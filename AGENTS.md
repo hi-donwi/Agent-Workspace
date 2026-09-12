@@ -1,4 +1,4 @@
-# AGENTS.md — Engineering Workspace
+# AGENTS.md — Agent Workspace
 
 The working contract for **every AI agent** (Claude Code, Cursor, Copilot, Codex, Gemini
 CLI, Antigravity) and **every developer** in the organisation named in `workspace.conf`.
@@ -175,11 +175,35 @@ first and follow it.**
 | Large reports/exports, XLSX/PDF/ZIP, async jobs, SSE | `bulk-reporting-export` |
 | Build, CI, release, deploy, systemd/containers | `java-delivery` |
 
-Every skill above belongs to the `java` pack, except `rest-api-contract`, which is `core`.
-An organisation's own domain skills live in `context/skills/` and are routed alongside
-these — `ws route` and `ws skills` search both.
+### Skills are fetched, not vendored
 
-Machine index: `.agents/skills/index.json` (regenerate: `ws skills`).
+`.agents/skills/` is **generated**. Skills live in their own repository so they have one
+version and one history across every workspace that uses them; this workspace declares
+what it wants in `.agents/skills.manifest` and materialises exactly that:
+
+```
+source = git@github.com:hi-donwi/Agent-Skills.git
+ref    = main
+
+pack core        # every skill in the pack
+pack java
+skill web-perf   # or just one
+```
+
+```bash
+ws skills available     # what the source repository offers
+ws skills add <name>    # add to the manifest and sync
+ws skills sync          # materialise; writes the resolved commit to skills.lock
+```
+
+`ws skills sync` uses a blobless, sparse checkout, so taking three skills out of forty
+costs three skills' worth of download. `skills.manifest` and `skills.lock` are tracked —
+they are what makes every teammate's `.agents/skills/` byte-identical. The materialised
+copies are git-ignored, and `ws doctor` fails if they ever become tracked.
+
+An organisation's own domain skills are different: they live in `context/skills/`, are
+committed to the context repo, and are never published. `ws route` searches both.
+
 Automatic routing: `ws route "<task description>"`.
 
 ---
@@ -270,7 +294,48 @@ Claude Code never collide and `handoff.md` always names a human.
 
 ---
 
-## 7. Security — non-negotiable
+## 7. Two clocks — human hours and agent hours
+
+Record both. Never add them together.
+
+**Human hours** are payroll and invoice hours: one person's attention, which cannot run in
+parallel with itself. **Agent hours** are machine time — cheap, frequently several at once,
+and paid for in tokens rather than salary.
+
+A single combined number is wrong for every purpose it could serve. It overstates effort
+to a client, understates cost to finance, and tells a lead nothing about capacity. So the
+two are written to separate files and `ws hours` prints them in separate columns with no
+total across them.
+
+```bash
+ws clock in <project-key> "what you are about to do"     # human
+ws clock out "what actually happened"
+
+ws agent in <project-key> "what the agent is doing"      # agent
+ws agent out
+
+ws hours --month 2026-09 --project <key>
+```
+
+Records land in the context repository, append-only, one file per project per month:
+
+```
+context/works/human/<project-key>/<YYYY-MM>.jsonl
+context/works/agent/<project-key>/<YYYY-MM>.jsonl
+```
+
+Each line carries ISO timestamps for a human to read and epoch seconds so reporting needs
+no date parsing. Reporting merges **overlapping intervals within each column**, so two
+agents running for the same hour is one hour of elapsed work, not two — and a person who
+forgets to clock out of one project before clocking into another is not billed twice.
+
+Agents: clock in when you start substantial work on a project and out before you stop, in
+the same breath as updating the run's `handoff.md`. A session nobody recorded is a session
+that did not happen, as far as next month's invoice is concerned.
+
+---
+
+## 8. Security — non-negotiable
 
 - **Never** put credentials, tokens, private keys, or client data in `.agents/`, `docs/`,
   or commit messages. This repo is shared with the whole team.
@@ -282,7 +347,7 @@ Claude Code never collide and `handoff.md` always names a human.
 
 ---
 
-## 8. How we expect work to be done
+## 9. How we expect work to be done
 
 - **Small and incremental.** One endpoint or one concern per commit — not twenty endpoints
   at once.
@@ -296,7 +361,7 @@ Claude Code never collide and `handoff.md` always names a human.
 
 ---
 
-## 9. Architecture — layer separation (mandatory)
+## 10. Architecture — layer separation (mandatory)
 
 Applies to all Java/Quarkus backend code across every project.
 
@@ -319,7 +384,7 @@ Details and examples: `.agents/standards/java/project-layout.md`.
 
 ---
 
-## 10. Definition of Done
+## 11. Definition of Done
 
 A change is done when **all** of these hold:
 

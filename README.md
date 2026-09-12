@@ -1,12 +1,32 @@
-# Engineering Workspace
+# Agent Workspace
 
-Development standards, AI agent context, and team memory — for whichever organisation
-owns this clone. The owner is declared in [`workspace.conf`](workspace.conf); nothing else
-in this repository names a company.
+[![doctor](https://github.com/hi-donwi/Agent-Workspace/actions/workflows/doctor.yml/badge.svg)](https://github.com/hi-donwi/Agent-Workspace/actions/workflows/doctor.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-This repo is **not** product code. It holds *how* we build product — so that every
-developer and every AI agent on the team works to the same rules, context, and quality bar,
-across projects and across time.
+**A shared working contract, binding standards, and durable memory for teams where AI
+agents and developers work on the same code.**
+
+Every agent — Claude Code, Cursor, Copilot, Codex, Gemini CLI — reads the same rules from
+the same place. Every session that ends leaves behind enough for the next person or agent
+to continue. Nothing internal leaks into a client's repository, and nothing of one
+organisation's leaks into this one.
+
+## The problem it solves
+
+Agents lose context when a session ends. Developers switch tools. Standards written inside
+a product repo diverge the moment there is a second product. And a codebase shared with a
+client is the wrong place for your own engineering notes.
+
+This repository is the *how*, kept separate from the *what*:
+
+- **Standards** an agent must follow, in packs you switch on per stack
+- **Skills** — task-shaped instructions an agent reads before starting, pulled from
+  [Agent-Skills](https://github.com/hi-donwi/Agent-Skills) a pack at a time
+- **Memory and runs** — what happened, what is in flight, what the next session needs
+- **Two clocks** — human hours and agent hours, recorded separately and never summed
+- **A CLI (`ws`)** that wires the repositories together and checks they stay separate
+
+Nothing here names an organisation. Clone it, run `ws init`, and it is yours.
 
 ---
 
@@ -55,7 +75,7 @@ Three repositories share one directory. Full explanation in [AGENTS.md §1](AGEN
 | [`AGENTS.md`](AGENTS.md) | Working contract for agents + developers. **Read this first.** |
 | [`workspace.conf`](workspace.conf) | The only file that names an organisation |
 | [`.agents/standards/`](.agents/standards/) | Binding standards, in packs (`core`, `java`) |
-| [`.agents/skills/`](.agents/skills/) | Agent skills for those packs |
+| `.agents/skills.manifest` | Which skills to pull, and from where |
 | [`.agents/templates/`](.agents/templates/) | Templates: ADR, run, memory, endpoint spec |
 | [`.agents/bin/ws`](.agents/bin/ws) | Workspace CLI |
 | [`docs/adr/`](docs/adr/) | Decisions about the workspace mechanism itself |
@@ -109,15 +129,18 @@ whoever owns the clone and live in the context repository — `context/registry.
 ## Common commands
 
 ```bash
-ws route "add order transaction summary endpoint"  # which skill applies
-ws run <project-key> "task title"                       # create a run
-ws log <project-key> "milestone"                        # append to the project log
-ws sync                                                  # pull workspace, report repos
-ws new <key> <folder> [remote]                           # register a new product repo
-ws link <key>                                            # pointer + commit guard
-ws where                                                 # print the workspace root
-ws skills                                                # regenerate index.json
-ws doctor                                                # workspace health check
+ws route "add an order summary endpoint"   # which skill applies to this task
+ws skills available                        # what the skills repository offers
+ws skills add code-review                  # take one, pinned to a commit
+ws run <project-key> "task title"          # start a run (multi-session work)
+ws log <project-key> "milestone"           # append to the project log
+ws clock in <project-key> "what you'll do" # human hours
+ws agent in <project-key> "what it'll do"  # agent hours, counted separately
+ws hours --month 2026-09                   # both, side by side
+ws sync                                    # pull workspace, report repo state
+ws new <key> <folder> [remote]             # register a new product repo
+ws link <key>                              # pointer + commit guard in a client repo
+ws doctor                                  # health check: isolation, portability, drift
 ```
 
 Add to `PATH` once, from inside your clone:
