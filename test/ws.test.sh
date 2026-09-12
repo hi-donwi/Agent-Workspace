@@ -229,6 +229,30 @@ ROUTE="$(ws route "testing alpha things" 2>&1)"
 printf '%s' "$ROUTE" | grep -q 'alpha' && ok "ws route finds a matching skill" \
   || bad "ws route finds a matching skill" "$ROUTE"
 
+section "doctor on a bare clone"
+# Three bugs have now shipped that only appear before anything has been created:
+# check-ignore not matching a directory that does not exist, and `find` on a
+# missing directory returning 1 into pipefail. A bare checkout — no skills
+# materialised, no context, no product repos — is the state every new machine and
+# every CI run starts in, so it gets its own case.
+BARE="$TMP/bare"
+mkdir -p "$BARE"
+cp -R "$SRC/.agents" "$BARE/.agents"
+rm -rf "$BARE/.agents/skills" "$BARE/.agents/.cache"
+for f in .gitignore .ignore .gitattributes AGENTS.md workspace.conf.example; do
+  cp "$SRC/$f" "$BARE/$f"
+done
+mkdir -p "$BARE/projects"; cp "$SRC/projects/README.md" "$BARE/projects/README.md"
+cp "$SRC/test/ws.test.sh" "$BARE/ws.test.sh" 2>/dev/null || true
+cp "$BARE/workspace.conf.example" "$BARE/workspace.conf"
+git -C "$BARE" init -q
+git -C "$BARE" remote add origin "https://example.invalid/bare.git"
+git -C "$BARE" add -A >/dev/null 2>&1
+git -C "$BARE" commit -qm bare >/dev/null 2>&1
+not_exists "$BARE/.agents/skills" "no skills are materialised yet"
+not_exists "$BARE/context" "no context repo yet"
+check "doctor survives a bare clone" env RUNDIR="$BARE" "$BARE/.agents/bin/ws" doctor --ci
+
 section "doctor: healthy, then each failure it must catch"
 git -C "$WS" add -A >/dev/null 2>&1
 git -C "$WS" commit -qm "test workspace" >/dev/null 2>&1

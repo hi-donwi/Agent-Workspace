@@ -152,7 +152,7 @@ cmd_context() {
     status)
       if [ -d "$CONTEXT_DIR/.git" ]; then
         c_grn "context: ${CONTEXT_DIR#$ROOT/} ($(git -C "$CONTEXT_DIR" remote get-url origin 2>/dev/null || echo 'no remote'))"
-        local n; n="$(find "$MEM" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
+        local n; n="$(count_dirs "$MEM")"
         c_dim "  $n project(s) in memory"
       else
         c_ylw "no context yet - run: ws context init"
@@ -171,6 +171,24 @@ repo_is_public() {
   GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c core.askPass=true \
     -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=8 \
     ls-remote "$url" >/dev/null 2>&1
+}
+
+# Counting files in a directory that may not exist yet is the single most common
+# way this script has broken: `find` returns 1, pipefail promotes that to the whole
+# pipeline, and `set -e` kills the run inside a command substitution. Every count
+# goes through here so that cannot happen again.
+count_files() {
+  local dir="$1"; shift
+  [ -d "$dir" ] || { printf '0'; return 0; }
+  local n; n="$(find "$dir" "$@" 2>/dev/null | wc -l | tr -d ' ')" || n=0
+  printf '%s' "${n:-0}"
+}
+
+count_dirs() {
+  local dir="$1"
+  [ -d "$dir" ] || { printf '0'; return 0; }
+  local n; n="$(find "$dir" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')" || n=0
+  printf '%s' "${n:-0}"
 }
 
 # ─────────────────────────────────────────────────────────────── list
@@ -540,7 +558,7 @@ cmd_skills() {
 skills_index() {
   build_skills_index "$SKILLS/index.json" "$SKILLS"
   c_grn "-> .agents/skills/index.json ($(grep -c '"name"' "$SKILLS/index.json") skills)"
-  if [ -d "$CONTEXT_SKILLS" ] && [ -n "$(find "$CONTEXT_SKILLS" -maxdepth 2 -name SKILL.md 2>/dev/null)" ]; then
+  if [ "$(count_files "$CONTEXT_SKILLS" -maxdepth 2 -name SKILL.md)" != 0 ]; then
     build_skills_index "$CONTEXT_SKILLS/index.json" "$CONTEXT_SKILLS"
     c_grn "-> context/skills/index.json ($(grep -c '"name"' "$CONTEXT_SKILLS/index.json") skills)"
   fi
@@ -548,13 +566,13 @@ skills_index() {
 
 skills_status() {
   local want; want="$(manifest_resolve 2>/dev/null | wc -l | tr -d ' ')"
-  local have; have="$(find "$SKILLS" -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')"
+  local have; have="$(count_files "$SKILLS" -maxdepth 2 -name SKILL.md)"
   c_grn "source: $(conf_manifest source '(none)')  ref: $(conf_manifest ref main)"
   [ -f "$LOCK" ] && c_dim "  pinned: $(sed -n 's/^commit[[:space:]]*=[[:space:]]*//p' "$LOCK" | head -1)"
   printf '  %s wanted, %s materialised in .agents/skills/\n' "$want" "$have"
   [ "$want" = "$have" ] || c_ylw "  ! out of sync - run: ws skills sync"
   local n=0
-  [ -d "$CONTEXT_SKILLS" ] && n="$(find "$CONTEXT_SKILLS" -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')"
+  n="$(count_files "$CONTEXT_SKILLS" -maxdepth 2 -name SKILL.md)"
   [ "$n" != 0 ] && c_dim "  plus $n domain skill(s) in context/skills/"
   return 0
 }
@@ -1100,7 +1118,7 @@ cmd_doctor() {
     pack="$(printf '%s' "$pack" | tr -d '[:space:]')"
     [ -n "$pack" ] || continue
     if [ -d "$ROOT/.agents/standards/$pack" ]; then
-      c_grn "ok pack '$pack' ($(find "$ROOT/.agents/standards/$pack" -name '*.md' | wc -l | tr -d ' ') standards)"
+      c_grn "ok pack '$pack' ($(count_files "$ROOT/.agents/standards/$pack" -name '*.md') standards)"
     else
       c_red "x workspace.conf declares pack '$pack', but .agents/standards/$pack/ does not exist"
       fail=1; packs_ok=0
@@ -1122,7 +1140,7 @@ cmd_doctor() {
   else
     local want have
     want="$(manifest_resolve 2>/dev/null | sort -u | wc -l | tr -d ' ')"
-    have="$(find "$SKILLS" -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')"
+    have="$(count_files "$SKILLS" -maxdepth 2 -name SKILL.md)"
     if [ ! -f "$LOCK" ]; then
       c_ylw "! never synced - run: ws skills sync"
     elif [ "$want" != "$have" ] || [ "$have" = 0 ]; then
@@ -1137,17 +1155,17 @@ cmd_doctor() {
     fi
   fi
   local nctx=0
-  [ -d "$CONTEXT_SKILLS" ] && nctx="$(find "$CONTEXT_SKILLS" -maxdepth 2 -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')"
+  nctx="$(count_files "$CONTEXT_SKILLS" -maxdepth 2 -name SKILL.md)"
   [ "$nctx" != 0 ] && c_grn "ok $nctx domain skill(s) in context/skills/"
   echo
 
   echo "-- Hours --"
   if [ -d "$WORKS" ]; then
     local hm am
-    hm="$(find "$WORKS/human" -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ')"
-    am="$(find "$WORKS/agent" -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ')"
+    hm="$(count_files "$WORKS/human" -name '*.jsonl')"
+    am="$(count_files "$WORKS/agent" -name '*.jsonl')"
     c_grn "ok human and agent hours recorded separately ($hm / $am month files)"
-    local open; open="$(find "$WORKS" -maxdepth 1 -name '.open-*.json' 2>/dev/null | wc -l | tr -d ' ')"
+    local open; open="$(count_files "$WORKS" -maxdepth 1 -name '.open-*.json')"
     [ "$open" = 0 ] || c_ylw "  ! $open session still clocked in - close it with: ws clock out"
   else
     c_dim "- no hours recorded yet (ws clock in <project-key>)"
