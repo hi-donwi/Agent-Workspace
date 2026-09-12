@@ -82,4 +82,5 @@ split costs the person at the keyboard nothing.
 - [x] `Agent-Skills` published with 38 skills in four packs
 - [x] `ws skills status|sync|add|remove|available|index` implemented
 - [x] `.agents/skills/` git-ignored; `ws doctor` fails if it is tracked
-- [ ] Decide whether `ws bootstrap` should hard-fail when the skills source is unreachable
+- [x] `ws bootstrap` syncs skills first; an unreachable source warns rather than fails,
+      because a new machine should still get its repositories

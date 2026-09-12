@@ -76,10 +76,15 @@ is `context/registry.tsv`: a map of name → remote → project key.
 To set up a new machine:
 
 ```bash
-.agents/bin/ws bootstrap      # clone every repo listed in registry.tsv
+.agents/bin/ws bootstrap      # skills, then the context repo, then every product repo
 .agents/bin/ws ide            # copy the shared editor defaults into this clone
 .agents/bin/ws doctor         # verify repo isolation, ignores, and links
 ```
+
+`ws bootstrap` pulls skills first — they are what an agent reads before touching any of
+the code it then clones. An unreachable skills source is a warning, not a failure: a new
+machine on a bad network still ends up with its repositories, and `ws doctor` keeps
+reporting the missing skills until someone syncs them.
 
 ### Open your editor at the workspace root, not at `projects/<x>`
 
@@ -328,6 +333,11 @@ Each line carries ISO timestamps for a human to read and epoch seconds so report
 no date parsing. Reporting merges **overlapping intervals within each column**, so two
 agents running for the same hour is one hour of elapsed work, not two — and a person who
 forgets to clock out of one project before clocking into another is not billed twice.
+
+Clocking out also rewrites `context/works/rollup/<YYYY-MM>.json` — a committed summary per
+month, per project, per day, so an invoice or a dashboard never has to re-scan every
+session file. It is derived, never authoritative; rebuild it any time with
+`ws hours --rollup`.
 
 Agents: clock in when you start substantial work on a project and out before you stop, in
 the same breath as updating the run's `handoff.md`. A session nobody recorded is a session

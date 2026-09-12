@@ -176,6 +176,21 @@ cmd_list() {
 # ─────────────────────────────────────────────────────────────── bootstrap
 cmd_bootstrap() {
   local n=0
+
+  # Skills first: they are what an agent reads before touching any of the code we
+  # are about to clone. Unreachable source is a warning, not a failure - a new
+  # machine on a bad network should still end up with its repositories, and
+  # `ws doctor` reports the missing skills until someone syncs them.
+  if [ -f "$MANIFEST" ]; then
+    c_grn "→ skills"
+    skills_sync || c_ylw "! could not reach the skills source - run: ws skills sync"
+  fi
+
+  if [ -n "$(conf_get context_remote)" ] && [ ! -d "$CONTEXT_DIR/.git" ]; then
+    c_grn "→ context"
+    cmd_context clone "$(conf_get context_remote)" || c_ylw "! could not clone the context repo"
+  fi
+
   while IFS=$'\t' read -r key folder remote desc; do
     local dst="$ROOT/$folder"
     if [ -d "$dst/.git" ]; then c_dim "- $key already present"; continue; fi
@@ -726,8 +741,53 @@ clock_out() {
   printf '{"kind":"%s","project":"%s","actor":"%s","tool":"%s","start":"%s","end":"%s","start_ts":%s,"end_ts":%s,"minutes":%s,"note":"%s"}\n' \
     "$kind" "$key" "$actor" "$tool" "$start" "$end" "$start_ts" "$end_ts" "$mins" "$note" >> "$f"
   rm -f "$of"
+  works_rollup "$(date +%Y-%m)"
   c_grn "-> $kind $((mins / 60))h $((mins % 60))m on $key"
   c_dim "   ${f#$ROOT/}"
+}
+
+# Writes a committed summary for one month so a report, a dashboard, or an invoice
+# does not have to re-scan every session file. The sessions stay authoritative:
+# this file is derived and can be rebuilt at any time with `ws hours --rollup`.
+works_rollup() {
+  local month="$1"
+  [ -d "$WORKS" ] || return 0
+  local out="$WORKS/rollup"; mkdir -p "$out"
+
+  local hd ad ht at
+  hd="$(hours_net "$WORKS/human" "$month" "-")"
+  ad="$(hours_net "$WORKS/agent" "$month" "-")"
+  ht="$(printf '%s\n' "$hd" | awk '$1=="TOTAL"{print $2; f=1} END{if(!f)print "0.00"}')"
+  at="$(printf '%s\n' "$ad" | awk '$1=="TOTAL"{print $2; f=1} END{if(!f)print "0.00"}')"
+
+  { printf '{\n'
+    printf '  "month": "%s",\n' "$month"
+    printf '  "generated": "%s",\n' "$(date -u +%FT%TZ)"
+    printf '  "note": "Net hours, overlaps merged within each category. human and agent are never summed.",\n'
+    printf '  "human_hours": %s,\n' "$ht"
+    printf '  "agent_hours": %s,\n' "$at"
+    printf '  "by_project": {\n'
+    local first=1 key ph pa
+    for key in $(find "$WORKS/human" "$WORKS/agent" -maxdepth 1 -mindepth 1 -type d 2>/dev/null \
+                   -exec basename {} \; | sort -u); do
+      ph="$(hours_net "$WORKS/human" "$month" "$key" | awk '$1=="TOTAL"{print $2; f=1} END{if(!f)print "0.00"}')"
+      pa="$(hours_net "$WORKS/agent" "$month" "$key" | awk '$1=="TOTAL"{print $2; f=1} END{if(!f)print "0.00"}')"
+      [ "$ph" = "0.00" ] && [ "$pa" = "0.00" ] && continue
+      [ "$first" = 1 ] || printf ',\n'; first=0
+      printf '    "%s": {"human_hours": %s, "agent_hours": %s}' "$key" "$ph" "$pa"
+    done
+    printf '\n  },\n'
+    printf '  "by_day": {\n'
+    first=1
+    local d dh da
+    for d in $(printf '%s\n%s\n' "$hd" "$ad" | awk '$1!="TOTAL" && $1!=""{print $1}' | sort -u); do
+      dh="$(printf '%s\n' "$hd" | awk -v k="$d" '$1==k{print $2; f=1} END{if(!f)print "0.00"}')"
+      da="$(printf '%s\n' "$ad" | awk -v k="$d" '$1==k{print $2; f=1} END{if(!f)print "0.00"}')"
+      [ "$first" = 1 ] || printf ',\n'; first=0
+      printf '    "%s": {"human_hours": %s, "agent_hours": %s}' "$d" "$dh" "$da"
+    done
+    printf '\n  }\n}\n'
+  } > "$out/$month.json"
 }
 
 clock_status() {
@@ -799,14 +859,20 @@ hours_net() {
 
 cmd_hours() {
   local month; month="$(date +%Y-%m)"
-  local project="-"
+  local project="-" rollup=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --month) month="${2:?}"; shift 2 ;;
       --project) project="${2:?}"; shift 2 ;;
-      *) die "usage: ws hours [--month YYYY-MM] [--project <key>]" ;;
+      --rollup) rollup=1; shift ;;
+      *) die "usage: ws hours [--month YYYY-MM] [--project <key>] [--rollup]" ;;
     esac
   done
+  if [ "$rollup" = 1 ]; then
+    works_rollup "$month"
+    c_grn "-> ${WORKS#$ROOT/}/rollup/$month.json"
+    return 0
+  fi
   [ -d "$WORKS" ] || die "no hours recorded yet (context/works/)"
 
   local scope="all projects"; [ "$project" = "-" ] || scope="$project"

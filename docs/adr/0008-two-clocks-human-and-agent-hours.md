@@ -86,4 +86,4 @@ to them concurrently, and both sides of a concurrent append are always right.
 - [x] `ws clock`, `ws agent`, `ws hours` implemented; `ws doctor` reports open sessions
 - [x] Union merge for `context/works/**/*.jsonl`
 - [ ] Capture token cost alongside agent hours once there is a tool-agnostic way to read it
-- [ ] Monthly rollup written to a file, so a report does not have to re-scan every session
+- [x] Monthly rollup written on every clock-out to `context/works/rollup/<YYYY-MM>.json`

@@ -36,8 +36,8 @@ Nothing here names an organisation. Clone it, run `ws init`, and it is yours.
 
 ```bash
 git clone <workspace-remote> workspace && cd workspace
-.agents/bin/ws context clone <context-remote>   # your organisation's memory and registry
-.agents/bin/ws bootstrap                        # clone every registered product repo
+cp workspace.conf.example workspace.conf        # then set org_name and context_remote
+.agents/bin/ws bootstrap                        # skills, context, and every product repo
 .agents/bin/ws ide                              # copy the shared editor defaults
 .agents/bin/ws doctor                           # check isolation, ignores, toolchain
 ```
