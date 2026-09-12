@@ -890,11 +890,14 @@ cmd_doctor() {
     c_red "x product repo files leaked into the workspace index:"; printf '%s\n' "$leaked" | sed 's/^/    /'; fail=1
   else c_grn "ok no product repo is tracked in this workspace"; fi
 
-  git -C "$ROOT" check-ignore -q .local && c_grn "ok .local/ is ignored" || { c_red "x .local/ is NOT ignored"; fail=1; }
+  # Probe a path INSIDE the directory: a trailing-slash pattern only matches a
+  # directory that exists, and in a fresh clone neither of these does yet.
+  git -C "$ROOT" check-ignore -q .local/probe \
+    && c_grn "ok .local/ is ignored" || { c_red "x .local/ is NOT ignored"; fail=1; }
 
   # The framework is shared across organisations; no one organisation's context or code
   # may be tracked in it.
-  if git -C "$ROOT" check-ignore -q context; then
+  if git -C "$ROOT" check-ignore -q context/probe; then
     c_grn "ok context/ is ignored by the framework"
   else
     c_red "x context/ is NOT ignored - one organisation's memory would enter the shared repo"; fail=1
