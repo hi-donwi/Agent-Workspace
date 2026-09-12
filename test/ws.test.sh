@@ -240,7 +240,10 @@ printf 'api\tprojects/other\t-\tduplicate key\n' >> "$WS/context/registry.tsv"
 check_fails "doctor fails on a duplicate registry key" ws doctor --ci
 cp "$TMP/reg.bak" "$WS/context/registry.tsv"
 
-echo '- root: /Users/someone/workspace' >> "$WS/AGENTS.md"
+# Assembled from pieces on purpose: a literal machine path here would trip the
+# very check this case exists to test, and fail doctor on this file in CI.
+BADPATH="/$(printf 'Users')/someone/workspace"
+echo "- root: $BADPATH" >> "$WS/AGENTS.md"
 git -C "$WS" add AGENTS.md >/dev/null 2>&1
 check_fails "doctor fails on a machine path in a tracked file" ws doctor --ci
 # the bad line was staged, so the index holds it too - restore from the commit
