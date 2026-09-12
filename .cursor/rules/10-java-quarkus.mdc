@@ -1,0 +1,47 @@
+---
+description: Java and Quarkus standards for all backend code
+globs: ["**/*.java", "**/pom.xml", "**/application*.properties", "**/db/migration/*.sql"]
+alwaysApply: false
+---
+
+Full rules: `.agents/standards/`. Workflows: `.agents/skills/`.
+
+## Layering — enforced at review
+
+| Layer | May call | Must not touch |
+|---|---|---|
+| `*Resource` | services | repositories, entities, queries, `EntityManager` |
+| `*Service` | repositories, clients | `jakarta.ws.rs.*`, `Response` |
+| `*Repository` | entities | services, business rules, HTTP |
+
+Never: a query in a resource · an `@Entity` returned as JSON · `@Transactional` on a
+resource · duplicated logic across resources.
+
+## Platform
+
+- Java 21, **Quarkus 3.33.x LTS** (not the newest non-LTS release), Maven via `./mvnw`.
+- PostgreSQL + Flyway forward-only. `hibernate-orm.database.generation=none`, always.
+- `PanacheRepository`, never active record. No Lombok.
+- Namespace `com.example.product.<module>`.
+
+## Non-negotiable in code
+
+- DTOs are `record`s. Entities never cross the HTTP boundary.
+- Money is `BigDecimal` / `NUMERIC(18,2)`, compared with `compareTo`, serialised as a string.
+- `@Enumerated(EnumType.STRING)` always.
+- Every endpoint carries `@RolesAllowed` or a deliberate `@PermitAll`.
+- Data-level authorisation lives in the query, never in a filter applied after loading.
+- Dynamic `ORDER BY` uses an allowlist — never string concatenation.
+- Every collection endpoint paginates, `size` capped server-side at 200.
+- Errors use RFC 9457 `problem+json` with a stable `ErrorCode`, built by the global mapper.
+- Secrets come from environment variables. Never in code, properties, logs, or commits.
+- No `System.out`, no empty `catch`, no `TODO` without a ticket ID.
+
+## Tests
+
+- Unit tests without `@QuarkusTest`; integration tests with Testcontainers PostgreSQL,
+  never H2.
+- New endpoint → success, 400, 401/403, 404. New rule → happy path and every rejection.
+- Bug fix → a test that fails before the fix.
+
+Run `./mvnw verify` before claiming anything works.

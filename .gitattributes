@@ -1,0 +1,14 @@
+# Append-only chronologies: two people adding a row on the same day is not a
+# conflict worth resolving by hand, so let git keep both sides.
+context/memory/projects/*/log.md merge=union
+
+# Everything else merges normally. index.md and decisions.md are deliberately left
+# out: a conflict there means two people changed the same fact, and that needs a
+# human to read both sides rather than silently keeping both.
+
+# The project registry only ever grows by one row per project. Keeping both sides of
+# a concurrent add is always right; `ws doctor` then catches a duplicate key.
+context/registry.tsv merge=union
+
+# .agents/skills/index.json is generated. On a conflict do not merge it by hand —
+# run `ws skills` and commit the regenerated file.

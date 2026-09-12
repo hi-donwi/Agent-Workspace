@@ -1,0 +1,22 @@
+name: doctor
+
+# The framework repository holds no product code. What CI protects here is that the
+# workspace stays portable and stays free of any single organisation's material.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  doctor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # workspace.conf is untracked by design: it is the only file that names an
+      # organisation. CI uses the shipped example so `ws doctor` has an identity.
+      - name: Provide a throwaway identity
+        run: cp workspace.conf.example workspace.conf
+
+      - name: ws doctor --ci
+        run: bash .agents/bin/ws doctor --ci

@@ -1,0 +1,19 @@
+# Who owns this clone of the workspace. Copy to workspace.conf, or run `ws init`.
+#
+# workspace.conf itself is NOT tracked. This file is the only place an organisation
+# is ever named, and keeping it untracked is what lets the same framework repository
+# be shared publicly and reused by anyone.
+
+org_name  = Example Organisation
+org_key   = example
+git_group = git@gitlab.com:example
+
+# This organisation's private context: memory, runs, the product registry, client
+# ADRs, and domain skills. A SEPARATE git repository cloned into context/, ignored
+# here exactly like projects/ is.
+context_dir    = context
+context_remote =
+
+# Standards packs this organisation applies. `core` is always on; a stack pack adds
+# the concrete rules for its language. See .agents/standards/README.md.
+packs = core, java

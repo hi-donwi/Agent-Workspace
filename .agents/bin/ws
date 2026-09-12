@@ -1,0 +1,740 @@
+#!/usr/bin/env bash
+# ws — engineering workspace CLI
+# One entry point for the project registry, runs, skill routing, and health checks.
+#
+# This tool carries no organisation's name. Who owns a given clone is declared in
+# workspace.conf at the root; everything else here is the same for every company,
+# team, and stack that uses this workspace.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+CONF="$ROOT/workspace.conf"
+SKILLS="$ROOT/.agents/skills"
+TPL="$ROOT/.agents/templates"
+
+# Organisation identity and the context location come from workspace.conf, so a
+# fresh clone is re-branded by editing one file (or running `ws init`).
+conf_get() {
+  local key="$1" default="${2:-}"
+  [ -f "$CONF" ] || { printf '%s' "$default"; return; }
+  local v; v="$(sed -n "s/^[[:space:]]*$key[[:space:]]*=[[:space:]]*//p" "$CONF" | head -1)"
+  v="${v%%#*}"; v="${v%"${v##*[![:space:]]}"}"
+  [ -n "$v" ] && printf '%s' "$v" || printf '%s' "$default"
+}
+
+ORG_NAME="$(conf_get org_name 'this organisation')"
+ORG_KEY="$(conf_get org_key 'org')"
+CONTEXT_DIR="$ROOT/$(conf_get context_dir 'context')"
+REGISTRY="$CONTEXT_DIR/registry.tsv"
+MEM="$CONTEXT_DIR/memory/projects"
+RUNS="$CONTEXT_DIR/runs"
+CONTEXT_SKILLS="$CONTEXT_DIR/skills"
+
+c_red()  { printf '\033[31m%s\033[0m\n' "$*"; }
+c_grn()  { printf '\033[32m%s\033[0m\n' "$*"; }
+c_ylw()  { printf '\033[33m%s\033[0m\n' "$*"; }
+c_dim()  { printf '\033[2m%s\033[0m\n' "$*"; }
+die()    { c_red "error: $*" >&2; exit 1; }
+
+agent_id() {
+  if   [ -n "${CLAUDECODE:-}" ];      then echo "claude"
+  elif [ -n "${CURSOR_TRACE_ID:-}" ]; then echo "cursor"
+  elif [ -n "${CODEX_SANDBOX:-}" ];   then echo "codex"
+  else echo "${WS_AGENT:-dev}"; fi
+}
+
+# A run's owner is a person using a tool. "claude" alone is ambiguous the moment two
+# developers both use Claude Code.
+# Handle order: an explicit WS_USER wins, then the local part of the git email.
+# Set WS_USER in your shell profile if the email gives an awkward handle.
+human_id() {
+  if [ -n "${WS_USER:-}" ]; then slug "$WS_USER"; return; fi
+  local email; email="$(git config user.email 2>/dev/null || true)"
+  if [ -n "$email" ]; then slug "${email%%@*}"; else echo "unknown"; fi
+}
+owner_id() { printf '%s-%s' "$(human_id)" "$(agent_id)"; }
+
+slug() {
+  printf '%s' "$*" | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-48
+}
+
+# Read the registry (skip header and blank lines): key<TAB>folder<TAB>remote<TAB>desc
+# Empty fields become "-" because `read` collapses consecutive tab delimiters,
+# which would otherwise shift every column after a blank remote.
+reg_rows() {
+  [ -f "$REGISTRY" ] || return 0
+  tail -n +2 "$REGISTRY" | grep -v '^[[:space:]]*$' | awk -F'\t' 'BEGIN{OFS="\t"}
+    { for (i = 1; i <= 4; i++) if ($i == "") $i = "-"; NF = 4; print }'
+}
+# "-" is the registry's empty marker
+is_empty() { [ -z "${1:-}" ] || [ "${1:-}" = "-" ]; }
+reg_get()  { reg_rows | awk -F'\t' -v k="$1" '$1==k {print; exit}'; }
+
+# Skills live in the workspace (shared by every organisation) and optionally in the
+# organisation's context repo (its own domain skills). Both are searched.
+skill_dirs() {
+  local d
+  for d in "$SKILLS"/*/; do [ -d "$d" ] && printf '%s\n' "$d"; done
+  [ -d "$CONTEXT_SKILLS" ] || return 0
+  for d in "$CONTEXT_SKILLS"/*/; do [ -d "$d" ] && printf '%s\n' "$d"; done
+}
+
+# ─────────────────────────────────────────────────────────────── init
+# Re-brands a fresh clone for a new organisation and empties the previous owner's
+# context. This is what makes the workspace reusable rather than one company's repo.
+cmd_init() {
+  local name="" key="" group="" force=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --org)   name="${2:-}"; shift 2 ;;
+      --key)   key="${2:-}"; shift 2 ;;
+      --group) group="${2:-}"; shift 2 ;;
+      --force) force=1; shift ;;
+      *) die "usage: ws init [--org \"Name\"] [--key abc] [--group git@host:group] [--force]" ;;
+    esac
+  done
+
+  if [ -f "$CONF" ] && [ "$force" = 0 ]; then
+    c_ylw "workspace.conf already exists - this clone belongs to: $ORG_NAME"
+    c_dim "  edit it by hand, or re-run with --force to overwrite"
+    return 0
+  fi
+
+  [ -n "$name" ]  || { printf 'Organisation name: '; read -r name; }
+  [ -n "$key" ]   || { printf 'Short key (lowercase, e.g. acme): '; read -r key; }
+  [ -n "$group" ] || { printf 'Git group (e.g. git@gitlab.com:acme): '; read -r group; }
+  key="$(slug "$key")"
+
+  cat > "$CONF" <<CONF
+# Who owns this clone of the workspace. See .agents/standards/README.md for packs.
+org_name  = $name
+org_key   = $key
+git_group = $group
+
+context_dir    = context
+context_remote =
+
+packs = core, java
+CONF
+  c_grn "-> workspace.conf written for $name"
+  c_dim "   next: ws context init   (or: ws context clone <remote>)"
+}
+
+# ─────────────────────────────────────────────────────────────── context
+# The organisation's private memory, runs, registry, client ADRs, and domain
+# skills. A separate repository, mounted at context/ and ignored here.
+cmd_context() {
+  local action="${1:-status}"; shift || true
+  case "$action" in
+    init)
+      [ -d "$CONTEXT_DIR/.git" ] && die "context already exists at ${CONTEXT_DIR#$ROOT/}"
+      mkdir -p "$CONTEXT_DIR"/{memory/projects,runs,docs/adr,skills}
+      printf 'key\tfolder\tremote\tdescription\n' > "$CONTEXT_DIR/registry.tsv"
+      [ -f "$TPL/context-readme.md" ] \
+        && sed "s|{{ORG}}|$ORG_NAME|g" "$TPL/context-readme.md" > "$CONTEXT_DIR/README.md"
+      touch "$CONTEXT_DIR/runs/.gitkeep"
+      git -C "$CONTEXT_DIR" init -q -b main
+      c_grn "-> context repository created at ${CONTEXT_DIR#$ROOT/}"
+      c_dim "   give it a remote, then record it as context_remote in workspace.conf"
+      ;;
+    clone)
+      local remote="${1:-}"; [ -n "$remote" ] || die "usage: ws context clone <remote>"
+      [ -d "$CONTEXT_DIR/.git" ] && die "context already exists at ${CONTEXT_DIR#$ROOT/}"
+      git clone "$remote" "$CONTEXT_DIR"
+      c_grn "-> context cloned"
+      ;;
+    status)
+      if [ -d "$CONTEXT_DIR/.git" ]; then
+        c_grn "context: ${CONTEXT_DIR#$ROOT/} ($(git -C "$CONTEXT_DIR" remote get-url origin 2>/dev/null || echo 'no remote'))"
+        local n; n="$(find "$MEM" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
+        c_dim "  $n project(s) in memory"
+      else
+        c_ylw "no context yet - run: ws context init"
+      fi
+      ;;
+    *) die "usage: ws context [status|init|clone <remote>]" ;;
+  esac
+}
+
+# ─────────────────────────────────────────────────────────────── list
+cmd_list() {
+  printf '%-20s %-40s %-8s %s\n' KEY FOLDER STATUS REMOTE
+  while IFS=$'\t' read -r key folder remote desc; do
+    local status="missing"
+    [ -d "$ROOT/$folder/.git" ] && status="ok"
+    [ -d "$ROOT/$folder" ] && [ ! -d "$ROOT/$folder/.git" ] && status="no-git"
+    printf '%-20s %-40s %-8s %s\n' "$key" "$folder" "$status" "$remote"
+  done < <(reg_rows)
+}
+
+# ─────────────────────────────────────────────────────────────── bootstrap
+cmd_bootstrap() {
+  local n=0
+  while IFS=$'\t' read -r key folder remote desc; do
+    local dst="$ROOT/$folder"
+    if [ -d "$dst/.git" ]; then c_dim "- $key already present"; continue; fi
+    if is_empty "$remote"; then
+      c_ylw "! $key has no remote in registry.tsv - skipping"
+      c_dim "  set one with: ws new $key $folder <remote-url>"
+      continue
+    fi
+    c_grn "→ clone $key"
+    git clone "$remote" "$dst"
+    cmd_link "$key"
+    n=$((n+1))
+  done < <(reg_rows)
+  c_grn "bootstrap complete ($n cloned)"
+}
+
+# ─────────────────────────────────────────────────────────────── new
+cmd_new() {
+  local key="${1:-}" folder="${2:-}" remote="${3:-}"
+  [ -n "$key" ] && [ -n "$folder" ] || die "usage: ws new <key> <folder> [remote-url]"
+  [ -n "$(reg_get "$key")" ] && die "key '$key' is already registered"
+
+  local dst="$ROOT/$folder"
+  if [ -n "$remote" ] && [ ! -d "$dst" ]; then
+    git clone "$remote" "$dst"
+  elif [ ! -d "$dst/.git" ]; then
+    mkdir -p "$dst" && git -C "$dst" init -q -b main
+    [ -n "$remote" ] && git -C "$dst" remote add origin "$remote"
+    c_grn "-> new repo at $folder"
+  fi
+
+  printf '%s\t%s\t%s\t%s\n' "$key" "$folder" "${remote:--}" "new project" >> "$REGISTRY"
+  c_grn "-> registered in registry.tsv"
+
+  mkdir -p "$MEM/$key"
+  for f in project active decisions log; do
+    [ -f "$MEM/$key/$f.md" ] && continue
+    if [ -f "$TPL/memory-$f.md" ]; then
+      sed "s|{{KEY}}|$key|g; s|{{FOLDER}}|$folder|g; s|{{DATE}}|$(date +%F)|g" \
+        "$TPL/memory-$f.md" > "$MEM/$key/$f.md"
+    else
+      printf '# %s - %s\n\n(empty)\n' "$key" "$f" > "$MEM/$key/$f.md"
+    fi
+  done
+  c_grn "-> memory created at .agents/memory/projects/$key/"
+  cmd_link "$key"
+}
+
+# ─────────────────────────────────────────────────────────────── where
+# Print the workspace root. Works from inside a product repo by walking up to a
+# .workspace breadcrumb, so it answers even when this script is not on PATH.
+cmd_where() {
+  local d
+
+  # A workspace root is recognisable by what it contains, so a moved, renamed, or
+  # freshly cloned workspace resolves without regenerating anything. A product repo
+  # carries a pointer AGENTS.md but no .agents/standards, so it is never mistaken
+  # for the root.
+  d="$PWD"
+  while [ "$d" != "/" ]; do
+    if [ -f "$d/AGENTS.md" ] && [ -d "$d/.agents/standards" ]; then
+      printf '%s\n' "$d"; return 0
+    fi
+    d="$(dirname "$d")"
+  done
+
+  # Fallback: a product repo cloned outside the workspace still has the breadcrumb.
+  d="$PWD"
+  while [ "$d" != "/" ]; do
+    if [ -f "$d/.workspace" ]; then
+      local marked; marked="$(sed -n 's/^workspace=//p' "$d/.workspace" | head -1)"
+      if [ -n "$marked" ] && [ -d "$marked/.agents/standards" ]; then
+        printf '%s\n' "$marked"; return 0
+      fi
+    fi
+    d="$(dirname "$d")"
+  done
+
+  printf '%s\n' "$ROOT"
+}
+
+# ─────────────────────────────────────────────────────────────── link
+# Write an UNTRACKED pointer AGENTS.md into the product repo and register it in
+# .git/info/exclude so it never enters a client commit.
+cmd_link() {
+  local key="${1:-}"; [ -n "$key" ] || die "usage: ws link <key>"
+  local row; row="$(reg_get "$key")" || true
+  [ -n "$row" ] || die "key '$key' is not in registry.tsv"
+  local folder; folder="$(printf '%s' "$row" | cut -f2)"
+  local dst="$ROOT/$folder"
+  [ -d "$dst/.git" ] || die "$folder is not a git repo - run ws bootstrap first"
+
+  cat > "$dst/AGENTS.md" <<PTR
+<!-- GENERATED BY: ws link $key - UNTRACKED, do not commit to this repo. -->
+
+# AGENTS.md - pointer
+
+This is a **product repo**. Engineering standards, agent skills, and team memory are NOT
+stored here; they all live in the $ORG_NAME engineering workspace.
+
+**Read first:** \`$ROOT/AGENTS.md\`
+
+| You need | Open |
+|---|---|
+| Agent contract | \`$ROOT/AGENTS.md\` |
+| Engineering standards | \`$ROOT/.agents/standards/\` |
+| Skills | \`$ROOT/.agents/skills/\` and \`$ROOT/context/skills/\` |
+| Memory for this project | \`$ROOT/.agents/memory/projects/$key/\` |
+| Active runs | \`$ROOT/.agents/runs/$key/\` |
+
+**Recommended:** close this folder and open your editor at \`$ROOT\` instead. Standards and
+skills then load automatically while this repo stays isolated in git terms.
+
+Regenerate with: \`ws link $key\`
+PTR
+
+  # Exclude each pointer independently. A single combined guard would skip
+  # /.workspace in any clone linked before that file existed, leaving it visible
+  # to `git add .` in a client repo.
+  local exc="$dst/.git/info/exclude"
+  mkdir -p "$(dirname "$exc")"; touch "$exc"
+  grep -qxF '# ws link - workspace pointer, local only' "$exc" \
+    || printf '\n# ws link - workspace pointer, local only\n' >> "$exc"
+  local pat
+  for pat in '/AGENTS.md' '/.workspace'; do
+    grep -qxF "$pat" "$exc" || printf '%s\n' "$pat" >> "$exc"
+  done
+  # Machine-readable breadcrumb: lets a tool or agent find the workspace WITHOUT
+  # having `ws` on PATH. Local to this machine, like the pointer above.
+  cat > "$dst/.workspace" <<MARK
+# Generated by: ws link $key
+# Local to this machine and NOT committed. Regenerate with: ws link $key
+workspace=$ROOT
+project_key=$key
+generated=$(date +%F)
+MARK
+  install_guard_hook "$dst"
+  c_grn "-> $folder/AGENTS.md written (untracked, excluded)"
+}
+
+# .git/info/exclude keeps the pointers out of `git status`. The hook is the second
+# line of defence: it refuses the commit even if someone stages them with `git add -f`.
+install_guard_hook() {
+  local dst="$1" hook="$1/.git/hooks/pre-commit"
+
+  # An older version of this tool wrote the same guard under a different marker.
+  # Recognise it so an upgrade replaces it instead of refusing to touch it.
+  if [ -f "$hook" ] && ! grep -qE 'mkt-guard|ws-guard' "$hook"; then
+    c_ylw "  ! $dst/.git/hooks/pre-commit exists and is not ours - guard not installed"
+    c_dim "    add this check by hand: reject AGENTS.md and .workspace when staged"
+    return 0
+  fi
+
+  cat > "$hook" <<'HOOK'
+#!/bin/sh
+# ws-guard: workspace pointers must never enter a client repo
+# Installed by `ws link`. Remove the file to disable.
+staged="$(git diff --cached --name-only | grep -E '^(AGENTS\.md|\.workspace)$' || true)"
+if [ -n "$staged" ]; then
+  echo "ws-guard: refusing to commit workspace pointers into this repo:" >&2
+  echo "$staged" | sed 's/^/  /' >&2
+  echo "" >&2
+  echo "These files are generated by 'ws link' and are local to your machine." >&2
+  echo "Unstage them:  git rm --cached AGENTS.md .workspace" >&2
+  exit 1
+fi
+HOOK
+  chmod +x "$hook"
+}
+
+cmd_unlink() {
+  local key="${1:-}"; [ -n "$key" ] || die "usage: ws unlink <key>"
+  local folder; folder="$(reg_get "$key" | cut -f2)"
+  rm -f "$ROOT/$folder/AGENTS.md" "$ROOT/$folder/.workspace"
+  local hook="$ROOT/$folder/.git/hooks/pre-commit"
+  [ -f "$hook" ] && grep -q 'ws-guard' "$hook" && rm -f "$hook"
+  c_grn "-> pointer removed from $folder"
+}
+
+# ─────────────────────────────────────────────────────────────── run
+cmd_run() {
+  local key="${1:-}"; shift || true
+  local title="${*:-}"
+  [ -n "$key" ] && [ -n "$title" ] || die 'usage: ws run <project-key> "task title"'
+  [ -d "$MEM/$key" ] || die "project '$key' has no memory yet - run ws new first"
+
+  local dir="$RUNS/$key/$(date +%Y-%m-%d-%H%M%S)-$(owner_id)-$(slug "$title")"
+  [ -d "$dir" ] && die "run already exists: $dir"
+  mkdir -p "$dir/contributors"
+
+  local date_now; date_now="$(date '+%F %H:%M %z')"
+  for f in brief plan progress decisions evidence handoff; do
+    if [ -f "$TPL/run-$f.md" ]; then
+      sed "s|{{KEY}}|$key|g; s|{{TITLE}}|$title|g; s|{{DATE}}|$date_now|g; s|{{OWNER}}|$(human_id) ($(agent_id))|g" \
+        "$TPL/run-$f.md" > "$dir/$f.md"
+    else
+      printf '# %s - %s\n\nRun: %s\nDate: %s\n' "$title" "$f" "$key" "$date_now" > "$dir/$f.md"
+    fi
+  done
+
+  c_grn "-> run created"
+  printf '%s\n' "${dir#$ROOT/}"
+  c_dim "  owner: $(human_id) ($(agent_id)) - start with brief.md, then plan.md"
+}
+
+# ─────────────────────────────────────────────────────────────── log
+# Appends one row to a project's shared log. Hand-editing that file is what makes
+# two people conflict on it; appending through one code path plus the union merge
+# driver in .gitattributes means concurrent entries both survive.
+cmd_log() {
+  local key="${1:-}"; shift || true
+  local text="${*:-}"
+  [ -n "$key" ] && [ -n "$text" ] || die 'usage: ws log <project-key> "milestone"'
+  local f="$MEM/$key/log.md"
+  [ -f "$f" ] || die "no log at .agents/memory/projects/$key/log.md"
+  case "$text" in *'|'*) die "a milestone cannot contain '|' - it breaks the table";; esac
+  printf '| %s | %s (%s) |\n' "$(date +%F)" "$text" "$(human_id)" >> "$f"
+  c_grn "-> appended to .agents/memory/projects/$key/log.md"
+}
+
+# ─────────────────────────────────────────────────────────────── sync
+# Pulling before editing shared memory is the single biggest conflict reducer.
+# Product repos are only reported on, never touched: rebasing someone else's
+# work-in-progress is not this command's business.
+cmd_sync() {
+  [ -n "$(git -C "$ROOT" remote 2>/dev/null)" ] || die "workspace has no remote yet"
+  c_grn "-> syncing workspace"
+  git -C "$ROOT" pull --rebase --autostash
+
+  echo
+  echo "-- Product repos (not touched) --"
+  local key folder remote desc
+  while IFS=$'\t' read -r key folder remote desc; do
+    local dst="$ROOT/$folder"
+    [ -d "$dst/.git" ] || { c_dim "- $key not cloned"; continue; }
+    local dirty=""; [ -n "$(git -C "$dst" status --porcelain)" ] && dirty=" (uncommitted changes)"
+    local br; br="$(git -C "$dst" branch --show-current 2>/dev/null || echo '?')"
+    c_dim "- $key on $br$dirty"
+  done < <(reg_rows)
+}
+
+# ─────────────────────────────────────────────────────────────── route
+# Normalise for matching: lowercase, -ize/-isation -> -ise/-isation, drop trailing plural.
+# Without this, "authorization" in a query never matches "authorisation" in a skill.
+norm() {
+  tr '[:upper:]' '[:lower:]' \
+    | sed -E 's/iz(e|ing|ation|ed)/is\1/g; s/([a-z]{5,})s\b/\1/g'
+}
+
+cmd_route() {
+  local q; q="$(printf '%s' "${*:-}" | norm)"
+  [ -n "$q" ] || die 'usage: ws route "task description"'
+
+  local tmp; tmp="$(mktemp)"
+  export -f norm 2>/dev/null || true
+  for d in $(skill_dirs); do
+    [ -f "$d/SKILL.md" ] || continue
+    local name; name="$(basename "$d")"
+    # Score = 5 x curated keyword hits + 1 x description word hits.
+    # Curated keywords carry the weight; prose matching only breaks ties.
+    local kw desc score
+    kw="$(
+      sed -n 's/^keywords:[[:space:]]*//p' "$d/SKILL.md" | norm | tr ',' '\n' \
+        | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | grep -v '^$' \
+        | while read -r w; do
+            if [ "${q#*$w}" != "$q" ]; then echo 1; fi
+          done | wc -l | tr -d ' '
+    )"
+    desc="$(
+      sed -n '/^description:/,/^[a-z]*:/p' "$d/SKILL.md" 2>/dev/null \
+        | norm | tr -cs 'a-z0-9' '\n' \
+        | awk 'length($0) > 5' | sort -u \
+        | while read -r w; do
+            if [ "${q#*$w}" != "$q" ]; then echo 1; fi
+          done | wc -l | tr -d ' '
+    )"
+    score=$(( kw * 5 + desc ))
+    if [ "${score:-0}" -ge 5 ]; then
+      printf '%3s\t%s\t%s\n' "$score" "$name" "${d#$ROOT/}SKILL.md"
+    fi
+  done | sort -rn | head -3 > "$tmp"
+
+  if [ -s "$tmp" ]; then
+    printf '%-5s %-24s %s\n' SCORE SKILL PATH
+    awk -F'\t' '{ printf "%-5s %-24s %s\n", $1, $2, $3 }' "$tmp"
+  else
+    c_ylw "no clear skill match - see .agents/skills/README.md"
+  fi
+  rm -f "$tmp"
+}
+
+# ─────────────────────────────────────────────────────────────── skills
+# Indexes ONE skill directory. The framework index must never contain an
+# organisation's domain skills: .agents/skills/index.json is tracked in the shared
+# repository, while context skills belong to whoever owns the context repo.
+build_skills_index() {
+  local out="$1" dir="$2" first=1
+  { echo '{'; echo '  "generated": "'"$(date -u +%FT%TZ)"'",'; echo '  "skills": ['; } > "$out"
+  for d in "$dir"/*/; do
+    [ -f "$d/SKILL.md" ] || continue
+    local name desc
+    name="$(basename "$d")"
+    desc="$(awk '
+        NR==1 && $0=="---" { inFm=1; next }
+        inFm && $0=="---"  { exit }
+        !inFm              { exit }
+        /^description:/    { f=1; sub(/^description:[ ]*>?-?[ ]*/,""); if (length($0)) print; next }
+        f && /^[A-Za-z_][A-Za-z0-9_]*:/ { exit }
+        f                  { sub(/^[ \t]+/,""); print }
+      ' "$d/SKILL.md" \
+      | tr '\n' ' ' | sed 's/  */ /g; s/[[:space:]]*$//; s/"/\\"/g')"
+    local kw pack path
+    kw="$(sed -n 's/^keywords:[[:space:]]*//p' "$d/SKILL.md" | head -1 | sed 's/"/\\"/g')"
+    pack="$(sed -n 's/^pack:[[:space:]]*//p' "$d/SKILL.md" | head -1)"
+    path="${d#$ROOT/}SKILL.md"
+    [ "$first" = 1 ] || echo ',' >> "$out"; first=0
+    printf '    {"name": "%s", "pack": "%s", "path": "%s", "keywords": "%s", "description": "%s"}' \
+      "$name" "${pack:-java}" "$path" "$kw" "$desc" >> "$out"
+  done
+  { echo; echo '  ]'; echo '}'; } >> "$out"
+}
+
+cmd_skills() {
+  build_skills_index "$SKILLS/index.json" "$SKILLS"
+  c_grn "-> .agents/skills/index.json updated ($(grep -c '"name"' "$SKILLS/index.json") skills)"
+  if [ -d "$CONTEXT_SKILLS" ] && [ -n "$(find "$CONTEXT_SKILLS" -maxdepth 2 -name SKILL.md 2>/dev/null)" ]; then
+    build_skills_index "$CONTEXT_SKILLS/index.json" "$CONTEXT_SKILLS"
+    c_grn "-> context/skills/index.json updated ($(grep -c '"name"' "$CONTEXT_SKILLS/index.json") skills)"
+  fi
+}
+
+# ─────────────────────────────────────────────────────────────── doctor
+cmd_doctor() {
+  local fail=0 ci=0
+  [ "${1:-}" = "--ci" ] && ci=1
+  echo "Workspace: $ROOT"; echo
+
+  if [ "$ci" = 0 ]; then
+    echo "-- Toolchain --"
+    if command -v java >/dev/null; then
+      local jv; jv="$(java -version 2>&1 | head -1 | sed -E 's/.*"([0-9]+).*/\1/')"
+      [ "${jv:-0}" -ge 21 ] && c_grn "ok Java $jv" || { c_red "x Java $jv - requires 21+"; fail=1; }
+    else c_red "x java not found"; fail=1; fi
+    command -v git >/dev/null && c_grn "ok git $(git --version | awk '{print $3}')" || { c_red "x git"; fail=1; }
+    command -v docker >/dev/null && c_grn "ok docker" || c_ylw "! docker missing - Testcontainers will not run"
+    c_dim "  (maven not required: use ./mvnw inside each product repo)"
+    echo
+  fi
+
+  echo "-- Identity --"
+  if [ -f "$CONF" ]; then
+    c_grn "ok workspace.conf: $ORG_NAME ($ORG_KEY)"
+  else
+    c_red "x no workspace.conf - this clone belongs to nobody yet; run: ws init"; fail=1
+  fi
+  if [ -d "$CONTEXT_DIR/.git" ]; then
+    c_grn "ok context repo at ${CONTEXT_DIR#$ROOT/}"
+    [ -n "$(git -C "$CONTEXT_DIR" remote 2>/dev/null)" ] \
+      || c_ylw "  ! context has no remote - this organisation's memory is on one machine"
+  else
+    c_ylw "! no context repo - run: ws context init (or: ws context clone <remote>)"
+  fi
+  echo
+
+  echo "-- Repo isolation --"
+  local leaked; leaked="$(git -C "$ROOT" ls-files projects/ 2>/dev/null | grep -v '^projects/\(README.md\|registry.tsv\)$' || true)"
+  if [ -n "$leaked" ]; then
+    c_red "x product repo files leaked into the workspace index:"; printf '%s\n' "$leaked" | sed 's/^/    /'; fail=1
+  else c_grn "ok no product repo is tracked in this workspace"; fi
+
+  git -C "$ROOT" check-ignore -q .local && c_grn "ok .local/ is ignored" || { c_red "x .local/ is NOT ignored"; fail=1; }
+
+  # The framework is shared across organisations; no one organisation's context or code
+  # may be tracked in it.
+  if git -C "$ROOT" check-ignore -q context; then
+    c_grn "ok context/ is ignored by the framework"
+  else
+    c_red "x context/ is NOT ignored - one organisation's memory would enter the shared repo"; fail=1
+  fi
+  local ctxleak; ctxleak="$(git -C "$ROOT" ls-files context/ 2>/dev/null || true)"
+  if [ -n "$ctxleak" ]; then
+    c_red "x context files tracked in the framework repo:"; printf '%s\n' "$ctxleak" | sed 's/^/    /'; fail=1
+  fi
+
+  # This workspace only reaches the team through a remote. Without one, standards,
+  # skills, and memory exist on exactly one laptop.
+  if [ -n "$(git -C "$ROOT" remote 2>/dev/null)" ]; then
+    c_grn "ok workspace has a remote ($(git -C "$ROOT" remote get-url origin 2>/dev/null || git -C "$ROOT" remote | head -1))"
+  else
+    c_red "x workspace has no git remote - nothing here is shared with the team yet"
+    c_dim "    git remote add origin <url> && git push -u origin main"
+    fail=1
+  fi
+
+  # Tracked files must not carry one machine's paths: they are read on every machine.
+  local absp; absp="$(git -C "$ROOT" grep -nIE '(/Users/|/home/)[A-Za-z0-9._-]+' -- . 2>/dev/null || true)"
+  if [ -n "$absp" ]; then
+    c_red "x machine-specific absolute paths in tracked files:"; printf '%s\n' "$absp" | sed 's/^/    /'
+    c_dim "    use workspace-relative paths, or ~ in prose"
+    fail=1
+  else c_grn "ok no machine-specific absolute paths are tracked"; fi
+
+  # workspace.conf is the only place an organisation may be named. Everything else is
+  # shared, so a company or client name in a tracked file is a portability defect.
+  if [ -f "$CONF" ] && [ "$ORG_KEY" != "org" ]; then
+    local named; named="$(git -C "$ROOT" grep -lieE "$ORG_KEY" -- . ':(exclude)workspace.conf' 2>/dev/null || true)"
+    if [ -n "$named" ]; then
+      c_ylw "! the organisation key '$ORG_KEY' appears in tracked framework files:"
+      printf '%s\n' "$named" | sed 's/^/    /'
+      c_dim "    only workspace.conf should name an organisation"
+    else
+      c_grn "ok the framework names no organisation but in workspace.conf"
+    fi
+  fi
+
+  # /projects/* hides product code from every gitignore-aware search tool
+  # (ripgrep, VS Code, agent Grep). .ignore restores search without touching git.
+  if [ -f "$ROOT/.ignore" ] && grep -qxF '!projects/*/' "$ROOT/.ignore"; then
+    c_grn "ok .ignore keeps product code searchable from the root"
+  else
+    c_ylw "! .ignore missing - searches from the root will not see product code"
+    c_dim "    echo '!projects/*/' >> .ignore"
+  fi
+  echo
+
+  echo "-- Projects --"
+  local dup
+  dup="$(reg_rows | cut -f1 | sort | uniq -d)"
+  if [ -n "$dup" ]; then
+    c_red "x duplicate keys in registry.tsv: $(printf '%s' "$dup" | tr '\n' ' ')"; fail=1
+  fi
+  dup="$(reg_rows | cut -f2 | sort | uniq -d)"
+  if [ -n "$dup" ]; then
+    c_red "x duplicate folders in registry.tsv: $(printf '%s' "$dup" | tr '\n' ' ')"; fail=1
+  fi
+  local key folder remote desc
+  while IFS=$'\t' read -r key folder remote desc; do
+    local dst="$ROOT/$folder"
+    if is_empty "$remote"; then
+      c_ylw "! $key has no remote in registry.tsv - teammates cannot clone it"
+      c_dim "    add it as column 3 of projects/registry.tsv"
+    fi
+    if [ ! -d "$dst" ]; then c_ylw "! $key not cloned yet (ws bootstrap)"; continue; fi
+    if [ ! -d "$dst/.git" ]; then c_red "x $key exists but is not a git repo"; fail=1; continue; fi
+    c_grn "ok $key is a separate repo"
+
+    [ -n "$(git -C "$dst" remote 2>/dev/null)" ] \
+      || c_ylw "  ! no remote configured - local commits exist nowhere else"
+
+    if [ ! -f "$dst/AGENTS.md" ] || [ ! -f "$dst/.workspace" ]; then
+      c_ylw "  ! pointer missing - run: ws link $key"
+    else
+      # The pointer embeds absolute paths. If the workspace was moved or renamed,
+      # or the repo was cloned on another machine, those paths are now wrong.
+      local marked; marked="$(sed -n 's/^workspace=//p' "$dst/.workspace" | head -1)"
+      if [ "$marked" != "$ROOT" ]; then
+        c_ylw "  ! pointer is stale (says $marked) - run: ws link $key"
+      fi
+    fi
+
+    # Both pointers must be excluded, and neither may ever be tracked.
+    local exc="$dst/.git/info/exclude" pat
+    for pat in '/AGENTS.md' '/.workspace'; do
+      grep -qxF "$pat" "$exc" 2>/dev/null \
+        || c_ylw "  ! $pat not in .git/info/exclude - run: ws link $key"
+    done
+    for pat in 'AGENTS.md' '.workspace'; do
+      if git -C "$dst" ls-files --error-unmatch "$pat" >/dev/null 2>&1; then
+        c_red "  x $pat is TRACKED in the client repo - it must stay untracked"
+        c_dim "      git -C $folder rm --cached $pat"
+        fail=1
+      fi
+    done
+    if [ -f "$dst/.git/hooks/pre-commit" ] && grep -q 'ws-guard' "$dst/.git/hooks/pre-commit"; then
+      c_grn "  ok pre-commit guard installed"
+    else
+      c_ylw "  ! pre-commit guard missing - run: ws link $key"
+    fi
+
+    [ -d "$MEM/$key" ] || c_ylw "  ! no memory at .agents/memory/projects/$key/"
+  done < <(reg_rows)
+  echo
+
+  echo "-- Skills --"
+  local n; n="$(find "$SKILLS" -name SKILL.md -maxdepth 2 2>/dev/null | wc -l | tr -d ' ')"
+  c_grn "ok $n skills"
+  if [ ! -f "$SKILLS/index.json" ]; then
+    c_ylw "! index.json not generated - run: ws skills"
+  else
+    # index.json is generated but committed, so it can drift from the skills themselves.
+    local tmpidx; tmpidx="$(mktemp)"
+    build_skills_index "$tmpidx" "$SKILLS"
+    if diff -q <(grep -v '"generated"' "$SKILLS/index.json") <(grep -v '"generated"' "$tmpidx") >/dev/null; then
+      c_grn "ok index.json is up to date"
+    else
+      c_ylw "! index.json is stale - run: ws skills"
+    fi
+    rm -f "$tmpidx"
+  fi
+  echo
+
+  [ "$fail" = 0 ] && c_grn "doctor: healthy" || { c_red "doctor: problems reported above"; exit 1; }
+}
+
+# ─────────────────────────────────────────────────────────────── ide
+# .vscode/settings.json is git-ignored so nobody's local tweaks are shared. The
+# team defaults therefore have to be copied in once per clone.
+cmd_ide() {
+  local src="$ROOT/.vscode/settings.shared.json" dst="$ROOT/.vscode/settings.json"
+  [ -f "$src" ] || die "no .vscode/settings.shared.json in this workspace"
+  if [ -f "$dst" ]; then
+    if diff -q "$src" "$dst" >/dev/null; then c_dim "- settings.json already matches the shared defaults"
+    else
+      c_ylw "! .vscode/settings.json exists and differs - left untouched"
+      c_dim "  compare with: diff .vscode/settings.shared.json .vscode/settings.json"
+    fi
+    return 0
+  fi
+  cp "$src" "$dst"
+  c_grn "-> .vscode/settings.json written from the shared defaults"
+}
+
+cmd_help() {
+  cat <<'H'
+ws — engineering workspace CLI
+
+  ws init [--org N --key k --group g]   re-brand a fresh clone for an organisation
+  ws context [status|init|clone <r>]    the organisation's private memory repo
+  ws list                          list projects and clone status
+  ws bootstrap                     clone every product repo from registry.tsv
+  ws new <key> <folder> [remote]   register a new project + memory + pointer
+  ws link <key>                    write the untracked AGENTS.md pointer in a product repo
+  ws unlink <key>                  remove the pointer
+  ws run <key> "title"             create a new run under .agents/runs/<key>/
+  ws log <key> "milestone"         append one row to the project log
+  ws sync                          pull the workspace, report product repo state
+  ws route "task description"      show which skills apply
+  ws skills                        regenerate .agents/skills/index.json
+  ws ide                           copy the shared VS Code defaults into this clone
+  ws where                         print the workspace root from anywhere
+  ws doctor [--ci]                 check repo isolation, ignores, toolchain
+  ws help                          this help
+
+Add to PATH (run once, from inside your clone):
+  echo "export PATH=\"$PWD/.agents/bin:\$PATH\"" >> ~/.zshrc && source ~/.zshrc
+H
+}
+
+case "${1:-help}" in
+  init) shift; cmd_init "$@" ;;
+  context) shift; cmd_context "$@" ;;
+  list) shift; cmd_list "$@" ;;
+  bootstrap) shift; cmd_bootstrap "$@" ;;
+  new) shift; cmd_new "$@" ;;
+  link) shift; cmd_link "$@" ;;
+  where) shift; cmd_where "$@" ;;
+  unlink) shift; cmd_unlink "$@" ;;
+  run) shift; cmd_run "$@" ;;
+  log) shift; cmd_log "$@" ;;
+  sync) shift; cmd_sync "$@" ;;
+  route) shift; cmd_route "$@" ;;
+  skills) shift; cmd_skills "$@" ;;
+  ide) shift; cmd_ide "$@" ;;
+  doctor) shift; cmd_doctor "$@" ;;
+  help|-h|--help) cmd_help ;;
+  *) die "unknown command: $1 (try: ws help)" ;;
+esac
