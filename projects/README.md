@@ -1,5 +1,8 @@
 # projects/
 
+The client's code. For the organisation's *own* repository — memory, runs, registry,
+hours — see [`docs/context-repository.md`](../docs/context-repository.md).
+
 Every folder here is an **independent git repository** with its own remote.
 The `workspace` repo ignores all of them via `/projects/*` in `.gitignore`.
 
@@ -38,5 +41,5 @@ Clones every row in `registry.tsv` that has a remote and is not already on disk.
 ws doctor
 ```
 
-Confirms no product repo has leaked into the the workspace's git index, and that every product repo
+Confirms no product repo has leaked into the workspace's git index, and that every product repo
 really has its own `.git`.

@@ -80,7 +80,7 @@ Three repositories share one directory. Full explanation in [AGENTS.md §1](AGEN
 | [`.agents/bin/ws`](.agents/bin/ws) | Workspace CLI |
 | [`docs/adr/`](docs/adr/) | Decisions about the workspace mechanism itself |
 
-**2. Context — a separate repo per organisation, ignored here**
+**2. Context — a separate repo per organisation, ignored here** — [what it is and why](docs/context-repository.md)
 
 | Path | Contents |
 |---|---|
@@ -88,7 +88,11 @@ Three repositories share one directory. Full explanation in [AGENTS.md §1](AGEN
 | `context/memory/projects/` | Cross-session memory, per project |
 | `context/runs/` | Per-task working memory |
 | `context/skills/` | This organisation's domain skills |
+| `context/works/` | Human and agent hours, kept apart |
 | `context/docs/` | Client ADRs, proposals, kick-off notes |
+
+It must be **private**: it names clients and holds the hours behind invoices. `ws doctor`
+fails if its remote can be read without credentials.
 
 **3. Product — the client's repos, ignored here**
 

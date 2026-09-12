@@ -146,7 +146,53 @@ workspace root. Push product work the same day; nothing in a workspace clone bac
 
 ---
 
-## 3. Context loading order
+## 3. `context/` — the organisation's own repo
+
+Everything in §2 is about repositories the **client** owns. This one is about the
+repository **you** own, and it is the one people get wrong.
+
+`context/` answers *what are we building, for whom, and where does it stand?* — project
+memory, runs and handoffs, the product registry, domain skills, client ADRs, and the
+hours behind invoices. It is a separate git repository, mounted here and ignored via
+`/context/` in `.gitignore`, exactly like `projects/`.
+
+It cannot live in this repository: the framework is shared across organisations and may be
+published, and a client's name, scope, and glossary have no business in it. It cannot live
+in a product repo either: that belongs to the client, and your delivery notes and
+cross-project memory are not theirs to read.
+
+```bash
+ws context init             # scaffold a new one, then give it a PRIVATE remote
+ws context clone <remote>   # join an organisation that already has one
+ws context status
+```
+
+Record the remote as `context_remote` in `workspace.conf` and `ws bootstrap` will clone it
+on every other machine, before it clones the product repos.
+
+### It must be private
+
+It names clients, records contract scope, and holds the hours behind invoices. Published,
+that is a disclosure, not an untidy repository.
+
+`ws doctor` checks this on every run and **fails** if the context remote can be read
+without credentials. It needs no host API: it strips the credential helpers and tries an
+anonymous `git ls-remote`. A network failure looks the same as "private", so the check can
+miss a problem but never invents one — treat a pass as reassurance, not proof, and confirm
+the setting in the host's UI when you create the repository.
+
+### What never goes in it
+
+Credentials, client documents, and data dumps. Those belong in `.local/` at the workspace
+root, which is git-ignored and pushed nowhere. The context repo is shared with the whole
+team; `.local/` is shared with nobody.
+
+Full treatment, including the concurrency rules and how to start over for another
+organisation: [`docs/context-repository.md`](docs/context-repository.md).
+
+---
+
+## 4. Context loading order
 
 Most durable to most task-specific. Stop when you have enough; do not read everything.
 
@@ -163,7 +209,7 @@ Open a skill's `references/` only when `SKILL.md` is not enough.
 
 ---
 
-## 4. Skill routing — read SKILL.md before starting
+## 5. Skill routing — read SKILL.md before starting
 
 **Before starting a task, check whether a skill applies. If one does, read its `SKILL.md`
 first and follow it.**
@@ -213,7 +259,7 @@ Automatic routing: `ws route "<task description>"`.
 
 ---
 
-## 5. Binding standards
+## 6. Binding standards
 
 All under `.agents/standards/`, grouped into **packs**. Which packs apply is declared in
 `workspace.conf` (`packs = core, java`). These hold unless an ADR says otherwise:
@@ -241,7 +287,7 @@ inside one source file. Template: `.agents/templates/adr.md`.
 
 ---
 
-## 6. Memory and runs — continuity across sessions
+## 7. Memory and runs — continuity across sessions
 
 Agents change between sessions and stop because of quota, token limits, or crashes.
 Continuity lives in the repo, not in one agent's head.
@@ -299,7 +345,7 @@ Claude Code never collide and `handoff.md` always names a human.
 
 ---
 
-## 7. Two clocks — human hours and agent hours
+## 8. Two clocks — human hours and agent hours
 
 Record both. Never add them together.
 
@@ -345,7 +391,7 @@ that did not happen, as far as next month's invoice is concerned.
 
 ---
 
-## 8. Security — non-negotiable
+## 9. Security — non-negotiable
 
 - **Never** put credentials, tokens, private keys, or client data in `.agents/`, `docs/`,
   or commit messages. This repo is shared with the whole team.
@@ -357,7 +403,7 @@ that did not happen, as far as next month's invoice is concerned.
 
 ---
 
-## 9. How we expect work to be done
+## 10. How we expect work to be done
 
 - **Small and incremental.** One endpoint or one concern per commit — not twenty endpoints
   at once.
@@ -371,7 +417,7 @@ that did not happen, as far as next month's invoice is concerned.
 
 ---
 
-## 10. Architecture — layer separation (mandatory)
+## 11. Architecture — layer separation (mandatory)
 
 Applies to all Java/Quarkus backend code across every project.
 
@@ -394,7 +440,7 @@ Details and examples: `.agents/standards/java/project-layout.md`.
 
 ---
 
-## 11. Definition of Done
+## 12. Definition of Done
 
 A change is done when **all** of these hold:
 

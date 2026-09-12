@@ -162,6 +162,17 @@ cmd_context() {
   esac
 }
 
+# A repository is public if it can be read without credentials. That is testable
+# without any host's API: strip the credential helpers and try. A network failure
+# looks the same as "private", so this can miss a problem but never invents one.
+repo_is_public() {
+  local url; url="$(printf '%s' "$1" | sed -E 's#^git@([^:]+):#https://\1/#; s#^ssh://git@([^/]+)/#https://\1/#')"
+  case "$url" in https://*) ;; *) return 1 ;; esac
+  GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c core.askPass=true \
+    -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=8 \
+    ls-remote "$url" >/dev/null 2>&1
+}
+
 # ─────────────────────────────────────────────────────────────── list
 cmd_list() {
   printf '%-20s %-40s %-8s %s\n' KEY FOLDER STATUS REMOTE
@@ -943,8 +954,19 @@ cmd_doctor() {
   fi
   if [ -d "$CONTEXT_DIR/.git" ]; then
     c_grn "ok context repo at ${CONTEXT_DIR#$ROOT/}"
-    [ -n "$(git -C "$CONTEXT_DIR" remote 2>/dev/null)" ] \
-      || c_ylw "  ! context has no remote - this organisation's memory is on one machine"
+    local ctxremote; ctxremote="$(git -C "$CONTEXT_DIR" remote get-url origin 2>/dev/null || true)"
+    if [ -z "$ctxremote" ]; then
+      c_ylw "  ! context has no remote - this organisation's memory is on one machine"
+    elif [ "$ci" = 0 ] && repo_is_public "$ctxremote"; then
+      # The context repo holds client names, contract scope, domain glossaries and
+      # hours. Published, that is a disclosure, not an untidy repository.
+      c_red "  x CONTEXT REPO IS PUBLIC - it can be read without credentials"
+      c_dim "      $ctxremote"
+      c_dim "      set it to Private in the host's settings, then assume what it held is disclosed"
+      fail=1
+    else
+      c_dim "  remote: $ctxremote (not readable anonymously)"
+    fi
   else
     c_ylw "! no context repo - run: ws context init (or: ws context clone <remote>)"
   fi

@@ -43,8 +43,8 @@ stays isolated in git terms.
 | 5 | `../context/skills/<domain>/SKILL.md` | The business domain, if your organisation has one |
 | 6 | `../context/memory/projects/<key>/active.md` | Where your project stands today |
 
-Items 4–6 live in the context repository, which is specific to your organisation. Run
-`ws list` to see which project keys exist.
+Items 4–6 live in the [context repository](context-repository.md), which is specific to
+your organisation. Run `ws list` to see which project keys exist.
 
 Do not read all twelve standards up front. Read the one the task needs, when the task needs
 it — `ws route "<task>"` will point you at it.
