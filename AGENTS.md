@@ -189,8 +189,11 @@ client-specific ADRs.
 
 ```bash
 ws client new <key>                       # scaffold clients/<key>/
-ws new <project-key> <folder> --client <key>   # register a project against it
+ws context migrate-v2                     # one-time: add group/scope/profile columns
+ws group new <key> --client <key>         # a product group inside one client
+ws new <project-key> <folder> --client <key> [--group g] [--scope s] [--profile p]
 ws client list                            # every client and its project keys
+ws tree                                   # client > group > project, from the registry
 ws route "..."                            # also searches clients/*/skills/
 ws hours --client <key>                   # billable hours across all their projects
 ```
@@ -198,6 +201,21 @@ ws hours --client <key>                   # billable hours across all their proj
 Project keys stay **flat** — `memory/projects/<key>/`, `runs/<key>/`, `works/*/<key>/` —
 never nested under a client. A key is unique workspace-wide; a project changing client is
 then one row in a registry rather than a move across four directory trees.
+
+**Groups (registry v2).** A *group* is a product group inside one client — several repos,
+one roadmap (an ERP with API, web, and mobile). It is recorded in `context/groups.tsv`
+(`key`, `client`, `description`) and referenced by the registry's `group` column. A group
+belongs to exactly one client forever; `ws new --group` refuses a group owned by another
+client, and `ws doctor` fails on any row that violates this. Group material lives in
+`clients/<client>/groups/<group>/` (`client.md`, `decisions.md`) and is distinct from
+client-wide material.
+
+**Context scope.** The registry's `context_scope` column (`client` default, `group`,
+`org`) bounds what `ws context pack <project>` assembles: `group` packs only the group's
+material, `client` adds the client's own wide docs, `org` adds org-wide ones. It is an
+audience boundary for packs, not a permission system — real access control stays
+server-side on the context repo. `security_profile` is a free-form label (e.g. `strict`)
+that Agent-Secure policy selection keys on; the CLI does not interpret it yet.
 
 **Every project belongs to a client.** `ws new` refuses to register one without
 `--client`, and `ws doctor` fails on any existing project with no client, or one naming a

@@ -129,8 +129,34 @@ def context_pack(root, context, project, *args):
     matches = [row for row in rows if row["key"] == project]
     if len(matches) != 1:
         raise ValueError("unknown or duplicate project")
-    client = key(matches[0]["client"])
-    selected = [f"clients/{client}/client.md", f"clients/{client}/decisions.md"]
+    row = matches[0]
+    client = key(row["client"])
+    group = row.get("group") or "-"
+    scope = row.get("context_scope") or "client"
+    if group not in ("", "-"):
+        group = key(group)
+        owners = list(csv.DictReader((context / "groups.tsv").open(), delimiter="\t")) \
+            if (context / "groups.tsv").exists() else []
+        owner = [g for g in owners if g["key"] == group]
+        if len(owner) != 1 or owner[0]["client"] != client:
+            raise ValueError("project group is unknown or owned by a different client")
+    else:
+        group = None
+    # context_scope is the pack's audience boundary, not a suggestion:
+    #   group  -> group material only (requires a group; no client-wide docs)
+    #   client -> client-wide + own group (if any)   [default]
+    #   org    -> everything above + org-wide material
+    if scope == "group":
+        if not group:
+            raise ValueError("context_scope 'group' requires the project to have a group")
+        selected = [f"clients/{client}/groups/{group}/{name}.md" for name in ["client", "decisions"]]
+    else:
+        selected = [f"clients/{client}/{name}.md" for name in ["client", "decisions"]]
+        if group:
+            selected += [f"clients/{client}/groups/{group}/{name}.md" for name in ["client", "decisions"]]
+        if scope == "org":
+            # Org-wide material lives in memory/ minus the per-project subtrees.
+            selected += ["memory/README.md", "docs/adr/README.md"]
     selected += [f"memory/projects/{project}/{name}.md" for name in ["project", "active", "decisions"]]
     if args:
         if len(args) != 2 or args[0] != "--run":
@@ -153,8 +179,9 @@ def context_pack(root, context, project, *args):
             raise ValueError("context exceeds 128 KiB")
         files.append(dict(path=str(path.relative_to(root)), sha256=hashlib.sha256(data).hexdigest(),
                           content=data.decode(), classification="private-context"))
-    print(json.dumps(dict(version=1, project=project, client=client, files=files,
-                         handling="Local/private context only. This pack is not approved for cloud upload or a sandbox boundary."), indent=2))
+    print(json.dumps(dict(version=1, project=project, client=client, group=group, scope=scope,
+                          files=files,
+                          handling="Local/private context only. This pack is not approved for cloud upload or a sandbox boundary."), indent=2))
 
 
 def main():

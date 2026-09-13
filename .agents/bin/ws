@@ -26,6 +26,7 @@ ORG_NAME="$(conf_get org_name 'this organisation')"
 ORG_KEY="$(conf_get org_key 'org')"
 CONTEXT_DIR="$ROOT/$(conf_get context_dir 'context')"
 REGISTRY="$CONTEXT_DIR/registry.tsv"
+GROUPS_FILE="$CONTEXT_DIR/groups.tsv"
 MEM="$CONTEXT_DIR/memory/projects"
 RUNS="$CONTEXT_DIR/runs"
 CONTEXT_SKILLS="$CONTEXT_DIR/skills"
@@ -97,14 +98,21 @@ slug() {
     | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-48
 }
 
-# Read the registry (skip header and blank lines):
-#   key<TAB>client<TAB>folder<TAB>remote<TAB>description
+# Read the registry (skip header and blank lines), normalised to the v2 shape:
+#   key<TAB>client<TAB>group<TAB>folder<TAB>remote<TAB>context_scope<TAB>security_profile<TAB>description
 # Empty fields become "-" because `read` collapses consecutive tab delimiters,
-# which would otherwise shift every column after a blank one.
+# which would otherwise shift every column after a blank one. v1 rows are
+# normalised on the fly (no group/scope/profile), so both shapes can be read
+# everywhere - the on-disk header is the version of record.
 reg_rows() {
   [ -f "$REGISTRY" ] || return 0
-  tail -n +2 "$REGISTRY" | grep -v '^[[:space:]]*$' | awk -F'\t' 'BEGIN{OFS="\t"}
-    { for (i = 1; i <= 5; i++) if ($i == "") $i = "-"; NF = 5; print }'
+  local v1="1"
+  if [ "$(head -1 "$REGISTRY")" = "$(printf '%b' "key\tclient\tgroup\tfolder\tremote\tcontext_scope\tsecurity_profile\tdescription")" ]; then
+    v1=""
+  fi
+  tail -n +2 "$REGISTRY" | grep -v '^[[:space:]]*$' | awk -F'\t' -v v1="$v1" 'BEGIN{OFS="\t"}
+    { if (v1) { print $1, $2, "-", $3, $4, "client", "-", $5 }
+      else    { for (i = 1; i <= 8; i++) if ($i == "") $i = "-"; NF = 8; print } }'
 }
 # "-" is the registry's empty marker
 is_empty() { [ -z "${1:-}" ] || [ "${1:-}" = "-" ]; }
@@ -181,7 +189,8 @@ cmd_context() {
     init)
       [ -d "$CONTEXT_DIR/.git" ] && die "context already exists at ${CONTEXT_DIR#$ROOT/}"
       mkdir -p "$CONTEXT_DIR"/{memory/projects,runs,docs/adr,skills,clients}
-      printf 'key\tclient\tfolder\tremote\tdescription\n' > "$CONTEXT_DIR/registry.tsv"
+      printf 'key\tclient\tgroup\tfolder\tremote\tcontext_scope\tsecurity_profile\tdescription\n' > "$CONTEXT_DIR/registry.tsv"
+      printf 'key\tclient\tdescription\n' > "$CONTEXT_DIR/groups.tsv"
       [ -f "$TPL/context-readme.md" ] \
         && sed "s|{{ORG}}|$ORG_NAME|g" "$TPL/context-readme.md" > "$CONTEXT_DIR/README.md"
       [ -f "$TPL/context-gitattributes" ] && cp "$TPL/context-gitattributes" "$CONTEXT_DIR/.gitattributes"
@@ -195,6 +204,9 @@ cmd_context() {
       [ -d "$CONTEXT_DIR/.git" ] && die "context already exists at ${CONTEXT_DIR#$ROOT/}"
       git clone "$remote" "$CONTEXT_DIR"
       c_grn "-> context cloned"
+      ;;
+    migrate-v2)
+      registry_migrate_v2
       ;;
     status)
       if [ -d "$CONTEXT_DIR/.git" ]; then
@@ -240,12 +252,12 @@ count_dirs() {
 
 # ─────────────────────────────────────────────────────────────── list
 cmd_list() {
-  printf '%-20s %-12s %-40s %-8s %s\n' KEY CLIENT FOLDER STATUS REMOTE
-  while IFS=$'\t' read -r key client folder remote desc; do
+  printf '%-20s %-12s %-12s %-40s %-8s %s\n' KEY CLIENT GROUP FOLDER STATUS REMOTE
+  while IFS=$'\t' read -r key client group folder remote scope profile desc; do
     local status="missing"
     [ -d "$ROOT/$folder/.git" ] && status="ok"
     [ -d "$ROOT/$folder" ] && [ ! -d "$ROOT/$folder/.git" ] && status="no-git"
-    printf '%-20s %-12s %-40s %-8s %s\n' "$key" "$client" "$folder" "$status" "$remote"
+    printf '%-20s %-12s %-12s %-40s %-8s %s\n' "$key" "$client" "$group" "$folder" "$status" "$remote"
   done < <(reg_rows)
 }
 
@@ -267,7 +279,7 @@ cmd_bootstrap() {
     cmd_context clone "$(conf_get context_remote)" || c_ylw "! could not clone the context repo"
   fi
 
-  while IFS=$'\t' read -r key client folder remote desc; do
+  while IFS=$'\t' read -r key client group folder remote scope profile desc; do
     local dst; dst="$(repo_path "$folder")"
     if is_repo "$dst"; then c_dim "- $key already present"; continue; fi
     if is_empty "$remote"; then
@@ -289,6 +301,131 @@ cmd_bootstrap() {
 # the domain glossary, cross-project decisions, their proposals and ADRs. It is
 # NOT a container for project keys - those stay flat in memory/ and runs/, so a
 # project can change client without moving four directory trees.
+# ─────────────────────────────────────────────────────────────── groups (v2)
+# A group is a product group inside one client: several repos, one roadmap.
+# groups.tsv records them because a flat registry key cannot express ownership,
+# and the folder tree is a mirror of remote paths, not the business model.
+#   key<TAB>client<TAB>description
+group_get() { validate_key "$1"; [ -f "$GROUPS_FILE" ] || return 1; grep "^$1$(printf '\t')" "$GROUPS_FILE" 2>/dev/null | head -1; }
+group_valid() { [ "$(printf '%s' "$1" | cut -f2)" = "$2" ]; }
+
+cmd_group() {
+  case "${1:-list}" in
+    new)  shift; group_new "$@" ;;
+    list) group_list ;;
+    *) die "usage: ws group [new <key> --client <client> | list]" ;;
+  esac
+}
+
+group_new() {
+  local key="${1:-}" client="-"
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --client) client="${2:?}"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  [ -n "$key" ] || die "usage: ws group new <key> --client <client>"
+  validate_key "$key"; key="$(slug "$key")"; validate_key "$client"
+  [ -f "$REGISTRY" ] || die "no registry yet - run: ws context init"
+  [ -f "$GROUPS_FILE" ] || die "registry is v1 - run: ws context migrate-v2"
+  [ -z "$(group_get "$key")" ] || die "group '$key' already exists"
+  [ -d "$CLIENTS_DIR/$client" ] || die "unknown client '$client' - run: ws client new $client"
+  printf '%s\t%s\t%s\n' "$key" "$client" "-" >> "$GROUPS_FILE"
+  c_grn "-> group '$key' registered (client: $client)"
+  c_dim "   projects join it with: ws new <key> <folder> --client $client --group $key"
+}
+
+group_list() {
+  [ -f "$GROUPS_FILE" ] || { c_dim "no groups table yet - run: ws context migrate-v2"; return 0; }
+  printf '%-16s %-16s %s\n' GROUP CLIENT PROJECTS
+  local key client desc projects
+  while IFS=$'\t' read -r key client desc; do
+    projects="$(reg_rows | awk -F'\t' -v g="$key" '$3==g {print $1}' | tr '\n' ' ')"
+    printf '%-16s %-16s %s\n' "$key" "$client" "${projects:--}"
+  done < "$GROUPS_FILE"
+}
+
+# ─────────────────────────────────────────────────────────────── registry v2
+# v1: key client folder remote description
+# v2: key client group folder remote context_scope security_profile description
+# New columns land last-but-one so the first five keep their positions.
+REG_HEADER_V2="key\tclient\tgroup\tfolder\tremote\tcontext_scope\tsecurity_profile\tdescription"
+
+registry_migrate_v2() {
+  [ -f "$REGISTRY" ] || die "no registry.tsv yet - run: ws context init"
+  if [ "$(head -1 "$REGISTRY")" = "$(printf '%b' "$REG_HEADER_V2")" ]; then
+    die "registry is already v2 - nothing to migrate"
+  fi
+  cp "$REGISTRY" "$REGISTRY.bak-v1"
+  {
+    printf '%b\n' "$REG_HEADER_V2"
+    tail -n +2 "$REGISTRY" | grep -v '^[[:space:]]*$' | awk -F'\t' 'BEGIN{OFS="\t"}
+      { print $1, $2, "-", $3, $4, "client", "-", $5 }'
+  } > "$REGISTRY.tmp" && mv "$REGISTRY.tmp" "$REGISTRY"
+  printf 'key\tclient\tdescription\n' > "$GROUPS_FILE"
+  c_grn "-> registry migrated to v2 (previous file kept at registry.tsv.bak-v1)"
+  c_dim "   new columns default to '-' (group), 'client' (scope), '-' (profile)"
+}
+
+registry_scopes() { echo client group org; }
+
+registry_validate() {
+  [ -f "$REGISTRY" ] || return 0
+  # v1 rows are tolerated (they carry no v2 columns), so a merge cannot strand anyone.
+  local header; header="$(head -1 "$REGISTRY")"
+  local old="$([ "$header" = "$(printf '%b' "$REG_HEADER_V2")" ] || echo 1)"
+  local key client group folder remote scope profile desc
+  while IFS=$'\t' read -r key client group folder remote scope profile desc; do
+    validate_key "$key"
+    if [ "$old" = 1 ]; then
+      group="-"; scope="client"; profile="-"
+    fi
+    case "$scope" in client|group|org) ;; *) c_red "x $key: unknown context_scope '$scope'"; fail=1 ;; esac
+    is_empty "$group" && continue
+    if ! group_valid "$group" "$client"; then
+      c_red "x $key: group '$group' belongs to a different client - every group has exactly one"
+      c_dim "    context/groups.tsv: key, client. Fix the project's client or the group's owner"
+      fail=1
+    fi
+  done < <(tail -n +2 "$REGISTRY" | grep -v '^[[:space:]]*$')
+}
+
+# ─────────────────────────────────────────────────────────────── tree
+# Renders the business model (client > group > project) straight from the
+# registry, not the folder tree: the folders mirror remote paths and their
+# depth is a coincidence of hosting, while these three levels are the actual
+# ownership and scoping structure.
+cmd_tree() {
+  [ -f "$REGISTRY" ] || { c_dim "no registry yet - run: ws context init"; return 0; }
+  local out; out="$(mktemp)"
+  {
+    reg_rows | awk -F'\t' '
+      { if ($2 != lastc) { printf "CLIENT\t%s\n", $2; lastc = $2; lastg = "" }
+        if ($3 != lastg) { printf "GROUP\t%s%s\n", ($3 == "-" ? "(ungrouped)" : $3 "/"), ($3 == "-" ? "" : ""); lastg = $3 }
+        printf "PROJ\t%s\n", $1 }'
+  } > "$out"
+  local type name seen=""
+  while IFS=$'\t' read -r type name; do
+    case "$type" in
+      CLIENT) printf '%s\n' "$name/"; seen="$seen $name" ;;
+      GROUP)  printf '  %s\n' "$name" ;;
+      PROJ)   printf '    - %s\n' "$name" ;;
+    esac
+  done < "$out"
+  rm -f "$out"
+  # Clients exist in the business model even before their first project.
+  local d
+  for d in "$CLIENTS_DIR"/*/; do
+    [ -d "$d" ] || continue
+    d="$(basename "$d")"
+    case " $seen " in *" $d "*) ;; *) printf '%s\n' "$d/"; c_dim "  (no projects yet)" ;; esac
+  done
+  local n; n="$(reg_rows | wc -l | tr -d ' ')"
+  c_dim "   $n project(s) from registry.tsv"
+}
+
 cmd_client() {
   case "${1:-list}" in
     new)  shift; client_new "$@" ;;
@@ -335,11 +472,14 @@ client_list() {
 
 # ─────────────────────────────────────────────────────────────── new
 cmd_new() {
-  local key="" folder="" remote="" client="-"
+  local key="" folder="" remote="" client="-" group="-" scope="client" profile="-"
   local pos=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --client) client="${2:?}"; shift 2 ;;
+      --group) group="${2:?}"; shift 2 ;;
+      --scope) scope="${2:?}"; shift 2 ;;
+      --profile) profile="${2:?}"; shift 2 ;;
       *) pos+=("$1"); shift ;;
     esac
   done
@@ -363,6 +503,14 @@ cmd_new() {
     c_ylw "! no client '$client' at context/clients/$client/ - create it first: ws client new $client"
     die "aborted: unknown client"
   fi
+  case "$scope" in client|group|org) ;;
+    *) die "unknown --scope '$scope' (client | group | org)" ;;
+  esac
+  if ! is_empty "$group"; then
+    [ -f "$GROUPS_FILE" ] || die "registry is v1 - run: ws context migrate-v2 before using groups"
+    row="$(group_get "$group")" && group_valid "$row" "$client" \
+      || die "unknown group '$group' for client '$client' - register it first: ws group new $group --client $client"
+  fi
 
   local dst; dst="$(repo_path "$folder")"
   if [ -n "$remote" ] && [ ! -d "$dst" ]; then
@@ -373,8 +521,8 @@ cmd_new() {
     c_grn "-> new repo at $folder"
   fi
 
-  printf '%s\t%s\t%s\t%s\t%s\n' "$key" "$client" "$folder" "${remote:--}" "new project" >> "$REGISTRY"
-  c_grn "-> registered in registry.tsv (client: $client)"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$key" "$client" "$group" "$folder" "${remote:--}" "$scope" "$profile" "new project" >> "$REGISTRY"
+  c_grn "-> registered in registry.tsv (client: $client, group: $group, scope: $scope)"
 
   mkdir -p "$MEM/$key"
   for f in project active decisions log; do
@@ -430,7 +578,7 @@ cmd_link() {
   local key="${1:-}"; [ -n "$key" ] || die "usage: ws link <key>"
   local row; row="$(reg_get "$key")" || true
   [ -n "$row" ] || die "key '$key' is not in registry.tsv"
-  local folder; folder="$(printf '%s' "$row" | cut -f3)"
+  local folder; folder="$(printf '%s' "$row" | cut -f4)"
   local dst; dst="$(repo_path "$folder")"
   is_repo "$dst" || die "$folder is not a git repo - run ws bootstrap first"
 
@@ -531,7 +679,7 @@ HOOK
 
 cmd_unlink() {
   local key="${1:-}"; [ -n "$key" ] || die "usage: ws unlink <key>"
-  local folder; folder="$(reg_get "$key" | cut -f3)"
+  local folder; folder="$(reg_get "$key" | cut -f4)"
   local dst; dst="$(repo_path "$folder")"
   is_repo "$dst" || die "not a product repository"
   local name hook
@@ -600,8 +748,8 @@ cmd_sync() {
 
   echo
   echo "-- Product repos (not touched) --"
-  local key client folder remote desc
-  while IFS=$'\t' read -r key client folder remote desc; do
+  local key client group folder remote scope profile desc
+  while IFS=$'\t' read -r key client group folder remote scope profile desc; do
     local dst; dst="$(repo_path "$folder")"
     is_repo "$dst" || { c_dim "- $key not cloned"; continue; }
     local dirty=""; [ -n "$(git -C "$dst" status --porcelain)" ] && dirty=" (uncommitted changes)"
@@ -1055,10 +1203,10 @@ agent_auto() {
   # Normalise BOTH sides before comparing. ROOT comes from a logical `pwd` while
   # the session's directory may be physical, and on macOS /tmp and /var are
   # symlinks — so either side alone can disagree with the other.
-  local key="" k c f r d here rootp
+  local key="" k c g f r s p d here rootp
   here="$(cd "$PWD" 2>/dev/null && pwd -P)" || here="$PWD"
   rootp="$(cd "$ROOT" 2>/dev/null && pwd -P)" || rootp="$ROOT"
-  while IFS=$'\t' read -r k c f r d; do
+  while IFS=$'\t' read -r k c g f r s p d; do
     case "$here/" in "$rootp/$f/"*) key="$k"; break ;; esac
   done < <(reg_rows 2>/dev/null)
   [ -n "$key" ] || key="$(conf_get default_project)"
@@ -1194,12 +1342,12 @@ cmd_usage() {
   # Resolve the target project(s) to absolute roots a record's projectRoot is
   # matched against - a record whose cwd was anywhere under a project's own
   # folder counts for that project, same idea as a client's projects for hours.
-  local roots=() k c f r d
+  local roots=() k c g f r s p d
   if [ -n "$client" ]; then
-    while IFS=$'\t' read -r k c f r d; do [ "$c" = "$client" ] && roots+=("$ROOT/$f"); done < <(reg_rows)
+    while IFS=$'\t' read -r k c g f r s p d; do [ "$c" = "$client" ] && roots+=("$ROOT/$f"); done < <(reg_rows)
     [ "${#roots[@]}" -gt 0 ] || die "no project in registry.tsv has client '$client'"
   elif [ "$project" != "-" ]; then
-    while IFS=$'\t' read -r k c f r d; do [ "$k" = "$project" ] && roots+=("$ROOT/$f"); done < <(reg_rows)
+    while IFS=$'\t' read -r k c g f r s p d; do [ "$k" = "$project" ] && roots+=("$ROOT/$f"); done < <(reg_rows)
     [ "${#roots[@]}" -gt 0 ] || die "unknown project '$project' - see: ws list"
   fi
 
@@ -1373,17 +1521,18 @@ cmd_doctor() {
   echo
 
   echo "-- Projects --"
+  registry_validate
   local dup
   dup="$(reg_rows | cut -f1 | sort | uniq -d)"
   if [ -n "$dup" ]; then
     c_red "x duplicate keys in registry.tsv: $(printf '%s' "$dup" | tr '\n' ' ')"; fail=1
   fi
-  dup="$(reg_rows | cut -f3 | sort | uniq -d)"
+  dup="$(reg_rows | cut -f4 | sort | uniq -d)"
   if [ -n "$dup" ]; then
     c_red "x duplicate folders in registry.tsv: $(printf '%s' "$dup" | tr '\n' ' ')"; fail=1
   fi
-  local key client folder remote desc
-  while IFS=$'\t' read -r key client folder remote desc; do
+  local key client group folder remote scope profile desc
+  while IFS=$'\t' read -r key client group folder remote scope profile desc; do
     local dst; dst="$(repo_path "$folder")"
     if is_empty "$remote"; then
       c_ylw "! $key has no remote in registry.tsv - teammates cannot clone it"
@@ -1567,6 +1716,9 @@ ws — engineering workspace CLI
   ws init [--org N --key k --group g]   re-brand a fresh clone for an organisation
   ws context [status|init|clone <r>]    the organisation's private memory repo
   ws client [new <key>|list]        a client that may span several projects
+  ws group [new <k> --client <c>|list]  a product group inside one client (v2)
+  ws tree                          render client > group > project from the registry
+  ws context [status|init|migrate-v2]   migrate the registry to v2 (group/scope/profile)
   ws list                          list projects and clone status
   ws bootstrap                     clone every product repo from registry.tsv
   ws new <key> <folder> [remote] --client <c>   register a new project + memory
@@ -1600,7 +1752,9 @@ case "${1:-help}" in
   init) shift; cmd_init "$@" ;;
   context) shift; cmd_context "$@" ;;
   client) shift; cmd_client "$@" ;;
+  group) shift; cmd_group "$@" ;;
   list) shift; cmd_list "$@" ;;
+  tree) shift; cmd_tree "$@" ;;
   bootstrap) shift; cmd_bootstrap "$@" ;;
   new) shift; cmd_new "$@" ;;
   link) shift; cmd_link "$@" ;;
