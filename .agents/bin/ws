@@ -1096,6 +1096,118 @@ cmd_hours() {
   c_dim "The two columns are deliberately not summed - see 'Two clocks' in AGENTS.md."
 }
 
+# ─────────────────────────────────────────────────────────────── usage
+# Token/session usage is tracked by a SEPARATE, optional personal tool (agentops
+# or similar) that this workspace does not own, does not vendor, and never
+# writes to - only reads from, read-only, on demand. It is a different axis
+# from the two clocks: hours answer "how long", this answers "how much it cost
+# in tokens", and neither this workspace nor its public repo hardcodes where
+# that tool lives on any one machine - workspace.conf names it, or it defaults
+# to ~/.agent-ops if present. Where the tool's own project index does not know
+# about this workspace's projects, records still carry their raw working
+# directory (`projectRoot`), so filtering here needs no changes on that side.
+usage_source() {
+  # A missing/unconfigured source is a normal, common state - not an error -
+  # so this always returns 0 regardless of what it finds, the same lesson
+  # count_files/count_dirs already encode for exactly this failure shape.
+  local s; s="$(conf_get usage_source)"
+  if [ -n "$s" ]; then printf '%s' "${s/#\~/$HOME}"
+  elif [ -d "$HOME/.agent-ops" ]; then printf '%s' "$HOME/.agent-ops"
+  fi
+  return 0
+}
+
+cmd_usage() {
+  local month; month="$(date +%Y-%m)"
+  local project="-" client=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --month) month="${2:?}"; shift 2 ;;
+      --project) project="${2:?}"; shift 2 ;;
+      --client) client="${2:?}"; shift 2 ;;
+      *) die "usage: ws usage [--month YYYY-MM] [--project <key> | --client <key>]" ;;
+    esac
+  done
+  [ -n "$client" ] && [ "$project" != "-" ] && die "pass --project or --client, not both"
+
+  local src; src="$(usage_source)"
+  [ -n "$src" ] || die "no usage source found - set 'usage_source' in workspace.conf, or install one at ~/.agent-ops"
+  local udir="$src/ops/usage"
+  [ -d "$udir" ] || die "usage_source is set to $src but $udir does not exist"
+
+  # Resolve the target project(s) to absolute roots a record's projectRoot is
+  # matched against - a record whose cwd was anywhere under a project's own
+  # folder counts for that project, same idea as a client's projects for hours.
+  local roots=() k c f r d
+  if [ -n "$client" ]; then
+    while IFS=$'\t' read -r k c f r d; do [ "$c" = "$client" ] && roots+=("$ROOT/$f"); done < <(reg_rows)
+    [ "${#roots[@]}" -gt 0 ] || die "no project in registry.tsv has client '$client'"
+  elif [ "$project" != "-" ]; then
+    while IFS=$'\t' read -r k c f r d; do [ "$k" = "$project" ] && roots+=("$ROOT/$f"); done < <(reg_rows)
+    [ "${#roots[@]}" -gt 0 ] || die "unknown project '$project' - see: ws list"
+  fi
+
+  local files=() p
+  for p in "$udir"/*.jsonl; do
+    case "$(basename "$p")" in "$month".jsonl) [ -f "$p" ] && files+=("$p") ;; esac
+  done
+  # No matching month is not an error - it means no usage was recorded that
+  # month, same stance ws hours takes.
+
+  # A heredoc and a piped stdin can't both feed the same command, so the script
+  # goes to a temp file and the usage records are piped into it separately.
+  local pyfile; pyfile="$(mktemp)"
+  cat > "$pyfile" <<'PYEOF'
+import sys, json
+
+month = sys.argv[1]
+roots = [r.rstrip('/') for r in sys.argv[2:] if r]
+
+by_day = {}
+by_tool = {}
+total = {"sessions": 0, "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        rec = json.loads(line)
+    except ValueError:
+        continue
+    if roots:
+        root = rec.get("projectRoot")
+        if not root or not any(root == r or root.startswith(r + "/") for r in roots):
+            continue
+    tok = rec.get("tokens") or {}
+    day = (rec.get("end") or "")[:10]
+    total["sessions"] += 1
+    for f in ("input", "output", "cacheRead", "cacheWrite"):
+        total[f] += tok.get(f) or 0
+    d = by_day.setdefault(day, {"sessions": 0, "input": 0, "output": 0})
+    d["sessions"] += 1
+    d["input"] += tok.get("input") or 0
+    d["output"] += tok.get("output") or 0
+    t = rec.get("tool") or "unknown"
+    by_tool[t] = by_tool.get(t, 0) + 1
+
+if total["sessions"] == 0:
+    print("no usage records for this scope in " + month)
+else:
+    print(f"{'DAY':<12} {'SESSIONS':>8} {'INPUT':>10} {'OUTPUT':>10}")
+    for day in sorted(by_day):
+        d = by_day[day]
+        print(f"{day:<12} {d['sessions']:>8} {d['input']:>10} {d['output']:>10}")
+    print()
+    print(f"{'TOTAL':<12} {total['sessions']:>8} {total['input']:>10} {total['output']:>10}")
+    print()
+    print("by tool: " + ", ".join(f"{k}={v}" for k, v in sorted(by_tool.items())))
+PYEOF
+  cat "${files[@]}" 2>/dev/null | python3 "$pyfile" "$month" "${roots[@]:-}"
+  rm -f "$pyfile"
+  c_dim "Source: $src (a separate personal tool - see: ws doctor)."
+}
+
 # ─────────────────────────────────────────────────────────────── doctor
 cmd_doctor() {
   local fail=0 ci=0
@@ -1327,6 +1439,14 @@ cmd_doctor() {
   else
     c_dim "- no hours recorded yet (ws clock in <project-key>)"
   fi
+  # Purely informational: usage is an optional adjunct from a separate personal
+  # tool this workspace never requires and never bundles. Absent is normal.
+  local usrc; usrc="$(usage_source)"
+  if [ -n "$usrc" ] && [ -d "$usrc/ops/usage" ]; then
+    c_dim "- token usage available via 'ws usage' (source: $usrc)"
+  else
+    c_dim "- no token usage source configured (optional - see 'ws usage')"
+  fi
   echo
 
   [ "$fail" = 0 ] && c_grn "doctor: healthy" || { c_red "doctor: problems reported above"; exit 1; }
@@ -1402,6 +1522,7 @@ ws — engineering workspace CLI
   ws clock in|out|status            HUMAN working hours
   ws agent in|out|status            AGENT working hours - never summed with human
   ws hours [--month M] [--project k|--client c] [--rollup]   report both, side by side
+  ws usage [--month M] [--project k|--client c]  token usage, from a separate optional tool
   ws ide                           copy the shared VS Code defaults into this clone
   ws hooks [status|install|remove]  clock agent time automatically in Claude Code
   ws where                         print the workspace root from anywhere
@@ -1427,6 +1548,7 @@ case "${1:-help}" in
   clock) shift; cmd_clock "$@" ;;
   agent) shift; cmd_agent "$@" ;;
   hours) shift; cmd_hours "$@" ;;
+  usage) shift; cmd_usage "$@" ;;
   log) shift; cmd_log "$@" ;;
   sync) shift; cmd_sync "$@" ;;
   route) shift; cmd_route "$@" ;;

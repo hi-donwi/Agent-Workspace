@@ -467,6 +467,17 @@ Hooks run commands by themselves, so they are opt-in: the repository ships
 `.claude/settings.json.example` and installing is a deliberate act. Human hours stay
 manual on purpose — only the person at the keyboard knows when they actually started.
 
+### `ws usage` — a third, optional, read-only axis
+
+Hours answer "how long"; token usage answers "how much it cost." That is tracked by a
+**separate personal tool this workspace does not own, vendor, or require** — commonly one
+kept at `~/.agent-ops` (name it via `usage_source` in `workspace.conf` if it lives
+elsewhere). `ws usage [--project <key> | --client <key>]` reads that tool's records
+read-only, filtering by a project's or client's real project root, and never writes
+anything back or copies its data into `context/`. Absent, `ws usage` says so plainly and
+`ws doctor` treats it as informational, never a failure — most workspaces will not have
+this tool installed at all.
+
 ---
 
 ## 9. Security — non-negotiable

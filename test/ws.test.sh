@@ -44,6 +44,9 @@ lacks()      { grep -qF "$2" "$1" 2>/dev/null && bad "$3" "'$2' unexpectedly in 
 equals()     { [ "$1" = "$2" ] && ok "$3" || bad "$3" "expected '$2', got '$1'"; }
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+# Isolate $HOME too: ws usage falls back to ~/.agent-ops when unconfigured, and
+# a real one on the machine running this suite must never leak into a test.
+export HOME="$TMP/home"; mkdir -p "$HOME"
 export GIT_CONFIG_GLOBAL="$TMP/gitconfig" GIT_CONFIG_SYSTEM=/dev/null
 git config --global user.email "test@example.com"
 git config --global user.name  "Test Runner"
@@ -334,6 +337,33 @@ check "ws new registers a second acme project with no hours yet" \
   ws new api2 projects/acme/api2 --client acme
 check "ws hours --client survives a sibling project with no session file" \
   ws hours --client acme
+
+section "ws usage: reading a separate, optional tool's data - never merging it in"
+check_fails "ws usage fails cleanly with no source configured" ws usage
+USRC="$TMP/fake-agent-ops"
+mkdir -p "$USRC/ops/usage"
+M="$(date +%Y-%m)"
+cat > "$USRC/ops/usage/$M.jsonl" <<EOF
+{"id":"a","tool":"claude-code","projectRoot":"$PROD","start":"$(date +%Y-%m-%d)T01:00:00Z","end":"$(date +%Y-%m-%d)T02:00:00Z","tokens":{"input":100,"output":200}}
+{"id":"b","tool":"cursor","projectRoot":"$WS/projects/acme/api2","start":"$(date +%Y-%m-%d)T01:00:00Z","end":"$(date +%Y-%m-%d)T02:00:00Z","tokens":{"input":10,"output":20}}
+{"id":"c","tool":"opencode","projectRoot":"/somewhere/unrelated","start":"$(date +%Y-%m-%d)T01:00:00Z","end":"$(date +%Y-%m-%d)T02:00:00Z","tokens":{"input":999,"output":999}}
+{"id":"d","tool":"cursor","projectRoot":null,"start":"$(date +%Y-%m-%d)T01:00:00Z","end":"$(date +%Y-%m-%d)T02:00:00Z","tokens":{"input":999,"output":999}}
+EOF
+echo "usage_source = $USRC" >> "$WS/workspace.conf"
+
+check "ws usage with no filter reads the configured source" ws usage
+OUT="$(ws usage --project api 2>&1)"
+printf '%s' "$OUT" | grep -q '\b100\b' && ok "ws usage --project matches only that project's records" \
+  || bad "ws usage --project matches only that project's records" "$OUT"
+printf '%s' "$OUT" | grep -q '\b999\b' && bad "unrelated projectRoot leaked into the filtered total" "$OUT" \
+  || ok "a record with an unrelated projectRoot is excluded"
+
+OUT="$(ws usage --client acme 2>&1)"
+printf '%s' "$OUT" | grep -qE '^TOTAL +2 ' && ok "ws usage --client sums across every one of that client's projects" \
+  || bad "ws usage --client sums across every one of that client's projects" "$OUT"
+
+check "a record with projectRoot: null never crashes the filter" ws usage --project api
+check_fails "ws usage refuses --project and --client together" ws usage --project api --client acme
 
 section "doctor on a bare clone"
 # Three bugs have now shipped that only appear before anything has been created:

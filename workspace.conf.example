@@ -26,3 +26,9 @@ default_project =
 # The concrete testing, security and observability rules live in the stack packs,
 # so `core` alone leaves you without binding rules for those three; doctor says so.
 packs = core, java
+
+# Optional: where a SEPARATE, personal AI usage/token-tracking tool keeps its
+# data (a tool this workspace does not own, vendor, or require — `ws usage`
+# only ever reads it). Leave empty to default to ~/.agent-ops if present, or
+# leave it absent entirely; `ws usage` and `ws doctor` both degrade quietly.
+usage_source =
