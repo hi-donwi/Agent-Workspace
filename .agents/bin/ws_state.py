@@ -133,6 +133,8 @@ def context_pack(root, context, project, *args):
     client = key(row["client"])
     group = row.get("group") or "-"
     scope = row.get("context_scope") or "client"
+    if scope not in ("client", "group", "org"):
+        raise ValueError(f"unknown context_scope '{scope}'")
     if group not in ("", "-"):
         group = key(group)
         owners = list(csv.DictReader((context / "groups.tsv").open(), delimiter="\t")) \

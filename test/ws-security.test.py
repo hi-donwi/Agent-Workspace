@@ -140,6 +140,22 @@ class RegistryGroups(unittest.TestCase):
         # a group-scoped pack carries no client-wide material either
         self.assertNotIn("clients/alpha/client.md", [f["path"] for f in pack["files"]])
 
+    def test_context_pack_rejects_unknown_scope_from_registry(self):
+        self.migrate()
+        registry = self.root / "context/registry.tsv"
+        lines = registry.read_text().splitlines()
+        header = lines[0]
+        rows = []
+        for line in lines[1:]:
+            parts = line.split("\t")
+            if parts[0] == "api":
+                parts[5] = "world"
+                line = "\t".join(parts)
+            rows.append(line)
+        registry.write_text("\n".join([header, *rows]) + "\n")
+        out = self.ws("context", "pack", "api", success=False)
+        self.assertIn("unknown context_scope", out.stderr)
+
 
 class WorkspaceSecurity(unittest.TestCase):
     def setUp(self):
