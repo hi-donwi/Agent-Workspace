@@ -304,10 +304,18 @@ cmd_new() {
   set -- "${pos[@]}"
   key="${1:-}"; folder="${2:-}"; remote="${3:-}"
   [ -n "$key" ] && [ -n "$folder" ] \
-    || die "usage: ws new <key> <folder> [remote-url] [--client <client-key>]"
+    || die "usage: ws new <key> <folder> [remote-url] --client <client-key>"
   [ -n "$(reg_get "$key")" ] && die "key '$key' is already registered"
 
-  if [ "$client" != "-" ] && [ ! -d "$CLIENTS_DIR/$client" ]; then
+  # Every project belongs to a client. A project with no client is invisible to
+  # ws hours --client and to that client's domain skills - almost always an
+  # oversight, not a choice. Genuinely client-less work (internal tooling,
+  # overhead) still gets a client: `ws client new internal` costs one command
+  # and keeps this rule with no exception to special-case in the CLI.
+  if [ "$client" = "-" ]; then
+    die "usage: ws new <key> <folder> [remote-url] --client <client-key>  (required - see: ws client list)"
+  fi
+  if [ ! -d "$CLIENTS_DIR/$client" ]; then
     c_ylw "! no client '$client' at context/clients/$client/ - create it first: ws client new $client"
     die "aborted: unknown client"
   fi
@@ -322,8 +330,7 @@ cmd_new() {
   fi
 
   printf '%s\t%s\t%s\t%s\t%s\n' "$key" "$client" "$folder" "${remote:--}" "new project" >> "$REGISTRY"
-  c_grn "-> registered in registry.tsv"
-  [ "$client" = "-" ] && c_ylw "  ! no --client given - ws hours --client and the domain skill lookup won't find this project"
+  c_grn "-> registered in registry.tsv (client: $client)"
 
   mkdir -p "$MEM/$key"
   for f in project active decisions log; do
@@ -1215,7 +1222,9 @@ cmd_doctor() {
       c_dim "    add it as the remote column of context/registry.tsv"
     fi
     if is_empty "$client"; then
-      c_ylw "! $key has no client in registry.tsv - ws hours --client and domain-skill lookup won't find it"
+      c_red "x $key has no client in registry.tsv - every project must belong to one"
+      c_dim "    context/registry.tsv: set column 2, or: ws client new <key>"
+      fail=1
     elif [ ! -d "$CLIENTS_DIR/$client" ]; then
       c_red "x $key declares client '$client', but context/clients/$client/ does not exist"; fail=1
     fi
@@ -1381,7 +1390,7 @@ ws — engineering workspace CLI
   ws client [new <key>|list]        a client that may span several projects
   ws list                          list projects and clone status
   ws bootstrap                     clone every product repo from registry.tsv
-  ws new <key> <folder> [remote] [--client c]   register a new project + memory
+  ws new <key> <folder> [remote] --client <c>   register a new project + memory
   ws link <key>                    write the untracked AGENTS.md pointer in a product repo
   ws unlink <key>                  remove the pointer
   ws run <key> "title"             create a new run under .agents/runs/<key>/

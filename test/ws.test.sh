@@ -125,6 +125,12 @@ check_fails "a second client with the same key refuses" ws client new acme
 check_fails "ws new refuses an unknown client" ws new orphan projects/x --client no-such-client
 not_exists "$WS/context/memory/projects/orphan" "nothing was registered for the rejected project"
 
+# Every project must belong to a client - required at creation, not just warned
+# about, and enforced again by doctor for any project registered another way.
+check_fails "ws new refuses to register a project with no client at all" \
+  ws new clientless projects/y
+not_exists "$WS/context/memory/projects/clientless" "nothing was registered without a client either"
+
 section "skills: take only what the manifest asks for"
 cat > "$WS/.agents/skills.manifest" <<EOF
 source = $SKILLSRC
@@ -368,6 +374,11 @@ cp "$WS/context/registry.tsv" "$TMP/reg2.bak"
 printf 'orphan\tno-such-client\tprojects/orphan\t-\tno client dir\n' >> "$WS/context/registry.tsv"
 check_fails "doctor fails when a project's client does not exist" ws doctor --ci
 cp "$TMP/reg2.bak" "$WS/context/registry.tsv"
+
+cp "$WS/context/registry.tsv" "$TMP/reg3.bak"
+printf 'clientless\t-\tprojects/clientless\t-\tno client at all\n' >> "$WS/context/registry.tsv"
+check_fails "doctor fails when a project names no client at all" ws doctor --ci
+cp "$TMP/reg3.bak" "$WS/context/registry.tsv"
 
 # Assembled from pieces on purpose: a literal machine path here would trip the
 # very check this case exists to test, and fail doctor on this file in CI.

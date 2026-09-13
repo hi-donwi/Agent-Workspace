@@ -188,8 +188,14 @@ ws hours --client <key>                   # billable hours across all their proj
 
 Project keys stay **flat** — `memory/projects/<key>/`, `runs/<key>/`, `works/*/<key>/` —
 never nested under a client. A key is unique workspace-wide; a project changing client is
-then one row in a registry rather than a move across four directory trees. `ws doctor`
-fails if a project names a client with no `clients/<key>/` directory.
+then one row in a registry rather than a move across four directory trees.
+
+**Every project belongs to a client.** `ws new` refuses to register one without
+`--client`, and `ws doctor` fails on any existing project with no client, or one naming a
+`clients/<key>/` that does not exist. A project with no client is invisible to `ws hours
+--client` and to that client's domain skills — almost always an oversight, not a choice.
+Work with no real client (internal tooling, overhead) still gets one: `ws client new
+internal` costs one command and keeps this rule with no exception to remember.
 
 A decision belongs in `clients/<key>/decisions.md` only once a **second** project confirms
 it is genuinely client-wide — one project alone cannot distinguish a client-wide decision

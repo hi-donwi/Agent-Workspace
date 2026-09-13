@@ -37,10 +37,15 @@ a flat key.
 
 ```bash
 ws client new <key>                            # scaffold clients/<key>/
-ws new <project-key> <folder> --client <key>    # register a project against it
+ws new <project-key> <folder> --client <key>    # register a project against it — required
 ws client list                                  # every client and its project keys
 ws hours --client <key>                         # billable hours across all their projects
 ```
+
+**`--client` is required, not optional.** `ws new` refuses to register a project without
+one, and `ws doctor` fails on any existing project that has none, or that names a client
+directory that does not exist. Genuinely client-less work still needs a client —
+`ws client new internal` — rather than becoming an exception the tooling has to special-case.
 
 A decision belongs in `clients/<key>/decisions.md` only once a **second** project confirms
 it is genuinely client-wide — one project cannot tell a client-wide fact from a

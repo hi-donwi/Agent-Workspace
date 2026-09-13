@@ -42,7 +42,9 @@ context/clients/<client>/
 `ws client new <key>` scaffolds it from templates the same way `ws new` scaffolds a
 project. `ws new <project-key> <folder> --client <key>` links a project to it, and fails
 if the client does not exist yet — a typo'd client name should not silently create an
-orphan.
+orphan. **`--client` is required**, not optional (see Addendum below): `ws new` refuses to
+register a project without one, and `ws doctor` fails on any existing project that has
+none.
 
 **Project keys stay flat.** `memory/projects/<key>/`, `runs/<key>/<run>/`, and
 `works/{human,agent}/<key>/` are **not** nested under a client
@@ -90,7 +92,7 @@ project-specific one that happens to be true today.
   just with `clients/<key>/` holding one project's worth of client-shaped material. The
   benefit is entirely in what happens when the second project or client arrives.
 
-## Two pre-existing bugs found while making this change
+## Three pre-existing bugs found while making this change
 
 **`ws route` was silently broken for almost every query.** Wiring it to also search
 `clients/*/skills/` surfaced a bug unrelated to this ADR: any skill lacking a `keywords:`
@@ -116,6 +118,16 @@ any other line edit, not merged automatically as documented. Fixed by moving the
 from `ws context init` via `.agents/templates/context-gitattributes` so every future
 organisation gets it from the start rather than rediscovering the same bug.
 
+**`ws hours --client` died the moment a client's projects had uneven activity.** Found by
+simulating the real case this ADR exists for — a second client with two projects, a second
+project added to the first client — rather than reasoning about it in the abstract: the
+ordinary situation where one of a client's projects was worked on this month and a sibling
+was not crashed the report outright. Same family as the `ws route` bug: `cat file1 file2`
+exits nonzero the instant *any* argument is missing, even though it still prints what does
+exist; under `pipefail` + `errexit` that killed `hours_net`'s pipeline from inside the
+`a="$(...)"` / `h="$(...)"` assignment that calls it. Fixed by filtering to files that
+actually exist before handing them to `cat`.
+
 ## Alternatives considered
 
 | Option | Why rejected |
@@ -134,4 +146,20 @@ organisation gets it from the start rather than rediscovering the same bug.
 - [x] `ws doctor` fails when a project names a client with no directory
 - [x] `context/.gitattributes`, shipped by `ws context init` via a new template
 - [x] `ws route` fixed and regression-tested against a skill with no `keywords:` line
-- [ ] Decide whether a project may name no client at all indefinitely, or whether `ws doctor` should eventually require one
+- [x] Decided (2026-09-13, see Addendum): a client is required, not optional
+
+## Addendum (2026-09-13): `--client` made required
+
+The open follow-up above was resolved before the model saw any real use beyond one
+client: leaving it optional means a forgotten `--client` produces a project invisible to
+`ws hours --client` and to that client's domain skills, discovered only when a report
+comes up short — the worst time to find a data-entry gap. `ws new` now refuses to
+register a project without `--client`, and `ws doctor` fails (not warns) on any existing
+project with none. A workspace with genuinely client-less work — internal tooling,
+overhead — creates a client for it (`ws client new internal`) rather than the tooling
+special-casing an empty column.
+
+This was tightened after simulating the real multi-client, multi-project case directly
+(two clients, several projects each) rather than reasoning about it in the abstract; the
+same simulation is what surfaced the third bug above (`ws hours --client` dying on a
+client whose projects have uneven activity).
