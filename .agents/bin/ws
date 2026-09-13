@@ -335,7 +335,7 @@ cmd_new() {
       printf '# %s - %s\n\n(empty)\n' "$key" "$f" > "$MEM/$key/$f.md"
     fi
   done
-  c_grn "-> memory created at .agents/memory/projects/$key/"
+  c_grn "-> memory created at ${MEM#$ROOT/}/$key/"
   cmd_link "$key"
 }
 
@@ -996,7 +996,15 @@ hours_net() {
   else
     local k; for k in "${keys[@]}"; do patterns+=("$dir/$k/$month.jsonl"); done
   fi
-  cat "${patterns[@]}" 2>/dev/null | awk '
+  # `cat` exits nonzero the moment ANY argument is missing - a non-matching glob
+  # left unexpanded, or a project with no session that month, which --client
+  # hits routinely (one of a client's projects worked this month, another not).
+  # Under pipefail + errexit that kills the whole script from inside a=$(...).
+  # Filter to files that actually exist first, so cat never sees a bad path.
+  local files=() p
+  for p in "${patterns[@]}"; do [ -f "$p" ] && files+=("$p"); done
+  [ "${#files[@]}" -eq 0 ] && return 0
+  cat "${files[@]}" | awk '
     match($0, /"start_ts":[0-9]+/) { st = substr($0, RSTART+12, RLENGTH-12) }
     match($0, /"end_ts":[0-9]+/)   { en = substr($0, RSTART+10, RLENGTH-10) }
     match($0, /"start":"[^"]+/)    { d  = substr($0, RSTART+9, 10) }

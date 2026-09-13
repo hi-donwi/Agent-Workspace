@@ -319,6 +319,16 @@ check "ws hours --rollup" ws hours --rollup
 contains "$WS/context/works/rollup/$(date +%Y-%m).json" '"by_client"' "the rollup breaks hours down by client"
 contains "$WS/context/works/rollup/$(date +%Y-%m).json" '"acme"' "acme appears in the client breakdown"
 
+# Regression: `cat` exits nonzero the moment ANY argument file is missing. A
+# client with two projects, only one of which has hours this month, hits this
+# on every call - one of "api"'s siblings below has never been clocked into.
+# Under pipefail + errexit that used to kill ws hours outright from inside the
+# a=$(...) / h=$(...) assignment in hours_net.
+check "ws new registers a second acme project with no hours yet" \
+  ws new api2 projects/acme/api2 --client acme
+check "ws hours --client survives a sibling project with no session file" \
+  ws hours --client acme
+
 section "doctor on a bare clone"
 # Three bugs have now shipped that only appear before anything has been created:
 # check-ignore not matching a directory that does not exist, and `find` on a
