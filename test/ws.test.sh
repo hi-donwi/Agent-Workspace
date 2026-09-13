@@ -109,9 +109,21 @@ check "ws context init scaffolds and inits git" ws context init
 exists "$WS/context/.git" "context is its own git repository"
 exists "$WS/context/registry.tsv" "it has a registry"
 exists "$WS/context/memory/projects" "it has a memory tree"
+exists "$WS/context/clients" "it has a clients tree"
+exists "$WS/context/.gitattributes" "it ships the union-merge rules where they take effect"
+contains "$WS/context/.gitattributes" "merge=union" "the merge strategy is actually declared"
 check_fails "a second context init refuses" ws context init
 git -C "$WS" add -A >/dev/null 2>&1
 equals "$(git -C "$WS" ls-files context | wc -l | tr -d ' ')" "0" "context is never tracked by the framework"
+
+section "clients: a client may span several projects"
+contains "$WS/context/registry.tsv" "client" "the registry header has a client column"
+check "ws client new registers a client" ws client new acme
+exists "$WS/context/clients/acme/client.md" "client.md is scaffolded"
+exists "$WS/context/clients/acme/decisions.md" "decisions.md is scaffolded"
+check_fails "a second client with the same key refuses" ws client new acme
+check_fails "ws new refuses an unknown client" ws new orphan projects/x --client no-such-client
+not_exists "$WS/context/memory/projects/orphan" "nothing was registered for the rejected project"
 
 section "skills: take only what the manifest asks for"
 cat > "$WS/.agents/skills.manifest" <<EOF
@@ -142,9 +154,28 @@ PROD="$WS/projects/acme/api"
 mkdir -p "$PROD" && git -C "$PROD" init -q
 echo 'class Order {}' > "$PROD/Order.java"
 git -C "$PROD" add -A && git -C "$PROD" commit -qm init
-check "ws new registers the project and builds its memory" ws new api projects/acme/api
+check "ws new registers the project and builds its memory" \
+  ws new api projects/acme/api --client acme
 exists "$WS/context/memory/projects/api/log.md" "memory is created from templates"
 contains "$WS/context/registry.tsv" "api" "the registry gains a row"
+contains "$WS/context/registry.tsv" "$(printf 'api\tacme\t')" "the row records its client"
+
+# A client's own skill is discoverable by ws route the same way a framework
+# skill is - it is not tied to any one of that client's projects.
+mkdir -p "$WS/context/clients/acme/skills/widgets"
+cat > "$WS/context/clients/acme/skills/widgets/SKILL.md" <<'SKILLEOF'
+---
+name: widgets
+pack: domain
+keywords: widget, gizmo
+description: Handles widget things. Use when testing widgets.
+---
+# widgets
+SKILLEOF
+ROUTE="$(ws route "widget gizmo work" 2>&1)"
+printf '%s' "$ROUTE" | grep -q widgets \
+  && ok "ws route finds a client's own domain skill" \
+  || bad "ws route finds a client's own domain skill" "$ROUTE"
 
 check "ws link writes the pointer" ws link api
 exists "$PROD/AGENTS.md"  "pointer AGENTS.md written"
@@ -254,6 +285,40 @@ ROUTE="$(ws route "testing alpha things" 2>&1)"
 printf '%s' "$ROUTE" | grep -q 'alpha' && ok "ws route finds a matching skill" \
   || bad "ws route finds a matching skill" "$ROUTE"
 
+# Regression: any skill lacking a `keywords:` line makes the scoring pipeline's
+# `grep -v` exit 1 on empty input. Under pipefail + errexit that used to kill
+# `ws route` outright the moment it reached such a skill - which was every call,
+# since the very first framework skill alphabetically has no keywords line.
+mkdir -p "$WS/.agents/skills/no-keywords"
+cat > "$WS/.agents/skills/no-keywords/SKILL.md" <<'SKILLEOF'
+---
+name: no-keywords
+pack: core
+description: Has no keywords line at all.
+---
+# no-keywords
+SKILLEOF
+check "ws route survives a skill with no keywords: line" ws route "testing alpha things"
+rm -rf "$WS/.agents/skills/no-keywords"
+
+section "hours by client"
+check "human clock in on the api project" ws clock in api "billable acme work"
+for f in "$WS"/context/works/.open-*.json; do
+  ts=$(sed -n 's/.*"start_ts":\([0-9]*\).*/\1/p' "$f")
+  sed -i.bak "s/\"start_ts\":$ts/\"start_ts\":$((ts-3600))/" "$f" && rm -f "$f.bak"
+done
+check "human clock out" ws clock out
+OUT="$(ws hours --client acme 2>&1)"
+printf '%s' "$OUT" | grep -q 'client acme' && ok "ws hours --client scopes to that client's projects" \
+  || bad "ws hours --client scopes to that client's projects" "$OUT"
+printf '%s' "$OUT" | grep -qE '1\.00' && ok "the hour is counted under the client" \
+  || bad "the hour is counted under the client" "$OUT"
+check_fails "ws hours refuses an unknown client" ws hours --client no-such-client
+check_fails "ws hours refuses --project and --client together" ws hours --project api --client acme
+check "ws hours --rollup" ws hours --rollup
+contains "$WS/context/works/rollup/$(date +%Y-%m).json" '"by_client"' "the rollup breaks hours down by client"
+contains "$WS/context/works/rollup/$(date +%Y-%m).json" '"acme"' "acme appears in the client breakdown"
+
 section "doctor on a bare clone"
 # Three bugs have now shipped that only appear before anything has been created:
 # check-ignore not matching a directory that does not exist, and `find` on a
@@ -288,6 +353,11 @@ cp "$WS/context/registry.tsv" "$TMP/reg.bak"
 printf 'api\tprojects/other\t-\tduplicate key\n' >> "$WS/context/registry.tsv"
 check_fails "doctor fails on a duplicate registry key" ws doctor --ci
 cp "$TMP/reg.bak" "$WS/context/registry.tsv"
+
+cp "$WS/context/registry.tsv" "$TMP/reg2.bak"
+printf 'orphan\tno-such-client\tprojects/orphan\t-\tno client dir\n' >> "$WS/context/registry.tsv"
+check_fails "doctor fails when a project's client does not exist" ws doctor --ci
+cp "$TMP/reg2.bak" "$WS/context/registry.tsv"
 
 # Assembled from pieces on purpose: a literal machine path here would trip the
 # very check this case exists to test, and fail doctor on this file in CI.

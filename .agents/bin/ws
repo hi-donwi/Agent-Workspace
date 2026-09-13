@@ -29,6 +29,7 @@ REGISTRY="$CONTEXT_DIR/registry.tsv"
 MEM="$CONTEXT_DIR/memory/projects"
 RUNS="$CONTEXT_DIR/runs"
 CONTEXT_SKILLS="$CONTEXT_DIR/skills"
+CLIENTS_DIR="$CONTEXT_DIR/clients"
 WORKS="$CONTEXT_DIR/works"
 MANIFEST="$ROOT/.agents/skills.manifest"
 LOCK="$ROOT/.agents/skills.lock"
@@ -64,25 +65,29 @@ slug() {
     | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-48
 }
 
-# Read the registry (skip header and blank lines): key<TAB>folder<TAB>remote<TAB>desc
+# Read the registry (skip header and blank lines):
+#   key<TAB>client<TAB>folder<TAB>remote<TAB>description
 # Empty fields become "-" because `read` collapses consecutive tab delimiters,
-# which would otherwise shift every column after a blank remote.
+# which would otherwise shift every column after a blank one.
 reg_rows() {
   [ -f "$REGISTRY" ] || return 0
   tail -n +2 "$REGISTRY" | grep -v '^[[:space:]]*$' | awk -F'\t' 'BEGIN{OFS="\t"}
-    { for (i = 1; i <= 4; i++) if ($i == "") $i = "-"; NF = 4; print }'
+    { for (i = 1; i <= 5; i++) if ($i == "") $i = "-"; NF = 5; print }'
 }
 # "-" is the registry's empty marker
 is_empty() { [ -z "${1:-}" ] || [ "${1:-}" = "-" ]; }
 reg_get()  { reg_rows | awk -F'\t' -v k="$1" '$1==k {print; exit}'; }
 
-# Skills live in the workspace (shared by every organisation) and optionally in the
-# organisation's context repo (its own domain skills). Both are searched.
+# Skills live in the workspace (shared by every organisation), the organisation's
+# own context (its cross-client domain skills, if any), and each client's own
+# folder (that client's domain, shared by every one of their projects). All three
+# are searched.
 skill_dirs() {
   local d
   for d in "$SKILLS"/*/; do [ -d "$d" ] && printf '%s\n' "$d"; done
-  [ -d "$CONTEXT_SKILLS" ] || return 0
-  for d in "$CONTEXT_SKILLS"/*/; do [ -d "$d" ] && printf '%s\n' "$d"; done
+  [ -d "$CONTEXT_SKILLS" ] && for d in "$CONTEXT_SKILLS"/*/; do [ -d "$d" ] && printf '%s\n' "$d"; done
+  [ -d "$CLIENTS_DIR" ] || return 0
+  for d in "$CLIENTS_DIR"/*/skills/*/; do [ -d "$d" ] && printf '%s\n' "$d"; done
 }
 
 # ─────────────────────────────────────────────────────────────── init
@@ -134,10 +139,11 @@ cmd_context() {
   case "$action" in
     init)
       [ -d "$CONTEXT_DIR/.git" ] && die "context already exists at ${CONTEXT_DIR#$ROOT/}"
-      mkdir -p "$CONTEXT_DIR"/{memory/projects,runs,docs/adr,skills}
-      printf 'key\tfolder\tremote\tdescription\n' > "$CONTEXT_DIR/registry.tsv"
+      mkdir -p "$CONTEXT_DIR"/{memory/projects,runs,docs/adr,skills,clients}
+      printf 'key\tclient\tfolder\tremote\tdescription\n' > "$CONTEXT_DIR/registry.tsv"
       [ -f "$TPL/context-readme.md" ] \
         && sed "s|{{ORG}}|$ORG_NAME|g" "$TPL/context-readme.md" > "$CONTEXT_DIR/README.md"
+      [ -f "$TPL/context-gitattributes" ] && cp "$TPL/context-gitattributes" "$CONTEXT_DIR/.gitattributes"
       touch "$CONTEXT_DIR/runs/.gitkeep"
       git -C "$CONTEXT_DIR" init -q -b main
       c_grn "-> context repository created at ${CONTEXT_DIR#$ROOT/}"
@@ -193,12 +199,12 @@ count_dirs() {
 
 # ─────────────────────────────────────────────────────────────── list
 cmd_list() {
-  printf '%-20s %-40s %-8s %s\n' KEY FOLDER STATUS REMOTE
-  while IFS=$'\t' read -r key folder remote desc; do
+  printf '%-20s %-12s %-40s %-8s %s\n' KEY CLIENT FOLDER STATUS REMOTE
+  while IFS=$'\t' read -r key client folder remote desc; do
     local status="missing"
     [ -d "$ROOT/$folder/.git" ] && status="ok"
     [ -d "$ROOT/$folder" ] && [ ! -d "$ROOT/$folder/.git" ] && status="no-git"
-    printf '%-20s %-40s %-8s %s\n' "$key" "$folder" "$status" "$remote"
+    printf '%-20s %-12s %-40s %-8s %s\n' "$key" "$client" "$folder" "$status" "$remote"
   done < <(reg_rows)
 }
 
@@ -220,7 +226,7 @@ cmd_bootstrap() {
     cmd_context clone "$(conf_get context_remote)" || c_ylw "! could not clone the context repo"
   fi
 
-  while IFS=$'\t' read -r key folder remote desc; do
+  while IFS=$'\t' read -r key client folder remote desc; do
     local dst="$ROOT/$folder"
     if [ -d "$dst/.git" ]; then c_dim "- $key already present"; continue; fi
     if is_empty "$remote"; then
@@ -236,11 +242,75 @@ cmd_bootstrap() {
   c_grn "bootstrap complete ($n cloned)"
 }
 
+# ─────────────────────────────────────────────────────────────── client
+# A client may have several projects (registry.tsv's `client` column links them).
+# clients/<key>/ holds what is true regardless of which of their projects it is:
+# the domain glossary, cross-project decisions, their proposals and ADRs. It is
+# NOT a container for project keys - those stay flat in memory/ and runs/, so a
+# project can change client without moving four directory trees.
+cmd_client() {
+  case "${1:-list}" in
+    new)  shift; client_new "$@" ;;
+    list) client_list ;;
+    *) die "usage: ws client [new <key> | list]" ;;
+  esac
+}
+
+client_new() {
+  local key="${1:-}"; [ -n "$key" ] || die "usage: ws client new <key>"
+  key="$(slug "$key")"
+  [ -d "$CONTEXT_DIR/.git" ] || die "no context repo yet - run: ws context init"
+  local dst="$CLIENTS_DIR/$key"
+  [ -d "$dst" ] && die "client '$key' already exists at ${dst#$ROOT/}"
+
+  mkdir -p "$dst/docs/adr" "$dst/skills"
+  local date_now; date_now="$(date +%F)"
+  if [ -f "$TPL/client.md" ]; then
+    sed "s|{{CLIENT}}|$key|g; s|{{DATE}}|$date_now|g" "$TPL/client.md" > "$dst/client.md"
+  else
+    printf '# %s\n\n(empty)\n' "$key" > "$dst/client.md"
+  fi
+  if [ -f "$TPL/client-decisions.md" ]; then
+    sed "s|{{CLIENT}}|$key|g" "$TPL/client-decisions.md" > "$dst/decisions.md"
+  else
+    printf '# %s - decisions\n' "$key" > "$dst/decisions.md"
+  fi
+  c_grn "-> client '$key' created at ${dst#$ROOT/}"
+  c_dim "   register a project against it with: ws new <key> <folder> --client $key"
+}
+
+client_list() {
+  [ -d "$CLIENTS_DIR" ] || { c_dim "no clients yet - ws client new <key>"; return 0; }
+  printf '%-16s %s\n' CLIENT PROJECTS
+  local c
+  for c in "$CLIENTS_DIR"/*/; do
+    [ -d "$c" ] || continue
+    c="$(basename "$c")"
+    local projects; projects="$(reg_rows | awk -F'\t' -v c="$c" '$2==c {print $1}' | tr '\n' ' ')"
+    printf '%-16s %s\n' "$c" "${projects:--}"
+  done
+}
+
 # ─────────────────────────────────────────────────────────────── new
 cmd_new() {
-  local key="${1:-}" folder="${2:-}" remote="${3:-}"
-  [ -n "$key" ] && [ -n "$folder" ] || die "usage: ws new <key> <folder> [remote-url]"
+  local key="" folder="" remote="" client="-"
+  local pos=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --client) client="${2:?}"; shift 2 ;;
+      *) pos+=("$1"); shift ;;
+    esac
+  done
+  set -- "${pos[@]}"
+  key="${1:-}"; folder="${2:-}"; remote="${3:-}"
+  [ -n "$key" ] && [ -n "$folder" ] \
+    || die "usage: ws new <key> <folder> [remote-url] [--client <client-key>]"
   [ -n "$(reg_get "$key")" ] && die "key '$key' is already registered"
+
+  if [ "$client" != "-" ] && [ ! -d "$CLIENTS_DIR/$client" ]; then
+    c_ylw "! no client '$client' at context/clients/$client/ - create it first: ws client new $client"
+    die "aborted: unknown client"
+  fi
 
   local dst="$ROOT/$folder"
   if [ -n "$remote" ] && [ ! -d "$dst" ]; then
@@ -251,8 +321,9 @@ cmd_new() {
     c_grn "-> new repo at $folder"
   fi
 
-  printf '%s\t%s\t%s\t%s\n' "$key" "$folder" "${remote:--}" "new project" >> "$REGISTRY"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$key" "$client" "$folder" "${remote:--}" "new project" >> "$REGISTRY"
   c_grn "-> registered in registry.tsv"
+  [ "$client" = "-" ] && c_ylw "  ! no --client given - ws hours --client and the domain skill lookup won't find this project"
 
   mkdir -p "$MEM/$key"
   for f in project active decisions log; do
@@ -308,7 +379,7 @@ cmd_link() {
   local key="${1:-}"; [ -n "$key" ] || die "usage: ws link <key>"
   local row; row="$(reg_get "$key")" || true
   [ -n "$row" ] || die "key '$key' is not in registry.tsv"
-  local folder; folder="$(printf '%s' "$row" | cut -f2)"
+  local folder; folder="$(printf '%s' "$row" | cut -f3)"
   local dst="$ROOT/$folder"
   [ -d "$dst/.git" ] || die "$folder is not a git repo - run ws bootstrap first"
 
@@ -392,7 +463,7 @@ HOOK
 
 cmd_unlink() {
   local key="${1:-}"; [ -n "$key" ] || die "usage: ws unlink <key>"
-  local folder; folder="$(reg_get "$key" | cut -f2)"
+  local folder; folder="$(reg_get "$key" | cut -f3)"
   rm -f "$ROOT/$folder/AGENTS.md" "$ROOT/$folder/.workspace"
   local hook="$ROOT/$folder/.git/hooks/pre-commit"
   [ -f "$hook" ] && grep -q 'ws-guard' "$hook" && rm -f "$hook"
@@ -451,8 +522,8 @@ cmd_sync() {
 
   echo
   echo "-- Product repos (not touched) --"
-  local key folder remote desc
-  while IFS=$'\t' read -r key folder remote desc; do
+  local key client folder remote desc
+  while IFS=$'\t' read -r key client folder remote desc; do
     local dst="$ROOT/$folder"
     [ -d "$dst/.git" ] || { c_dim "- $key not cloned"; continue; }
     local dirty=""; [ -n "$(git -C "$dst" status --porcelain)" ] && dirty=" (uncommitted changes)"
@@ -481,20 +552,28 @@ cmd_route() {
     # Score = 5 x curated keyword hits + 1 x description word hits.
     # Curated keywords carry the weight; prose matching only breaks ties.
     local kw desc score
+    # `grep -v` (and `sort -u`, on some builds) exits 1 on empty input - a skill
+    # with no `keywords:` line, say - and under pipefail that propagates as the
+    # exit status of the kw=/desc= assignment. Under errexit that silently kills
+    # the whole script on the first such skill, which used to be every query.
+    # `|| true` on the terminal read of each pipeline absorbs it: the assignment
+    # still captures whatever text made it through.
     kw="$(
-      sed -n 's/^keywords:[[:space:]]*//p' "$d/SKILL.md" | norm | tr ',' '\n' \
-        | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | grep -v '^$' \
-        | while read -r w; do
-            if [ "${q#*$w}" != "$q" ]; then echo 1; fi
-          done | wc -l | tr -d ' '
+      { sed -n 's/^keywords:[[:space:]]*//p' "$d/SKILL.md" | norm | tr ',' '\n' \
+          | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | grep -v '^$' \
+          | while read -r w; do
+              if [ "${q#*$w}" != "$q" ]; then echo 1; fi
+            done
+      } | wc -l | tr -d ' ' || true
     )"
     desc="$(
-      sed -n '/^description:/,/^[a-z]*:/p' "$d/SKILL.md" 2>/dev/null \
-        | norm | tr -cs 'a-z0-9' '\n' \
-        | awk 'length($0) > 5' | sort -u \
-        | while read -r w; do
-            if [ "${q#*$w}" != "$q" ]; then echo 1; fi
-          done | wc -l | tr -d ' '
+      { sed -n '/^description:/,/^[a-z]*:/p' "$d/SKILL.md" 2>/dev/null \
+          | norm | tr -cs 'a-z0-9' '\n' \
+          | awk 'length($0) > 5' | sort -u \
+          | while read -r w; do
+              if [ "${q#*$w}" != "$q" ]; then echo 1; fi
+            done
+      } | wc -l | tr -d ' ' || true
     )"
     score=$(( kw * 5 + desc ))
     if [ "${score:-0}" -ge 5 ]; then
@@ -797,14 +876,33 @@ works_rollup() {
     printf '  "agent_hours": %s,\n' "$at"
     printf '  "by_project": {\n'
     local first=1 key ph pa
-    for key in $(find "$WORKS/human" "$WORKS/agent" -maxdepth 1 -mindepth 1 -type d 2>/dev/null \
-                   -exec basename {} \; | sort -u); do
+    for key in $( { find "$WORKS/human" -maxdepth 1 -mindepth 1 -type d 2>/dev/null; \
+                     find "$WORKS/agent"  -maxdepth 1 -mindepth 1 -type d 2>/dev/null; } \
+                   | xargs -I{} basename {} 2>/dev/null | sort -u); do
       ph="$(hours_net "$WORKS/human" "$month" "$key" | awk '$1=="TOTAL"{print $2; f=1} END{if(!f)print "0.00"}')"
       pa="$(hours_net "$WORKS/agent" "$month" "$key" | awk '$1=="TOTAL"{print $2; f=1} END{if(!f)print "0.00"}')"
       [ "$ph" = "0.00" ] && [ "$pa" = "0.00" ] && continue
       [ "$first" = 1 ] || printf ',\n'; first=0
       printf '    "%s": {"human_hours": %s, "agent_hours": %s}' "$key" "$ph" "$pa"
     done
+    printf '\n  },\n'
+    printf '  "by_client": {\n'
+    first=1
+    local c ckeys ch ca
+    if [ -d "$CLIENTS_DIR" ]; then
+      for c in "$CLIENTS_DIR"/*/; do
+        [ -d "$c" ] || continue
+        c="$(basename "$c")"
+        ckeys=()
+        while IFS= read -r k; do [ -n "$k" ] && ckeys+=("$k"); done < <(client_project_keys "$c")
+        [ "${#ckeys[@]}" -gt 0 ] || continue
+        ch="$(hours_net "$WORKS/human" "$month" "${ckeys[@]}" | awk '$1=="TOTAL"{print $2; f=1} END{if(!f)print "0.00"}')"
+        ca="$(hours_net "$WORKS/agent" "$month" "${ckeys[@]}" | awk '$1=="TOTAL"{print $2; f=1} END{if(!f)print "0.00"}')"
+        [ "$ch" = "0.00" ] && [ "$ca" = "0.00" ] && continue
+        [ "$first" = 1 ] || printf ',\n'; first=0
+        printf '    "%s": {"human_hours": %s, "agent_hours": %s}' "$c" "$ch" "$ca"
+      done
+    fi
     printf '\n  },\n'
     printf '  "by_day": {\n'
     first=1
@@ -871,10 +969,10 @@ agent_auto() {
   # Normalise BOTH sides before comparing. ROOT comes from a logical `pwd` while
   # the session's directory may be physical, and on macOS /tmp and /var are
   # symlinks — so either side alone can disagree with the other.
-  local key="" k f r d here rootp
+  local key="" k c f r d here rootp
   here="$(cd "$PWD" 2>/dev/null && pwd -P)" || here="$PWD"
   rootp="$(cd "$ROOT" 2>/dev/null && pwd -P)" || rootp="$ROOT"
-  while IFS=$'\t' read -r k f r d; do
+  while IFS=$'\t' read -r k c f r d; do
     case "$here/" in "$rootp/$f/"*) key="$k"; break ;; esac
   done < <(reg_rows 2>/dev/null)
   [ -n "$key" ] || key="$(conf_get default_project)"
@@ -889,12 +987,16 @@ agent_auto() {
 # once for an hour is one hour of elapsed work, not two. Human and agent are
 # merged independently and never against each other.
 hours_net() {
-  local dir="$1" month="$2" project="$3"
+  local dir="$1" month="$2"; shift 2
+  local keys=("$@")
   [ -d "$dir" ] || return 0
-  local pattern="$dir/*/$month.jsonl"
-  [ "$project" = "-" ] || pattern="$dir/$project/$month.jsonl"
-  # shellcheck disable=SC2086
-  cat $pattern 2>/dev/null | awk '
+  local patterns=()
+  if [ "${#keys[@]}" -eq 0 ] || { [ "${#keys[@]}" -eq 1 ] && [ "${keys[0]}" = "-" ]; }; then
+    patterns=("$dir"/*/"$month.jsonl")
+  else
+    local k; for k in "${keys[@]}"; do patterns+=("$dir/$k/$month.jsonl"); done
+  fi
+  cat "${patterns[@]}" 2>/dev/null | awk '
     match($0, /"start_ts":[0-9]+/) { st = substr($0, RSTART+12, RLENGTH-12) }
     match($0, /"end_ts":[0-9]+/)   { en = substr($0, RSTART+10, RLENGTH-10) }
     match($0, /"start":"[^"]+/)    { d  = substr($0, RSTART+9, 10) }
@@ -921,17 +1023,24 @@ hours_net() {
     }' | sort
 }
 
+# Newline-separated project keys billed to one client. Empty if the client is
+# unknown or has no projects yet - callers then report nothing rather than
+# silently falling back to "all projects", which would over-report.
+client_project_keys() { reg_rows | awk -F'\t' -v c="$1" '$2==c {print $1}'; }
+
 cmd_hours() {
   local month; month="$(date +%Y-%m)"
-  local project="-" rollup=0
+  local project="-" client="" rollup=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --month) month="${2:?}"; shift 2 ;;
       --project) project="${2:?}"; shift 2 ;;
+      --client) client="${2:?}"; shift 2 ;;
       --rollup) rollup=1; shift ;;
-      *) die "usage: ws hours [--month YYYY-MM] [--project <key>] [--rollup]" ;;
+      *) die "usage: ws hours [--month YYYY-MM] [--project <key> | --client <key>] [--rollup]" ;;
     esac
   done
+  [ -n "$client" ] && [ "$project" != "-" ] && die "pass --project or --client, not both"
   if [ "$rollup" = 1 ]; then
     works_rollup "$month"
     c_grn "-> ${WORKS#$ROOT/}/rollup/$month.json"
@@ -939,13 +1048,22 @@ cmd_hours() {
   fi
   [ -d "$WORKS" ] || die "no hours recorded yet (context/works/)"
 
-  local scope="all projects"; [ "$project" = "-" ] || scope="$project"
+  local keys=() scope="all projects"
+  if [ -n "$client" ]; then
+    while IFS= read -r k; do [ -n "$k" ] && keys+=("$k"); done < <(client_project_keys "$client")
+    [ "${#keys[@]}" -gt 0 ] || die "no project in registry.tsv has client '$client'"
+    scope="client $client (${keys[*]})"
+  elif [ "$project" != "-" ]; then
+    keys=("$project"); scope="$project"
+  else
+    keys=("-")
+  fi
   echo "Hours for $month - $scope"
   echo
 
   local h a
-  h="$(hours_net "$WORKS/human" "$month" "$project")"
-  a="$(hours_net "$WORKS/agent" "$month" "$project")"
+  h="$(hours_net "$WORKS/human" "$month" "${keys[@]}")"
+  a="$(hours_net "$WORKS/agent" "$month" "${keys[@]}")"
 
   printf '%-12s %10s %10s\n' DAY HUMAN AGENT
   local d
@@ -1077,16 +1195,21 @@ cmd_doctor() {
   if [ -n "$dup" ]; then
     c_red "x duplicate keys in registry.tsv: $(printf '%s' "$dup" | tr '\n' ' ')"; fail=1
   fi
-  dup="$(reg_rows | cut -f2 | sort | uniq -d)"
+  dup="$(reg_rows | cut -f3 | sort | uniq -d)"
   if [ -n "$dup" ]; then
     c_red "x duplicate folders in registry.tsv: $(printf '%s' "$dup" | tr '\n' ' ')"; fail=1
   fi
-  local key folder remote desc
-  while IFS=$'\t' read -r key folder remote desc; do
+  local key client folder remote desc
+  while IFS=$'\t' read -r key client folder remote desc; do
     local dst="$ROOT/$folder"
     if is_empty "$remote"; then
       c_ylw "! $key has no remote in registry.tsv - teammates cannot clone it"
-      c_dim "    add it as column 3 of projects/registry.tsv"
+      c_dim "    add it as the remote column of context/registry.tsv"
+    fi
+    if is_empty "$client"; then
+      c_ylw "! $key has no client in registry.tsv - ws hours --client and domain-skill lookup won't find it"
+    elif [ ! -d "$CLIENTS_DIR/$client" ]; then
+      c_red "x $key declares client '$client', but context/clients/$client/ does not exist"; fail=1
     fi
     if [ ! -d "$dst" ]; then c_ylw "! $key not cloned yet (ws bootstrap)"; continue; fi
     if [ ! -d "$dst/.git" ]; then c_red "x $key exists but is not a git repo"; fail=1; continue; fi
@@ -1247,9 +1370,10 @@ ws — engineering workspace CLI
 
   ws init [--org N --key k --group g]   re-brand a fresh clone for an organisation
   ws context [status|init|clone <r>]    the organisation's private memory repo
+  ws client [new <key>|list]        a client that may span several projects
   ws list                          list projects and clone status
   ws bootstrap                     clone every product repo from registry.tsv
-  ws new <key> <folder> [remote]   register a new project + memory + pointer
+  ws new <key> <folder> [remote] [--client c]   register a new project + memory
   ws link <key>                    write the untracked AGENTS.md pointer in a product repo
   ws unlink <key>                  remove the pointer
   ws run <key> "title"             create a new run under .agents/runs/<key>/
@@ -1260,7 +1384,7 @@ ws — engineering workspace CLI
                                     skills pulled from the skills repository
   ws clock in|out|status            HUMAN working hours
   ws agent in|out|status            AGENT working hours - never summed with human
-  ws hours [--month M] [--project k]     report both, side by side
+  ws hours [--month M] [--project k|--client c] [--rollup]   report both, side by side
   ws ide                           copy the shared VS Code defaults into this clone
   ws hooks [status|install|remove]  clock agent time automatically in Claude Code
   ws where                         print the workspace root from anywhere
@@ -1275,6 +1399,7 @@ H
 case "${1:-help}" in
   init) shift; cmd_init "$@" ;;
   context) shift; cmd_context "$@" ;;
+  client) shift; cmd_client "$@" ;;
   list) shift; cmd_list "$@" ;;
   bootstrap) shift; cmd_bootstrap "$@" ;;
   new) shift; cmd_new "$@" ;;

@@ -10,13 +10,42 @@ hold the code, and belong to the client.
 
 ```
 context/
-├── registry.tsv              which product repos this organisation has
-├── memory/projects/<key>/    project.md · active.md · decisions.md · log.md
+├── registry.tsv              projects: key, CLIENT, folder, remote, description
+├── clients/<client>/         what holds across every one of one client's projects
+│   ├── client.md               who they are, contract, stakeholders
+│   ├── decisions.md            decisions that apply to all their projects
+│   ├── skills/<domain>/        their domain glossary and business rules
+│   └── docs/                   their proposals, kick-off notes, client-specific ADRs
+├── memory/projects/<key>/    project.md · active.md · decisions.md · log.md (flat)
 ├── runs/<key>/<run>/         brief · plan · progress · decisions · evidence · handoff
-├── skills/<name>/            this organisation's domain skills
-├── works/                    human and agent hours, and the monthly rollup
-└── docs/                     client ADRs, proposals, kick-off notes
+├── skills/<name>/            domain skills shared across every client
+├── works/{human,agent}/<key>/  hours; reports can group `--client`
+└── docs/adr/                 decisions about this workspace itself
 ```
+
+## Client vs. project
+
+A **client** may have several **projects** — a REST API and its later mobile companion,
+say. `clients/<client-key>/` holds what is true regardless of which project it is: the
+namespace, the domain glossary, the stakeholder list. `memory/projects/<key>/` holds what
+is true of one project only.
+
+Project keys stay **flat**, never nested under their client
+(`memory/clients/<c>/projects/<key>/`) — a key is unique workspace-wide, a project can
+change client without moving four directory trees, and `runs/` and `works/` already assume
+a flat key.
+
+```bash
+ws client new <key>                            # scaffold clients/<key>/
+ws new <project-key> <folder> --client <key>    # register a project against it
+ws client list                                  # every client and its project keys
+ws hours --client <key>                         # billable hours across all their projects
+```
+
+A decision belongs in `clients/<key>/decisions.md` only once a **second** project confirms
+it is genuinely client-wide — one project cannot tell a client-wide fact from a
+project-specific one wearing a client's name. Full reasoning:
+[ADR-0009](adr/0009-client-grouping-in-context.md).
 
 ## Why it is a separate repository
 
@@ -85,7 +114,7 @@ clones the product repos.
 | Goes in | Never |
 |---|---|
 | Project memory, runs, handoffs | Credentials, tokens, private keys |
-| The product registry | Client documents and data dumps — those go in `.local/`, git-ignored |
+| The product registry, and each client's own folder | Client documents and data dumps — those go in `.local/`, git-ignored |
 | Domain skills and glossaries | Anything a client has not agreed you may keep |
 | Client ADRs, proposals, kick-off notes | Personal data beyond what delivery needs |
 | Human and agent hours | Large logs or generated output |
@@ -96,13 +125,21 @@ git-ignored and never pushed anywhere.
 
 ## Concurrency
 
-Several people and agents write here at once. `.gitattributes` gives the append-only files
-the union merge driver, so concurrent entries both survive:
+Several people and agents write here at once. `context/.gitattributes` — tracked **inside
+this repository**, not the framework's, because a merge attribute only ever governs merges
+run in the repository that carries it — gives the append-only files the union merge driver,
+so concurrent entries both survive:
 
 - `memory/projects/*/log.md` and `registry.tsv` — merge by union
 - `works/**/*.jsonl` — merge by union
-- `memory/projects/index.md` and `decisions.md` — **conflict on purpose**; a clash there
-  means two people changed the same fact and someone should read both sides
+- `memory/projects/index.md`, each project's `decisions.md`, and each
+  `clients/<c>/decisions.md` — **conflict on purpose**; a clash there means two people
+  changed the same fact and someone should read both sides
+
+`ws context init` writes this file for you. If your context repository predates that (any
+context repository created before this note was added never had working union merge at
+all, however long ago its `AGENTS.md` claimed otherwise), copy it from
+`.agents/templates/context-gitattributes` in the workspace and commit it once.
 
 The per-file rules are tabulated in [`AGENTS.md`](../AGENTS.md) under *Working in
 parallel*.

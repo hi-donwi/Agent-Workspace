@@ -29,11 +29,11 @@ workspace/                      ← 1. FRAMEWORK  (this repo, shared across orga
 ├── docs/adr/                   ←    decisions about the workspace mechanism itself
 │
 ├── context/                    ← 2. CONTEXT  (separate repo, IGNORED here)
-│   ├── registry.tsv            ←    which product repos this organisation has
-│   ├── memory/projects/<key>/  ←    durable per-project memory
-│   ├── runs/<key>/<run>/       ←    per-task working memory
-│   ├── skills/<name>/          ←    this organisation's domain skills
-│   └── docs/                   ←    client ADRs, proposals, kick-off notes
+│   ├── registry.tsv            ←    projects: key, CLIENT, folder, remote, description
+│   ├── clients/<client>/       ←    what holds across all of one client's projects
+│   ├── memory/projects/<key>/  ←    durable per-project memory (flat, not nested)
+│   ├── runs/<key>/<run>/       ←    per-task working memory (flat)
+│   └── skills/<name>/          ←    domain skills shared across every client
 │
 └── projects/<group>/<repo>/    ← 3. PRODUCT  (separate repos, IGNORED here)
 ```
@@ -169,6 +169,33 @@ ws context status
 
 Record the remote as `context_remote` in `workspace.conf` and `ws bootstrap` will clone it
 on every other machine, before it clones the product repos.
+
+### One client, several projects: `clients/<client>/`
+
+`registry.tsv` links every project to a client (`key<TAB>client<TAB>folder<TAB>remote<TAB>
+description`). A client may have several projects — a REST API and its later mobile
+companion, say — and `clients/<client-key>/` is where what is true for **all** of them
+lives: `client.md`, cross-project `decisions.md`, their domain skills, their proposals and
+client-specific ADRs.
+
+```bash
+ws client new <key>                       # scaffold clients/<key>/
+ws new <project-key> <folder> --client <key>   # register a project against it
+ws client list                            # every client and its project keys
+ws route "..."                            # also searches clients/*/skills/
+ws hours --client <key>                   # billable hours across all their projects
+```
+
+Project keys stay **flat** — `memory/projects/<key>/`, `runs/<key>/`, `works/*/<key>/` —
+never nested under a client. A key is unique workspace-wide; a project changing client is
+then one row in a registry rather than a move across four directory trees. `ws doctor`
+fails if a project names a client with no `clients/<key>/` directory.
+
+A decision belongs in `clients/<key>/decisions.md` only once a **second** project confirms
+it is genuinely client-wide — one project alone cannot distinguish a client-wide decision
+from a project-specific one wearing a client's name.
+
+Full treatment: [`docs/context-repository.md`](docs/context-repository.md).
 
 ### It must be private
 
@@ -344,6 +371,7 @@ that is free or expensive.
 | `context/registry.tsv` | Append-only | One row per project. Merges by union; `ws doctor` catches duplicate keys |
 | `memory/projects/index.md` | Shared, rare | Re-read, then add your row. Never rewrite rows you did not create |
 | `memory/projects/<key>/decisions.md` | Shared, rare | Same. A conflict here means two people changed the same fact — resolve it by reading both sides |
+| `clients/<c>/decisions.md` | Shared, rare | Same again, at client scope. Add a row only once a second project confirms it is client-wide |
 | `memory/projects/<key>/active.md` | Shared, frequent | Keep it short. It is a routing hint; the run is the authority |
 | `skills/index.json` | Generated | Never merge by hand. Run `ws skills` and commit the regenerated file |
 
