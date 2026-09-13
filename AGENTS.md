@@ -35,7 +35,8 @@ workspace/                      ← 1. FRAMEWORK  (this repo, shared across orga
 │   ├── runs/<key>/<run>/       ←    per-task working memory (flat)
 │   └── skills/<name>/          ←    domain skills shared across every client
 │
-└── projects/<group>/<repo>/    ← 3. PRODUCT  (separate repos, IGNORED here)
+└── projects/<group>/<...>/<repo>/  ← 3. PRODUCT (separate repos, IGNORED here — as many
+                                       segments deep as the remote's own path)
 ```
 
 | # | Repo | Owner | Contains | Who may read it |
@@ -64,9 +65,17 @@ else's attached.
 
 Yes, this is valid and deliberate. Every repository under `projects/` is an **independent
 git repository** with its own remote (usually the client's GitLab). The parent ignores them
-via `/projects/*` in `.gitignore`, so the parent's git never sees their contents. A client
-group may nest — `projects/<group>/<repo>` mirrors the client's subgroup — and
-the same ignore rule covers the whole group.
+via `/projects/*` in `.gitignore`, so the parent's git never sees their contents.
+
+**The local folder mirrors the remote's full path, not just the immediate parent.** A
+remote at `gitlab.com/mktech-dev/eproc-pln/eproc-pln-rest-api.git` becomes
+`projects/mktech/eproc-pln/eproc-pln-rest-api/` — the top-level group included, not
+silently dropped in favour of only its subgroup. The segment name does not have to be a
+byte-for-byte copy of the host's group name (`mktech` for `mktech-dev` is fine, matching
+the organisation's own short name), but the *number of levels* must match: dropping the
+top level works only until a second top-level group enters the registry and one of its
+subgroups collides with a name already in use. `/projects/*` ignores the whole tree
+regardless of depth, so nesting further costs nothing.
 
 **This is not a submodule, and must not become one.** A submodule would force the
 workspace repo to hold a commit pointer into a client-owned repo — extra friction on every
