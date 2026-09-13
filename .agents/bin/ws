@@ -846,8 +846,43 @@ cmd_agent() {
     in)  shift; clock_in agent "$@" ;;
     out) shift; clock_out agent "$@" ;;
     status) clock_status ;;
-    *) die "usage: ws agent [in <project-key> [note] | out [note] | status]" ;;
+    auto) shift; agent_auto "${1:-}" ;;
+    *) die "usage: ws agent [in <key> [note] | out [note] | status | auto in|out]" ;;
   esac
+}
+
+# Called from an editor hook, where three things are true that are not on a
+# command line: nobody reads the output, nobody chose a project, and a non-zero
+# exit interrupts someone's session. So this never fails, and when it cannot work
+# out which project the work belongs to it records nothing — an hour on the wrong
+# project is worse than an hour on none.
+agent_auto() {
+  local action="${1:-}"
+  case "$action" in in|out) ;; *) return 0 ;; esac
+
+  if [ "$action" = out ]; then
+    [ -f "$(open_file agent)" ] && clock_out agent "auto" >/dev/null 2>&1
+    return 0
+  fi
+
+  [ -f "$(open_file agent)" ] && return 0
+  mkdir -p "$WORKS" 2>/dev/null || return 0
+
+  # Normalise BOTH sides before comparing. ROOT comes from a logical `pwd` while
+  # the session's directory may be physical, and on macOS /tmp and /var are
+  # symlinks — so either side alone can disagree with the other.
+  local key="" k f r d here rootp
+  here="$(cd "$PWD" 2>/dev/null && pwd -P)" || here="$PWD"
+  rootp="$(cd "$ROOT" 2>/dev/null && pwd -P)" || rootp="$ROOT"
+  while IFS=$'\t' read -r k f r d; do
+    case "$here/" in "$rootp/$f/"*) key="$k"; break ;; esac
+  done < <(reg_rows 2>/dev/null)
+  [ -n "$key" ] || key="$(conf_get default_project)"
+  [ -n "$key" ] || return 0
+  [ -d "$MEM/$key" ] || return 0
+
+  clock_in agent "$key" "auto" >/dev/null 2>&1 || true
+  return 0
 }
 
 # Net hours per day: overlapping sessions are merged, so two agents running at
@@ -926,24 +961,6 @@ cmd_hours() {
   echo
   c_dim "Net hours: overlapping sessions merged within each column."
   c_dim "The two columns are deliberately not summed - see 'Two clocks' in AGENTS.md."
-}
-
-# ─────────────────────────────────────────────────────────────── ide
-# .vscode/settings.json is git-ignored so nobody's local tweaks are shared. The
-# team defaults therefore have to be copied in once per clone.
-cmd_ide() {
-  local src="$ROOT/.vscode/settings.shared.json" dst="$ROOT/.vscode/settings.json"
-  [ -f "$src" ] || die "no .vscode/settings.shared.json in this workspace"
-  if [ -f "$dst" ]; then
-    if diff -q "$src" "$dst" >/dev/null; then c_dim "- settings.json already matches the shared defaults"
-    else
-      c_ylw "! .vscode/settings.json exists and differs - left untouched"
-      c_dim "  compare with: diff .vscode/settings.shared.json .vscode/settings.json"
-    fi
-    return 0
-  fi
-  cp "$src" "$dst"
-  c_grn "-> .vscode/settings.json written from the shared defaults"
 }
 
 # ─────────────────────────────────────────────────────────────── doctor
@@ -1175,6 +1192,37 @@ cmd_doctor() {
   [ "$fail" = 0 ] && c_grn "doctor: healthy" || { c_red "doctor: problems reported above"; exit 1; }
 }
 
+# ─────────────────────────────────────────────────────────────── hooks
+# Editor hooks run commands by themselves, so they are opt-in: the repository
+# ships an example and this installs it, rather than every clone silently gaining
+# a command that fires on every session.
+cmd_hooks() {
+  local src="$ROOT/.claude/settings.json.example" dst="$ROOT/.claude/settings.json"
+  case "${1:-status}" in
+    status)
+      if [ -f "$dst" ] && grep -q 'ws agent auto' "$dst" 2>/dev/null; then
+        c_grn "agent clock hooks: installed"
+      else
+        c_dim "agent clock hooks: not installed - run: ws hooks install"
+      fi ;;
+    install)
+      [ -f "$src" ] || die "no .claude/settings.json.example in this workspace"
+      if [ -f "$dst" ] && ! grep -q 'ws agent auto' "$dst" 2>/dev/null; then
+        c_ylw "! .claude/settings.json exists and is not ours - left untouched"
+        c_dim "  merge the hooks by hand from: ${src#$ROOT/}"
+        return 0
+      fi
+      mkdir -p "$(dirname "$dst")"; cp "$src" "$dst"
+      c_grn "-> agent clock hooks installed"
+      c_dim "   Claude Code now clocks agent time in and out by itself" ;;
+    remove)
+      if [ -f "$dst" ] && grep -q 'ws agent auto' "$dst" 2>/dev/null; then
+        rm -f "$dst"; c_grn "-> agent clock hooks removed"
+      else c_dim "- nothing of ours to remove"; fi ;;
+    *) die "usage: ws hooks [status|install|remove]" ;;
+  esac
+}
+
 # ─────────────────────────────────────────────────────────────── ide
 # .vscode/settings.json is git-ignored so nobody's local tweaks are shared. The
 # team defaults therefore have to be copied in once per clone.
@@ -1214,6 +1262,7 @@ ws — engineering workspace CLI
   ws agent in|out|status            AGENT working hours - never summed with human
   ws hours [--month M] [--project k]     report both, side by side
   ws ide                           copy the shared VS Code defaults into this clone
+  ws hooks [status|install|remove]  clock agent time automatically in Claude Code
   ws where                         print the workspace root from anywhere
   ws doctor [--ci]                 check repo isolation, ignores, toolchain
   ws help                          this help
@@ -1241,6 +1290,7 @@ case "${1:-help}" in
   route) shift; cmd_route "$@" ;;
   skills) shift; cmd_skills "$@" ;;
   ide) shift; cmd_ide "$@" ;;
+  hooks) shift; cmd_hooks "$@" ;;
   doctor) shift; cmd_doctor "$@" ;;
   help|-h|--help) cmd_help ;;
   *) die "unknown command: $1 (try: ws help)" ;;

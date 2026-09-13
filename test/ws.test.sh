@@ -60,6 +60,7 @@ for f in .gitignore .ignore .gitattributes AGENTS.md workspace.conf.example; do
   cp "$SRC/$f" "$WS/$f"
 done
 mkdir -p "$WS/projects"; cp "$SRC/projects/README.md" "$WS/projects/README.md"
+mkdir -p "$WS/.claude"; cp "$SRC/.claude/settings.json.example" "$WS/.claude/"
 ws() { (cd "${RUNDIR:-$WS}" && "$WS/.agents/bin/ws" "$@"); }
 
 git -C "$WS" init -q
@@ -221,6 +222,30 @@ printf '%s' "$OUT" | grep -q "$DAY" && \
       || bad "two overlapping 1h sessions count as 1.5h, not 2h" "$(printf '%s' "$OUT" | grep "$DAY")"; } \
   || bad "the overlapping day appears in the report"
 
+section "hooks and automatic agent clocking"
+# A hook runs unattended inside someone's editor session: it must never fail, and
+# it must never guess which project an hour belongs to.
+check "ws hooks status works before installing" ws hooks status
+check "ws hooks install"                        ws hooks install
+exists "$WS/.claude/settings.json" "settings.json is written"
+contains "$WS/.claude/settings.json" "ws agent auto" "it wires the auto clock"
+
+check "auto out is a no-op when nothing is running" ws agent auto out
+check "auto in from the root records nothing without a default" ws agent auto in
+STATUS="$(ws agent status 2>&1)"
+printf '%s' "$STATUS" | grep -q 'no open session' \
+  && ok "no session was invented for an unknown project" \
+  || bad "no session was invented for an unknown project" "$STATUS"
+
+check "auto in from inside a product repo" env -u RUNDIR sh -c 'cd "$1" && "$2" agent auto in' _ "$PROD" "$WS/.agents/bin/ws"
+STATUS="$(ws agent status 2>&1)"
+printf '%s' "$STATUS" | grep -q 'api' \
+  && ok "the project is resolved from the working directory" \
+  || bad "the project is resolved from the working directory" "$STATUS"
+check "auto out closes it" ws agent auto out
+check "ws hooks remove" ws hooks remove
+not_exists "$WS/.claude/settings.json" "the hooks are removed again"
+
 section "log and route"
 check "ws log appends a milestone" ws log api "did a thing"
 contains "$WS/context/memory/projects/api/log.md" "did a thing" "the milestone is in the log"
@@ -251,7 +276,7 @@ git -C "$BARE" add -A >/dev/null 2>&1
 git -C "$BARE" commit -qm bare >/dev/null 2>&1
 not_exists "$BARE/.agents/skills" "no skills are materialised yet"
 not_exists "$BARE/context" "no context repo yet"
-check "doctor survives a bare clone" env RUNDIR="$BARE" "$BARE/.agents/bin/ws" doctor --ci
+check "doctor survives a bare clone" sh -c 'cd "$1" && "$1/.agents/bin/ws" doctor --ci' _ "$BARE"
 
 section "doctor: healthy, then each failure it must catch"
 git -C "$WS" add -A >/dev/null 2>&1

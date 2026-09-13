@@ -14,6 +14,11 @@ git_group = git@gitlab.com:example
 context_dir    = context
 context_remote =
 
+# Which project the editor hooks attribute a session to when the working directory
+# is not inside a product repo. Leave it empty and such sessions are not recorded
+# at all — an hour on the wrong project is worse than an hour on none.
+default_project =
+
 # Standards packs this organisation applies. Each name must match a directory under
 # .agents/standards/ — `ws doctor` fails if one does not exist.
 #

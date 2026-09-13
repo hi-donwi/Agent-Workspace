@@ -5,6 +5,12 @@
 /.agents/skills/
 /.agents/.cache/
 
+# --- Editor hooks: opt-in, per clone -------------------------------------------
+# .claude/settings.json runs commands automatically. The repository ships only the
+# example; `ws hooks install` writes the real file, so nobody gains a command that
+# fires on every session just by cloning.
+/.claude/settings.json
+
 # --- Organisation identity -----------------------------------------------------
 # workspace.conf names the organisation that owns this clone. It is machine- and
 # org-local; workspace.conf.example is what the repository ships.

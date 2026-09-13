@@ -406,6 +406,24 @@ Agents: clock in when you start substantial work on a project and out before you
 the same breath as updating the run's `handoff.md`. A session nobody recorded is a session
 that did not happen, as far as next month's invoice is concerned.
 
+### Let the editor do the agent half
+
+Agent hours that depend on an agent remembering are agent hours that go missing. Claude
+Code can keep them itself:
+
+```bash
+ws hooks install     # writes .claude/settings.json; ws hooks remove undoes it
+```
+
+It clocks in on session start and out on stop. The hook never fails and never blocks a
+session, and when it cannot tell which project the work belongs to — the working directory
+is not inside a product repo and `workspace.conf` declares no `default_project` — it
+records **nothing**. An hour on the wrong project is worse than an hour on none.
+
+Hooks run commands by themselves, so they are opt-in: the repository ships
+`.claude/settings.json.example` and installing is a deliberate act. Human hours stay
+manual on purpose — only the person at the keyboard knows when they actually started.
+
 ---
 
 ## 9. Security — non-negotiable
