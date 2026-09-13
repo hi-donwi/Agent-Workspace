@@ -7,12 +7,31 @@
 # .ignore present, index.json current.
 stages: [verify]
 
+# Same promise as the GitHub workflow: a regression in the ws CLI damages real
+# repositories (it writes hooks into client repos and runs rm -rf over skill
+# directories), so the suite runs on every merge request, not just main.
+# The suite skips its search check when ripgrep is absent, and that check
+# guards the .ignore rule that keeps product code visible to agents.
+workspace:test:
+  stage: verify
+  image: alpine:3.20
+  before_script:
+    - apk add --no-cache bash git findutils diffutils ripgrep
+  script:
+    - ./test/ws.test.sh
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
 workspace:doctor:
   stage: verify
   image: alpine:3.20
   before_script:
     - apk add --no-cache bash git findutils diffutils
   script:
+    # workspace.conf is untracked by design: it is the only file that names an
+    # organisation. CI uses the shipped example so `ws doctor` has an identity.
+    - cp workspace.conf.example workspace.conf
     - bash .agents/bin/ws doctor --ci
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"

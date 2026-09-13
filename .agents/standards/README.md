@@ -30,7 +30,7 @@ observability, and should say so explicitly rather than assume the Java ones tra
 |---|---|---|
 | [`core/git-workflow.md`](core/git-workflow.md) | Branching, commits, review | Committing |
 | [`core/api-contract.md`](core/api-contract.md) | REST shape, errors, paging, OpenAPI | Adding endpoints |
-| [`core/definition-of-done.md`](core/definition-of-done.md) | Completion checklist | Closing a task |
+| [`core/definition-of-done.md`](core/definition-of-done.md) | Universal completion checklist (stack-neutral) | Closing a task |
 
 ## Java pack
 
@@ -44,6 +44,7 @@ observability, and should say so explicitly rather than assume the Java ones tra
 | [`java/testing.md`](java/testing.md) | Test pyramid, Testcontainers, gates | Writing tests |
 | [`java/observability.md`](java/observability.md) | Logs, metrics, traces, health | Preparing a service |
 | [`java/build-ci.md`](java/build-ci.md) | Maven, pipeline, quality gates | Changing the build |
+| [`java/definition-of-done.md`](java/definition-of-done.md) | Java additions to the DoD: endpoint, DB, delivery-stage gates | Closing a task (with core) |
 
 ## Status
 

@@ -181,7 +181,7 @@ description: Handles widget things. Use when testing widgets.
 ---
 # widgets
 SKILLEOF
-ROUTE="$(ws route "widget gizmo work" 2>&1)"
+ROUTE="$(ws route --project api "widget gizmo work" 2>&1)"
 printf '%s' "$ROUTE" | grep -q widgets \
   && ok "ws route finds a client's own domain skill" \
   || bad "ws route finds a client's own domain skill" "$ROUTE"
