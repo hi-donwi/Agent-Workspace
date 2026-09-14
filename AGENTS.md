@@ -165,6 +165,13 @@ memory, runs and handoffs, the product registry, domain skills, client ADRs, and
 hours behind invoices. It is a separate git repository, mounted here and ignored via
 `/context/` in `.gitignore`, exactly like `projects/`.
 
+**A context repository is an access boundary.** Everyone who can clone it can read every
+file in it and its history. `clients/<client>/`, `groups.tsv`, and `context_scope` organize
+material and context packs; they do not enforce permissions. If one team may read only one
+project, that team gets a project-only context repo and usually a separate workspace clone.
+If personal/public work and client work have different readers, they belong in different
+context repos. Full reasoning: [`docs/adr/0010-context-repositories-follow-access-boundaries.md`](docs/adr/0010-context-repositories-follow-access-boundaries.md).
+
 It cannot live in this repository: the framework is shared across organisations and may be
 published, and a client's name, scope, and glossary have no business in it. It cannot live
 in a product repo either: that belongs to the client, and your delivery notes and
@@ -177,7 +184,8 @@ ws context status
 ```
 
 Record the remote as `context_remote` in `workspace.conf` and `ws bootstrap` will clone it
-on every other machine, before it clones the product repos.
+on every other machine, before it clones the product repos. Choose that remote for the
+current access boundary, not for every client you personally know about.
 
 ### One client, several projects: `clients/<client>/`
 
@@ -214,8 +222,8 @@ client-wide material.
 `org`) bounds what `ws context pack <project>` assembles: `group` packs only the group's
 material, `client` adds the client's own wide docs, `org` adds org-wide ones. It is an
 audience boundary for packs, not a permission system — real access control stays
-server-side on the context repo. `security_profile` is a free-form label (e.g. `strict`)
-that Agent-Secure policy selection keys on; the CLI does not interpret it yet.
+server-side on the context repo and remote. `security_profile` is a free-form label (e.g.
+`strict`) that Agent-Secure policy selection keys on; the CLI does not interpret it yet.
 
 **Every project belongs to a client.** `ws new` refuses to register one without
 `--client`, and `ws doctor` fails on any existing project with no client, or one naming a

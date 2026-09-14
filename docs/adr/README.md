@@ -27,3 +27,4 @@ An ADR with no rejected alternatives records a preference, not a decision.
 | [0007](0007-skills-in-their-own-repository.md) | Skills in their own repository, fetched by manifest | Accepted | 2026-09-12 |
 | [0008](0008-two-clocks-human-and-agent-hours.md) | Two clocks — human hours and agent hours are never summed | Accepted | 2026-09-12 |
 | [0009](0009-client-grouping-in-context.md) | Group projects by client inside the context repository | Accepted | 2026-09-13 |
+| [0010](0010-context-repositories-follow-access-boundaries.md) | Context repositories follow access boundaries | Accepted | 2026-09-13 |
