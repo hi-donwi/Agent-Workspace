@@ -118,6 +118,7 @@ contains "$WS/context/.gitattributes" "merge=union" "the merge strategy is actua
 check_fails "a second context init refuses" ws context init
 git -C "$WS" add -A >/dev/null 2>&1
 equals "$(git -C "$WS" ls-files context | wc -l | tr -d ' ')" "0" "context is never tracked by the framework"
+check "ws web help is available" ws web --help
 
 section "clients: a client may span several projects"
 contains "$WS/context/registry.tsv" "client" "the registry header has a client column"
