@@ -221,6 +221,10 @@ cmd_context() {
   esac
 }
 
+cmd_web() {
+  python3 "$ROOT/.agents/bin/ws_web.py" --root "$ROOT" "$@"
+}
+
 # A repository is public if it can be read without credentials. That is testable
 # without any host's API: strip the credential helpers and try. A network failure
 # looks the same as "private", so this can miss a problem but never invents one.
@@ -1734,6 +1738,7 @@ ws — engineering workspace CLI
   ws agent in|out|status            AGENT working hours - never summed with human
   ws hours [--month M] [--project k|--client c] [--rollup]   report both, side by side
   ws usage [--month M] [--project k|--client c]  token usage, from a separate optional tool
+  ws web [--host 127.0.0.1] [--port 0]  local read-only web-control shell
   ws ide                           copy the shared VS Code defaults into this clone
   ws hooks [status|install|remove]  clock agent time automatically in Claude Code
   ws where                         print the workspace root from anywhere
@@ -1765,6 +1770,7 @@ case "${1:-help}" in
   agent) shift; cmd_agent "$@" ;;
   hours) shift; cmd_hours "$@" ;;
   usage) shift; cmd_usage "$@" ;;
+  web) shift; cmd_web "$@" ;;
   log) shift; cmd_log "$@" ;;
   sync) shift; cmd_sync "$@" ;;
   route) shift; cmd_route "$@" ;;
