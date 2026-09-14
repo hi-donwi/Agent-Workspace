@@ -4,7 +4,7 @@
 **not** in this repository — it cannot be, which is why this page exists instead of a
 `context/README.md` next to [`projects/README.md`](../projects/README.md).
 
-It holds one organisation's answer to: *what are we building, for whom, and where does it
+It holds one access boundary's answer to: *what are we building, for whom, and where does it
 stand?* The framework holds the *how*, and stays the same for everyone. The product repos
 hold the code, and belong to the client.
 
@@ -52,6 +52,41 @@ it is genuinely client-wide — one project cannot tell a client-wide fact from 
 project-specific one wearing a client's name. Full reasoning:
 [ADR-0009](adr/0009-client-grouping-in-context.md).
 
+## Access boundaries
+
+A context repository is an **access boundary**. Everyone who can clone it can read every
+file in it and, unless history is rewritten, every file that was ever committed to it.
+`clients/<client>/`, `groups.tsv`, and `context_scope` organize context and pack assembly;
+they do not create access control.
+
+Use this rule before adding a project, client, group, run, or memory file:
+
+```text
+Can every reader of this context repo read this artifact and its history?
+```
+
+If the answer is no, use another context repository and usually another workspace clone.
+Common layouts are:
+
+```text
+# One owner or team can read all material in this clone.
+workspaces/donwi/
+├── context/   # donwi-owned public/personal work
+└── projects/donwi/public/...
+
+# Only the project team can read this context.
+workspaces/eproc-pln-rest-api/
+├── context/   # eproc-pln-rest-api project-only context
+└── projects/mktech/eproc-pln/eproc-pln-rest-api/
+```
+
+Create broader context repositories only when their audience is genuinely broader. For
+example, `context-client-eproc-pln` is appropriate only if every reader may see every
+project and group fact for that client. A project-only contributor should get a
+project-only context repo, not a folder inside a broader client repo.
+
+Full reasoning: [ADR-0010](adr/0010-context-repositories-follow-access-boundaries.md).
+
 ## Why it is a separate repository
 
 Three kinds of material, three owners, three audiences:
@@ -68,6 +103,10 @@ either: that repository belongs to the client, and your own delivery notes, esti
 cross-project memory are not theirs to read. There is no third place, so it gets its own
 repository — mounted at `context/` and ignored by the framework, exactly as product repos
 already were.
+
+The word "organisation" here means "the audience allowed to read this context repo". It
+may be a whole company, one client team, one project team, or one person's own public work.
+When those audiences differ, create separate context repositories.
 
 The full reasoning, and the five alternatives rejected, is in
 [ADR-0006](adr/0006-framework-context-product-split.md).

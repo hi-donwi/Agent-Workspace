@@ -8,9 +8,11 @@ org_name  = Example Organisation
 org_key   = example
 git_group = git@gitlab.com:example
 
-# This organisation's private context: memory, runs, the product registry, client
-# ADRs, and domain skills. A SEPARATE git repository cloned into context/, ignored
-# here exactly like projects/ is.
+# This access boundary's private context: memory, runs, the product registry,
+# client ADRs, and domain skills. A SEPARATE git repository cloned into context/,
+# ignored here exactly like projects/ is. Everyone with access to this remote can
+# read every file in it; use another workspace clone/context remote when a team
+# may only read one client, group, or project.
 context_dir    = context
 context_remote =
 
