@@ -19,6 +19,8 @@ import secrets
 import sys
 from urllib.parse import unquote, urlparse
 
+from ws_tasks import TaskError, TaskRecord, load_source, load_tasks
+
 
 PROJECT_RE = re.compile(r"[a-z0-9][a-z0-9_-]*")
 MAX_CONTEXT_BYTES = 32768
@@ -77,6 +79,10 @@ def route(state: WorkspaceWebState, method: str, raw_path: str, headers: dict[st
     if path.startswith(prefix) and path.endswith(suffix):
         key = unquote(path[len(prefix) : -len(suffix)])
         return _json(project_context(state, key))
+    board_suffix = "/board"
+    if path.startswith(prefix) and path.endswith(board_suffix):
+        key = unquote(path[len(prefix) : -len(board_suffix)])
+        return _json(project_board(state, key))
     raise NotFound("route not found")
 
 
@@ -118,6 +124,30 @@ def project_context(state: WorkspaceWebState, project: str) -> dict[str, object]
     return {"project": _project_to_dict(summary), "files": files}
 
 
+def project_board(state: WorkspaceWebState, project: str) -> dict[str, object]:
+    summary = _project_summary(state, project)
+    tasks_root = _contained(state.context, "tasks")
+    if not tasks_root.exists():
+        tasks: list[TaskRecord] = []
+        legacy = []
+    else:
+        try:
+            tasks, legacy = load_tasks(load_source("context", state.context))
+        except TaskError as error:
+            raise WebError(str(error)) from error
+    project_tasks = [task for task in tasks if task.project == project]
+    columns = {status: [] for status in ["backlog", "ready", "in_progress", "review", "done"]}
+    for task in sorted(project_tasks, key=lambda item: (item.status, item.updated_at, item.id)):
+        columns[task.status].append(_task_card(task))
+    project_legacy = [candidate.__dict__ for candidate in legacy if candidate.project == project]
+    return {
+        "project": _project_to_dict(summary),
+        "source": {"id": "context", "root": state.context.relative_to(state.root).as_posix(), "writable": True},
+        "columns": columns,
+        "legacy_candidates": project_legacy,
+    }
+
+
 def index_html() -> str:
     return """<!doctype html>
 <html lang="en">
@@ -126,6 +156,7 @@ def index_html() -> str:
   <main>
     <h1>Agent Workspace Control</h1>
     <p>Local read-only shell. API access requires the startup bearer token.</p>
+    <p>Available read APIs: projects, project context, and project board.</p>
   </main>
 </body>
 </html>
@@ -174,6 +205,16 @@ def _registry_rows(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(source, delimiter="\t"))
 
 
+def _project_summary(state: WorkspaceWebState, project: str) -> ProjectSummary:
+    if not PROJECT_RE.fullmatch(project):
+        raise NotFound("project not found")
+    projects = {item.key: item for item in load_projects(state)}
+    summary = projects.get(project)
+    if summary is None:
+        raise NotFound("project not found")
+    return summary
+
+
 def _require_token(state: WorkspaceWebState, headers: dict[str, str]) -> None:
     auth = headers.get("authorization", "")
     if auth != f"Bearer {state.token}":
@@ -205,6 +246,23 @@ def _file_payload(root: Path, path: Path) -> dict[str, object]:
 
 def _project_to_dict(project: ProjectSummary) -> dict[str, str]:
     return project.__dict__.copy()
+
+
+def _task_card(task: TaskRecord) -> dict[str, object]:
+    return {
+        "source": task.source,
+        "id": task.id,
+        "project": task.project,
+        "title": task.title,
+        "status": task.status,
+        "priority": task.priority,
+        "owner": task.owner,
+        "labels": list(task.labels),
+        "blocked": task.blocked,
+        "blocked_reason": task.blocked_reason,
+        "updated_at": task.updated_at,
+        "path": task.path,
+    }
 
 
 def _json(data: object) -> tuple[int, str, bytes]:

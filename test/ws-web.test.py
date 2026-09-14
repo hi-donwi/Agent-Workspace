@@ -11,6 +11,34 @@ sys.path.insert(0, str(SOURCE / ".agents/bin"))
 from ws_web import Unauthorized, WebError, build_state, load_projects, project_context, route  # noqa: E402
 
 
+TASK_READY = """---
+schema_version: 1
+id: task_board_ready
+project: workspace
+title: Render board
+status: ready
+priority: high
+owner: unassigned
+labels:
+  - web
+acceptance_criteria:
+  - Board returns ready task
+related_plans:
+related_runs:
+git_links:
+blocked: false
+blocked_reason: ""
+created_at: 2026-09-14T00:00:00Z
+updated_at: 2026-09-14T00:00:00Z
+---
+
+Board task body.
+"""
+
+
+TASK_REVIEW = TASK_READY.replace("task_board_ready", "task_board_review").replace("Render board", "Review board").replace("status: ready", "status: review")
+
+
 class WebControlReadFlow(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="ws-web-")
@@ -28,6 +56,10 @@ class WebControlReadFlow(unittest.TestCase):
         (self.context / "memory/projects/workspace/active.md").write_text("Active workspace state\n")
         (self.context / "memory/projects/workspace/decisions.md").write_text("Decisions\n")
         (self.context / "runs/workspace/demo/handoff.md").write_text("Continue here\n")
+        (self.context / "tasks/workspace").mkdir(parents=True)
+        (self.context / "tasks/workspace/ready.md").write_text(TASK_READY)
+        (self.context / "tasks/workspace/review.md").write_text(TASK_REVIEW)
+        (self.context / "tasks/workspace/legacy.md").write_text("- [ ] Adopt old checklist\n")
         self.state = build_state(self.root, token="test-token")
 
     def test_loads_project_summaries(self):
@@ -56,6 +88,23 @@ class WebControlReadFlow(unittest.TestCase):
         self.assertIn("context/memory/projects/workspace/project.md", paths)
         self.assertIn("context/memory/projects/workspace/active.md", paths)
         self.assertIn("context/runs/workspace/demo/handoff.md", paths)
+
+    def test_project_board_groups_same_task_records_by_status(self):
+        status, _content_type, body = route(
+            self.state,
+            "GET",
+            "/api/projects/workspace/board",
+            {"authorization": "Bearer test-token"},
+        )
+
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertEqual(payload["source"]["id"], "context")
+        self.assertEqual(payload["columns"]["ready"][0]["id"], "task_board_ready")
+        self.assertEqual(payload["columns"]["ready"][0]["source"], "context")
+        self.assertEqual(payload["columns"]["review"][0]["id"], "task_board_review")
+        self.assertEqual(payload["columns"]["backlog"], [])
+        self.assertEqual(payload["legacy_candidates"][0]["title"], "Adopt old checklist")
 
     def test_rejects_unknown_or_bad_project(self):
         with self.assertRaisesRegex(WebError, "project not found"):
