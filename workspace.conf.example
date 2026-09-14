@@ -10,9 +10,9 @@ git_group = git@gitlab.com:example
 
 # This access boundary's private context: memory, runs, the product registry,
 # client ADRs, and domain skills. A SEPARATE git repository cloned into context/,
-# ignored here exactly like projects/ is. Everyone with access to this remote can
-# read every file in it; use another workspace clone/context remote when a team
-# may only read one client, group, or project.
+# ignored here exactly like projects/ is. Leave context_remote empty for a
+# personal/private-local context. Set it only for a team/shared context; everyone
+# with access to that remote can read every file in it.
 context_dir    = context
 context_remote =
 
