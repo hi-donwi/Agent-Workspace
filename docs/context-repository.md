@@ -136,13 +136,18 @@ ws init                      # names the organisation, writes workspace.conf
 ws context init              # scaffolds context/ and git init
 ```
 
-Then give it a **private** remote and record it, so teammates get it automatically:
+For a team/shared context, give it a **private** remote and record it, so teammates get it
+automatically:
 
 ```bash
 git -C context remote add origin <private-remote>
 git -C context push -u origin main
 # then in workspace.conf:  context_remote = <private-remote>
 ```
+
+For a personal or private-local project, a context repository with **no remote** is allowed.
+`ws doctor` treats it as local-only rather than public or shared. Do not use a no-remote
+context for team handoffs, billable shared hours, or anything another machine must recover.
 
 ## Joining an organisation that has one
 

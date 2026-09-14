@@ -88,7 +88,9 @@ access is controlled by which context repository is cloned and which remote gran
 
 ## Implementation Notes
 
-- `workspace.conf` names one `context_dir` and `context_remote` for the current clone.
+- `workspace.conf` names one `context_dir` for the current clone. `context_remote` is
+  optional for personal/private-local contexts and required in practice for team-shared
+  contexts that other machines must clone.
 - Use separate workspace clones when switching between contexts with different audiences.
 - Keep `.local/` for machine-only or more-sensitive material that should not enter any shared
   context repo.

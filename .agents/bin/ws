@@ -197,7 +197,7 @@ cmd_context() {
       touch "$CONTEXT_DIR/runs/.gitkeep"
       git -C "$CONTEXT_DIR" init -q -b main
       c_grn "-> context repository created at ${CONTEXT_DIR#$ROOT/}"
-      c_dim "   give it a remote, then record it as context_remote in workspace.conf"
+      c_dim "   add a private remote and context_remote only when this context is shared"
       ;;
     clone)
       local remote="${1:-}"; [ -n "$remote" ] || die "usage: ws context clone <remote>"
@@ -1440,7 +1440,7 @@ cmd_doctor() {
     c_grn "ok context repo at ${CONTEXT_DIR#$ROOT/}"
     local ctxremote; ctxremote="$(git -C "$CONTEXT_DIR" remote get-url origin 2>/dev/null || true)"
     if [ -z "$ctxremote" ]; then
-      c_ylw "  ! context has no remote - this organisation's memory is on one machine"
+      c_ylw "  ! context has no remote - treating it as private-local/personal, not team-shared"
     elif [ "$ci" = 0 ] && repo_is_public "$ctxremote"; then
       # The context repo holds client names, contract scope, domain glossaries and
       # hours. Published, that is a disclosure, not an untidy repository.

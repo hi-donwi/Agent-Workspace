@@ -185,7 +185,9 @@ ws context status
 
 Record the remote as `context_remote` in `workspace.conf` and `ws bootstrap` will clone it
 on every other machine, before it clones the product repos. Choose that remote for the
-current access boundary, not for every client you personally know about.
+current access boundary, not for every client you personally know about. A context repo
+with no remote is allowed for personal/private-local work, but it is not team-shared and
+cannot be recovered by another machine.
 
 ### One client, several projects: `clients/<client>/`
 
