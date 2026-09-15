@@ -8,7 +8,15 @@ import unittest
 SOURCE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SOURCE / ".agents/bin"))
 
-from ws_tasks import TaskError, load_source, load_tasks, parse_task_document  # noqa: E402
+from ws_tasks import (  # noqa: E402
+    TaskConflict,
+    TaskError,
+    load_source,
+    load_tasks,
+    parse_task_document,
+    serialize_task_document,
+    write_task_document,
+)
 
 
 VALID_TASK = """---
@@ -131,6 +139,75 @@ class TaskSourceParsing(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('"id": "task_demo_1"', result.stdout)
         self.assertIn('"title": "Adopt legacy item"', result.stdout)
+
+    def test_serialize_task_document_roundtrip(self):
+        original = parse_task_document("shared", "tasks/workspace/task_demo_1.md", "rev1", VALID_TASK)
+        serialized = serialize_task_document(original)
+        parsed = parse_task_document("shared", "tasks/workspace/task_demo_1.md", "rev2", serialized)
+
+        self.assertEqual(parsed.id, original.id)
+        self.assertEqual(parsed.project, original.project)
+        self.assertEqual(parsed.title, original.title)
+        self.assertEqual(parsed.status, original.status)
+        self.assertEqual(parsed.priority, original.priority)
+        self.assertEqual(parsed.owner, original.owner)
+        self.assertEqual(parsed.labels, original.labels)
+        self.assertEqual(parsed.acceptance_criteria, original.acceptance_criteria)
+        self.assertEqual(parsed.related_plans, original.related_plans)
+        self.assertEqual(parsed.related_runs, original.related_runs)
+        self.assertEqual(parsed.git_links, original.git_links)
+        self.assertEqual(parsed.blocked, original.blocked)
+        self.assertEqual(parsed.blocked_reason, original.blocked_reason)
+        self.assertEqual(parsed.body, original.body)
+
+    def test_write_task_document_creates_file_atomically(self):
+        source = load_source("shared", self.root, writable=True)
+        task = parse_task_document("shared", "tasks/workspace/task_demo_1.md", "init", VALID_TASK)
+
+        saved = write_task_document(source, "workspace", task)
+
+        target = self.root / "tasks/workspace/task_demo_1.md"
+        self.assertTrue(target.exists())
+        self.assertEqual(saved.path, "tasks/workspace/task_demo_1.md")
+        self.assertTrue(saved.revision.startswith("mtime:"))
+
+        tasks, _ = load_tasks(source)
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0].id, "task_demo_1")
+
+    def test_write_task_document_detects_revision_conflict(self):
+        source = load_source("shared", self.root, writable=True)
+        task = parse_task_document("shared", "tasks/workspace/task_demo_1.md", "init", VALID_TASK)
+        saved = write_task_document(source, "workspace", task)
+
+        # Mismatched expected revision fails
+        with self.assertRaisesRegex(TaskConflict, "revision mismatch"):
+            write_task_document(source, "workspace", task, expected_revision="stale_revision")
+
+        # Correct expected revision succeeds
+        updated_task = parse_task_document(
+            "shared",
+            "tasks/workspace/task_demo_1.md",
+            saved.revision,
+            serialize_task_document(saved).replace("Build local board reader", "Updated Title"),
+        )
+        saved_again = write_task_document(source, "workspace", updated_task, expected_revision=saved.revision)
+        self.assertEqual(saved_again.title, "Updated Title")
+
+    def test_write_task_document_rejects_duplicate_on_create(self):
+        source = load_source("shared", self.root, writable=True)
+        task = parse_task_document("shared", "tasks/workspace/task_demo_1.md", "init", VALID_TASK)
+        write_task_document(source, "workspace", task)
+
+        with self.assertRaisesRegex(TaskConflict, "already exists"):
+            write_task_document(source, "workspace", task)
+
+    def test_write_task_document_rejects_non_writable_source(self):
+        source = load_source("readonly", self.root, writable=False)
+        task = parse_task_document("readonly", "tasks/workspace/task_demo_1.md", "init", VALID_TASK)
+
+        with self.assertRaisesRegex(TaskError, "not writable"):
+            write_task_document(source, "workspace", task)
 
 
 if __name__ == "__main__":

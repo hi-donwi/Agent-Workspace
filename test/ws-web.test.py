@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -8,7 +9,16 @@ import unittest
 SOURCE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SOURCE / ".agents/bin"))
 
-from ws_web import Unauthorized, WebError, build_state, load_projects, project_context, route  # noqa: E402
+from ws_web import (  # noqa: E402
+    Conflict,
+    NotFound,
+    Unauthorized,
+    WebError,
+    build_state,
+    load_projects,
+    project_context,
+    route,
+)
 
 
 TASK_READY = """---
@@ -64,6 +74,21 @@ class WebControlReadFlow(unittest.TestCase):
         (self.context / "tasks/workspace/ready.md").write_text(TASK_READY)
         (self.context / "tasks/workspace/review.md").write_text(TASK_REVIEW)
         (self.context / "tasks/workspace/legacy.md").write_text("- [ ] Adopt old checklist\n")
+        self.repo_dir = self.root / "projects/donwi/public/Agent-Workspace"
+        self.repo_dir.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(self.repo_dir)], check=True)
+        subprocess.run(["git", "-C", str(self.repo_dir), "config", "user.name", "Test Agent"], check=True)
+        subprocess.run(["git", "-C", str(self.repo_dir), "config", "user.email", "test@example.invalid"], check=True)
+        (self.repo_dir / "README.md").write_text("# Test Repo\n")
+        subprocess.run(["git", "-C", str(self.repo_dir), "add", "README.md"], check=True)
+        subprocess.run(["git", "-C", str(self.repo_dir), "commit", "-qm", "feat: initial commit"], check=True)
+        rev_output = subprocess.run(
+            ["git", "-C", str(self.repo_dir), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.sample_sha = rev_output.stdout.strip()
         self.state = build_state(self.root, token="test-token")
 
     def test_loads_project_summaries(self):
@@ -157,7 +182,13 @@ class WebControlReadFlow(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertEqual(content_type, "text/html; charset=utf-8")
-        self.assertIn(b"Agent Workspace Control", body)
+        self.assertIn(b"Agent Workspace", body)
+        self.assertIn(b"Kanban Board", body)
+        self.assertIn(b"Backlog", body)
+        self.assertIn(b"Search", body)
+        self.assertIn(b"Context", body)
+        self.assertIn(b"modal-create", body)
+        self.assertIn(b"modal-detail", body)
 
     def test_rejects_symlinked_context_files(self):
         outside = Path(self.temp.name) / "outside"
@@ -169,6 +200,612 @@ class WebControlReadFlow(unittest.TestCase):
 
         with self.assertRaisesRegex(WebError, "symlinks"):
             project_context(self.state, "workspace")
+
+    def test_create_task_saves_task_file_and_returns_201(self):
+        payload = json.dumps(
+            {
+                "id": "task_custom_create",
+                "title": "New created task",
+                "body": "Detailed task description.",
+                "status": "ready",
+                "priority": "high",
+                "owner": "testuser",
+                "labels": ["web", "m5"],
+                "acceptance_criteria": ["Criteria 1", "Criteria 2"],
+                "related_plans": ["runs/workspace/demo/plan.md"],
+                "git_links": [{"repository": "workspace", "sha": "abcdef1"}],
+            }
+        ).encode("utf-8")
+
+        status, content_type, body = route(
+            self.state,
+            "POST",
+            "/api/projects/workspace/tasks",
+            {"authorization": "Bearer test-token"},
+            body=payload,
+        )
+
+        self.assertEqual(status, 201)
+        self.assertEqual(content_type, "application/json; charset=utf-8")
+        data = json.loads(body)
+        task = data["task"]
+        self.assertEqual(task["id"], "task_custom_create")
+        self.assertEqual(task["title"], "New created task")
+        self.assertEqual(task["status"], "ready")
+        self.assertEqual(task["priority"], "high")
+        self.assertEqual(task["owner"], "testuser")
+        self.assertEqual(task["labels"], ["web", "m5"])
+        self.assertEqual(task["body"], "Detailed task description.")
+        self.assertEqual(task["acceptance_criteria"], ["Criteria 1", "Criteria 2"])
+        self.assertEqual(task["git_links"], [{"repository": "workspace", "sha": "abcdef1"}])
+        self.assertTrue(task["revision"].startswith("mtime:"))
+
+        # Check file exists on disk
+        target = self.context / "tasks/workspace/task_custom_create.md"
+        self.assertTrue(target.exists())
+
+        # Check board sees the new task
+        _status, _type, board_body = route(
+            self.state,
+            "GET",
+            "/api/projects/workspace/board",
+            {"authorization": "Bearer test-token"},
+        )
+        board = json.loads(board_body)
+        ready_ids = [item["id"] for item in board["columns"]["ready"]]
+        self.assertIn("task_custom_create", ready_ids)
+
+    def test_create_task_with_generated_id_and_defaults(self):
+        payload = json.dumps({"title": "Auto id task"}).encode("utf-8")
+
+        status, _type, body = route(
+            self.state,
+            "POST",
+            "/api/projects/workspace/tasks",
+            {"authorization": "Bearer test-token"},
+            body=payload,
+        )
+
+        self.assertEqual(status, 201)
+        data = json.loads(body)
+        task = data["task"]
+        self.assertTrue(task["id"].startswith("task_"))
+        self.assertEqual(task["status"], "backlog")
+        self.assertEqual(task["priority"], "normal")
+        self.assertEqual(task["owner"], "unassigned")
+        self.assertEqual(task["blocked"], False)
+        self.assertEqual(task["labels"], [])
+
+    def test_create_task_requires_bearer_token(self):
+        payload = json.dumps({"title": "No auth task"}).encode("utf-8")
+        with self.assertRaises(Unauthorized):
+            route(self.state, "POST", "/api/projects/workspace/tasks", {}, body=payload)
+
+    def test_create_task_validation_failures(self):
+        # Missing title
+        with self.assertRaisesRegex(WebError, "title is required"):
+            route(
+                self.state,
+                "POST",
+                "/api/projects/workspace/tasks",
+                {"authorization": "Bearer test-token"},
+                body=json.dumps({"title": ""}).encode("utf-8"),
+            )
+
+        # Invalid status
+        with self.assertRaisesRegex(WebError, "invalid task status"):
+            route(
+                self.state,
+                "POST",
+                "/api/projects/workspace/tasks",
+                {"authorization": "Bearer test-token"},
+                body=json.dumps({"title": "Task", "status": "invalid_status"}).encode("utf-8"),
+            )
+
+        # Blocked without reason
+        with self.assertRaisesRegex(WebError, "blocked tasks require"):
+            route(
+                self.state,
+                "POST",
+                "/api/projects/workspace/tasks",
+                {"authorization": "Bearer test-token"},
+                body=json.dumps({"title": "Task", "blocked": True, "blocked_reason": ""}).encode("utf-8"),
+            )
+
+        # Unknown project
+        with self.assertRaisesRegex(NotFound, "project not found"):
+            route(
+                self.state,
+                "POST",
+                "/api/projects/unknown/tasks",
+                {"authorization": "Bearer test-token"},
+                body=json.dumps({"title": "Task"}).encode("utf-8"),
+            )
+
+    def test_update_task_updates_metadata_and_body(self):
+        payload = json.dumps(
+            {
+                "title": "Renamed Board Task",
+                "status": "in_progress",
+                "priority": "urgent",
+                "owner": "agent-1",
+                "body": "Updated body content.",
+                "labels": ["updated"],
+            }
+        ).encode("utf-8")
+
+        status, content_type, body = route(
+            self.state,
+            "PUT",
+            "/api/projects/workspace/tasks/task_board_ready",
+            {"authorization": "Bearer test-token"},
+            body=payload,
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(content_type, "application/json; charset=utf-8")
+        data = json.loads(body)
+        task = data["task"]
+        self.assertEqual(task["title"], "Renamed Board Task")
+        self.assertEqual(task["status"], "in_progress")
+        self.assertEqual(task["priority"], "urgent")
+        self.assertEqual(task["owner"], "agent-1")
+        self.assertEqual(task["body"], "Updated body content.")
+        self.assertEqual(task["labels"], ["updated"])
+
+        # Check detail read API sees updated task
+        _s, _t, detail_body = route(
+            self.state,
+            "GET",
+            "/api/projects/workspace/tasks/task_board_ready",
+            {"authorization": "Bearer test-token"},
+        )
+        read_task = json.loads(detail_body)["task"]
+        self.assertEqual(read_task["title"], "Renamed Board Task")
+        self.assertEqual(read_task["status"], "in_progress")
+
+    def test_update_task_detects_revision_conflict(self):
+        # Stale revision in payload
+        payload = json.dumps({"title": "New Title", "expected_revision": "stale-revision-123"}).encode("utf-8")
+        with self.assertRaisesRegex(Conflict, "revision mismatch"):
+            route(
+                self.state,
+                "PUT",
+                "/api/projects/workspace/tasks/task_board_ready",
+                {"authorization": "Bearer test-token"},
+                body=payload,
+            )
+
+        # Stale revision in If-Match header
+        with self.assertRaisesRegex(Conflict, "revision mismatch"):
+            route(
+                self.state,
+                "PUT",
+                "/api/projects/workspace/tasks/task_board_ready",
+                {"authorization": "Bearer test-token", "if-match": "stale-header-rev"},
+                body=json.dumps({"title": "New Title"}).encode("utf-8"),
+            )
+
+    def test_update_task_rejects_missing_task_or_project(self):
+        with self.assertRaisesRegex(NotFound, "task not found"):
+            route(
+                self.state,
+                "PUT",
+                "/api/projects/workspace/tasks/task_nonexistent",
+                {"authorization": "Bearer test-token"},
+                body=json.dumps({"title": "New Title"}).encode("utf-8"),
+            )
+
+        with self.assertRaisesRegex(NotFound, "project not found"):
+            route(
+                self.state,
+                "PUT",
+                "/api/projects/unknown/tasks/task_board_ready",
+                {"authorization": "Bearer test-token"},
+                body=json.dumps({"title": "New Title"}).encode("utf-8"),
+            )
+
+    def test_move_task_updates_status_and_persists(self):
+        _s, _t, detail_body = route(
+            self.state,
+            "GET",
+            "/api/projects/workspace/tasks/task_board_ready",
+            {"authorization": "Bearer test-token"},
+        )
+        task = json.loads(detail_body)["task"]
+        rev = task["revision"]
+
+        payload = json.dumps(
+            {
+                "target_status": "in_progress",
+                "expected_revision": rev,
+            }
+        ).encode("utf-8")
+
+        status, content_type, body = route(
+            self.state,
+            "POST",
+            "/api/projects/workspace/tasks/task_board_ready/move",
+            {"authorization": "Bearer test-token"},
+            body=payload,
+        )
+
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual(data["target_status"], "in_progress")
+        self.assertEqual(data["task"]["status"], "in_progress")
+
+        _s, _t, board_body = route(
+            self.state,
+            "GET",
+            "/api/projects/workspace/board",
+            {"authorization": "Bearer test-token"},
+        )
+        board = json.loads(board_body)
+        in_progress_ids = [item["id"] for item in board["columns"]["in_progress"]]
+        self.assertIn("task_board_ready", in_progress_ids)
+        ready_ids = [item["id"] for item in board["columns"]["ready"]]
+        self.assertNotIn("task_board_ready", ready_ids)
+
+    def test_move_task_requires_expected_revision_and_detects_conflict(self):
+        with self.assertRaisesRegex(WebError, "expected_revision is required"):
+            route(
+                self.state,
+                "POST",
+                "/api/projects/workspace/tasks/task_board_ready/move",
+                {"authorization": "Bearer test-token"},
+                body=json.dumps({"target_status": "in_progress"}).encode("utf-8"),
+            )
+
+        with self.assertRaisesRegex(Conflict, "revision mismatch"):
+            route(
+                self.state,
+                "POST",
+                "/api/projects/workspace/tasks/task_board_ready/move",
+                {"authorization": "Bearer test-token"},
+                body=json.dumps({"target_status": "in_progress", "expected_revision": "stale_rev"}).encode("utf-8"),
+            )
+
+    def test_move_task_handles_blocked_and_unblock(self):
+        _s, _t, detail_body = route(
+            self.state,
+            "GET",
+            "/api/projects/workspace/tasks/task_board_ready",
+            {"authorization": "Bearer test-token"},
+        )
+        rev = json.loads(detail_body)["task"]["revision"]
+
+        with self.assertRaisesRegex(WebError, "blocked tasks require"):
+            route(
+                self.state,
+                "POST",
+                "/api/projects/workspace/tasks/task_board_ready/move",
+                {"authorization": "Bearer test-token"},
+                body=json.dumps(
+                    {
+                        "target_status": "ready",
+                        "expected_revision": rev,
+                        "blocked": True,
+                        "blocked_reason": "",
+                    }
+                ).encode("utf-8"),
+            )
+
+        status, _t, body = route(
+            self.state,
+            "POST",
+            "/api/projects/workspace/tasks/task_board_ready/move",
+            {"authorization": "Bearer test-token"},
+            body=json.dumps(
+                {
+                    "target_status": "ready",
+                    "expected_revision": rev,
+                    "blocked": True,
+                    "blocked_reason": "Waiting on dependency",
+                }
+            ).encode("utf-8"),
+        )
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertTrue(data["task"]["blocked"])
+        self.assertEqual(data["task"]["blocked_reason"], "Waiting on dependency")
+        new_rev = data["task"]["revision"]
+
+        status, _t, body = route(
+            self.state,
+            "POST",
+            "/api/projects/workspace/tasks/task_board_ready/move",
+            {"authorization": "Bearer test-token"},
+            body=json.dumps(
+                {
+                    "target_status": "ready",
+                    "expected_revision": new_rev,
+                    "blocked": False,
+                }
+            ).encode("utf-8"),
+        )
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertFalse(data["task"]["blocked"])
+        self.assertEqual(data["task"]["blocked_reason"], "")
+
+    def test_move_task_reports_wip_warning_when_exceeded(self):
+        for i in range(3):
+            payload = json.dumps(
+                {
+                    "id": f"task_wip_{i}",
+                    "title": f"WIP task {i}",
+                    "status": "in_progress",
+                }
+            ).encode("utf-8")
+            route(
+                self.state,
+                "POST",
+                "/api/projects/workspace/tasks",
+                {"authorization": "Bearer test-token"},
+                body=payload,
+            )
+
+        _s, _t, detail_body = route(
+            self.state,
+            "GET",
+            "/api/projects/workspace/tasks/task_board_ready",
+            {"authorization": "Bearer test-token"},
+        )
+        rev = json.loads(detail_body)["task"]["revision"]
+
+        status, _t, body = route(
+            self.state,
+            "POST",
+            "/api/projects/workspace/tasks/task_board_ready/move",
+            {"authorization": "Bearer test-token"},
+            body=json.dumps(
+                {
+                    "target_status": "in_progress",
+                    "expected_revision": rev,
+                }
+            ).encode("utf-8"),
+        )
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertIsNotNone(data["wip_warning"])
+        self.assertIn("limit: 3", data["wip_warning"])
+
+        _s, _t, board_body = route(
+            self.state,
+            "GET",
+            "/api/projects/workspace/board",
+            {"authorization": "Bearer test-token"},
+        )
+        board = json.loads(board_body)
+        self.assertTrue(len(board["wip_warnings"]) > 0)
+
+    def test_get_project_commits_returns_commits(self):
+        status, content_type, body = route(
+            self.state,
+            "GET",
+            "/api/projects/workspace/commits",
+            {"authorization": "Bearer test-token"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(content_type, "application/json; charset=utf-8")
+        data = json.loads(body)
+        self.assertEqual(data["project"]["key"], "workspace")
+        commits = data["commits"]
+        self.assertTrue(len(commits) >= 1)
+        self.assertEqual(commits[0]["sha"], self.sample_sha)
+        self.assertEqual(commits[0]["subject"], "feat: initial commit")
+        self.assertEqual(commits[0]["author"], "Test Agent")
+
+    def test_add_and_remove_task_git_link(self):
+        _s, _t, detail_body = route(
+            self.state,
+            "GET",
+            "/api/projects/workspace/tasks/task_board_ready",
+            {"authorization": "Bearer test-token"},
+        )
+        task = json.loads(detail_body)["task"]
+        rev = task["revision"]
+
+        # Add git link
+        status, content_type, body = route(
+            self.state,
+            "POST",
+            "/api/projects/workspace/tasks/task_board_ready/git-links",
+            {"authorization": "Bearer test-token"},
+            body=json.dumps({"sha": self.sample_sha, "expected_revision": rev}).encode("utf-8"),
+        )
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        shas = [item["sha"] for item in data["task"]["git_links"]]
+        self.assertIn(self.sample_sha, shas)
+        new_rev = data["task"]["revision"]
+
+        # Verify persistence via detail API
+        _s, _t, detail_body = route(
+            self.state,
+            "GET",
+            "/api/projects/workspace/tasks/task_board_ready",
+            {"authorization": "Bearer test-token"},
+        )
+        reloaded_shas = [item["sha"] for item in json.loads(detail_body)["task"]["git_links"]]
+        self.assertIn(self.sample_sha, reloaded_shas)
+
+        # Remove git link
+        status, content_type, body = route(
+            self.state,
+            "DELETE",
+            f"/api/projects/workspace/tasks/task_board_ready/git-links/{self.sample_sha}",
+            {"authorization": "Bearer test-token"},
+            body=json.dumps({"expected_revision": new_rev}).encode("utf-8"),
+        )
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        remaining_shas = [item["sha"] for item in data["task"]["git_links"]]
+        self.assertNotIn(self.sample_sha, remaining_shas)
+
+    def test_add_task_git_link_rejects_unknown_sha_or_conflict(self):
+        _s, _t, detail_body = route(
+            self.state,
+            "GET",
+            "/api/projects/workspace/tasks/task_board_ready",
+            {"authorization": "Bearer test-token"},
+        )
+        rev = json.loads(detail_body)["task"]["revision"]
+
+        # Unknown sha
+        with self.assertRaisesRegex(WebError, "not found"):
+            route(
+                self.state,
+                "POST",
+                "/api/projects/workspace/tasks/task_board_ready/git-links",
+                {"authorization": "Bearer test-token"},
+                body=json.dumps({"sha": "0123456789abcdef0123456789abcdef01234567", "expected_revision": rev}).encode("utf-8"),
+            )
+
+        # Stale expected revision
+        with self.assertRaisesRegex(Conflict, "revision mismatch"):
+            route(
+                self.state,
+                "POST",
+                "/api/projects/workspace/tasks/task_board_ready/git-links",
+                {"authorization": "Bearer test-token"},
+                body=json.dumps({"sha": self.sample_sha, "expected_revision": "stale_rev"}).encode("utf-8"),
+            )
+
+    def test_search_all_project_tasks_and_facets(self):
+        status, content_type, body = route(
+            self.state,
+            "GET",
+            "/api/projects/workspace/search",
+            {"authorization": "Bearer test-token"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(content_type, "application/json; charset=utf-8")
+        data = json.loads(body)
+        self.assertEqual(data["project"]["key"], "workspace")
+        self.assertEqual(data["total"], 2)
+        self.assertEqual(len(data["results"]), 2)
+        self.assertEqual(data["counts"]["by_status"]["ready"], 1)
+        self.assertEqual(data["counts"]["by_status"]["review"], 1)
+        self.assertEqual(data["counts"]["by_priority"]["high"], 2)
+        self.assertEqual(data["counts"]["by_label"]["web"], 2)
+        self.assertEqual(data["counts"]["blocked"], 0)
+        self.assertEqual(data["freshness"]["scanned_tasks"], 2)
+        self.assertTrue(data["freshness"]["scanned_at"].endswith("Z"))
+
+    def test_search_by_query_string_and_snippets(self):
+        # Query matching title
+        status, _t, body = route(
+            self.state,
+            "GET",
+            "/api/projects/workspace/search?q=render",
+            {"authorization": "Bearer test-token"},
+        )
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual(data["total"], 1)
+        self.assertEqual(data["results"][0]["task"]["id"], "task_board_ready")
+        self.assertIn("title", data["results"][0]["matches"])
+        self.assertEqual(data["results"][0]["snippet"], "Render board")
+
+        # Query matching body
+        status, _t, body = route(
+            self.state,
+            "GET",
+            "/api/projects/workspace/search?q=body",
+            {"authorization": "Bearer test-token"},
+        )
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual(data["total"], 2)
+        for res in data["results"]:
+            self.assertIn("body", res["matches"])
+            self.assertEqual(res["snippet"], "Board task body.")
+
+        # Query with no matches
+        status, _t, body = route(
+            self.state,
+            "GET",
+            "/api/projects/workspace/search?q=xyznonexistent123",
+            {"authorization": "Bearer test-token"},
+        )
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual(data["total"], 0)
+        self.assertEqual(len(data["results"]), 0)
+
+    def test_search_by_status_and_label_filters(self):
+        # Status filter
+        status, _t, body = route(
+            self.state,
+            "GET",
+            "/api/projects/workspace/search?status=ready",
+            {"authorization": "Bearer test-token"},
+        )
+        data = json.loads(body)
+        self.assertEqual(data["total"], 1)
+        self.assertEqual(data["results"][0]["task"]["id"], "task_board_ready")
+
+        # Label filter
+        status, _t, body = route(
+            self.state,
+            "GET",
+            "/api/projects/workspace/search?label=web&priority=high",
+            {"authorization": "Bearer test-token"},
+        )
+        data = json.loads(body)
+        self.assertEqual(data["total"], 2)
+
+        # Nonexistent label
+        status, _t, body = route(
+            self.state,
+            "GET",
+            "/api/projects/workspace/search?label=backend",
+            {"authorization": "Bearer test-token"},
+        )
+        data = json.loads(body)
+        self.assertEqual(data["total"], 0)
+
+    def test_search_source_freshness_reflects_external_changes_and_deletions(self):
+        # Add third task directly to filesystem
+        extra_task = TASK_READY.replace("task_board_ready", "task_board_fresh").replace("Render board", "Fresh external task")
+        (self.context / "tasks/workspace/fresh.md").write_text(extra_task)
+
+        status, _t, body = route(
+            self.state,
+            "GET",
+            "/api/projects/workspace/search",
+            {"authorization": "Bearer test-token"},
+        )
+        data = json.loads(body)
+        self.assertEqual(data["total"], 3)
+        self.assertEqual(data["freshness"]["scanned_tasks"], 3)
+
+        # Delete ready.md from filesystem
+        (self.context / "tasks/workspace/ready.md").unlink()
+
+        status, _t, body = route(
+            self.state,
+            "GET",
+            "/api/projects/workspace/search",
+            {"authorization": "Bearer test-token"},
+        )
+        data = json.loads(body)
+        self.assertEqual(data["total"], 2)
+        task_ids = [res["task"]["id"] for res in data["results"]]
+        self.assertNotIn("task_board_ready", task_ids)
+        self.assertIn("task_board_fresh", task_ids)
+        self.assertIn("task_board_review", task_ids)
+
+    def test_search_missing_project_returns_not_found(self):
+        with self.assertRaises(NotFound):
+            route(
+                self.state,
+                "GET",
+                "/api/projects/nonexistent/search",
+                {"authorization": "Bearer test-token"},
+            )
 
 
 if __name__ == "__main__":
