@@ -249,14 +249,14 @@ contains "$WS/context/works/rollup/$(date +%Y-%m).json" '"human_hours"' "rollup 
 
 section "overlap is merged, not summed"
 # Two agent sessions covering the same hour are one hour of elapsed work.
-M="$(date +%Y-%m)"; F="$WS/context/works/agent/api/$M.jsonl"
+M="$(date +%Y-%m)"; F="$WS/context/works/agent/overlap/$M.jsonl"; mkdir -p "${F%/*}"
 BASE=$(( $(date +%s) - 86400 )); DAY=$(date -u -r $BASE +%Y-%m-%d 2>/dev/null || date -u -d @$BASE +%Y-%m-%d)
 for pair in "0 3600" "1800 5400"; do
   set -- $pair
-  printf '{"kind":"agent","project":"api","actor":"t","tool":"t","start":"%sT00:00:00+00:00","end":"x","start_ts":%s,"end_ts":%s,"minutes":60,"note":"overlap"}\n' \
+  printf '{"kind":"agent","project":"overlap","actor":"t","tool":"t","start":"%sT00:00:00+00:00","end":"x","start_ts":%s,"end_ts":%s,"minutes":60,"note":"overlap"}\n' \
     "$DAY" "$((BASE+$1))" "$((BASE+$2))" >> "$F"
 done
-OUT="$(ws hours 2>&1)"
+OUT="$(ws hours --project overlap 2>&1)"
 printf '%s' "$OUT" | grep -q "$DAY" && \
   { printf '%s' "$OUT" | grep "$DAY" | grep -qE '1\.50' \
       && ok "two overlapping 1h sessions count as 1.5h, not 2h" \
