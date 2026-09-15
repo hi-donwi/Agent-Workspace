@@ -827,6 +827,84 @@ class WebControlReadFlow(unittest.TestCase):
                 {"authorization": "Bearer test-token"},
             )
 
+    def test_project_activity_calculates_merged_hours_and_clocks(self):
+        works_dir = self.context / "works"
+        (works_dir / "agent/workspace").mkdir(parents=True, exist_ok=True)
+        (works_dir / "human/workspace").mkdir(parents=True, exist_ok=True)
+
+        sess1 = json.dumps({
+            "id": "agent-1",
+            "kind": "agent",
+            "project": "workspace",
+            "start": "2026-09-15T10:00:00Z",
+            "end": "2026-09-15T11:00:00Z",
+            "start_ts": 1789466400,
+            "end_ts": 1789470000,
+            "tool": "claude-code",
+            "note": "first session"
+        })
+        sess2 = json.dumps({
+            "id": "agent-2",
+            "kind": "agent",
+            "project": "workspace",
+            "start": "2026-09-15T10:30:00Z",
+            "end": "2026-09-15T11:30:00Z",
+            "start_ts": 1789468200,
+            "end_ts": 1789471800,
+            "tool": "codex",
+            "note": "second session"
+        })
+        (works_dir / "agent/workspace/2026-09.jsonl").write_text(sess1 + "\n" + sess2 + "\n")
+
+        clock_file = works_dir / ".open-agent-test.json"
+        clock_file.write_text(json.dumps({
+            "id": "clock-1",
+            "kind": "agent",
+            "project": "workspace",
+            "tool": "antigravity",
+            "actor": "donwi",
+            "start": "2026-09-15T14:00:00Z",
+            "note": "in progress task"
+        }))
+
+        status, content_type, body = route(
+            self.state,
+            "GET",
+            "/api/projects/workspace/activity?month=2026-09",
+            {"authorization": "Bearer test-token"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(content_type, "application/json; charset=utf-8")
+        data = json.loads(body)
+        self.assertEqual(data["project"]["key"], "workspace")
+        self.assertEqual(data["month"], "2026-09")
+        self.assertEqual(data["hours"]["agent_total"], 1.5)
+        self.assertEqual(data["hours"]["human_total"], 0.0)
+        self.assertEqual(len(data["hours"]["days"]), 1)
+        self.assertEqual(data["hours"]["days"][0]["day"], "2026-09-15")
+        self.assertEqual(data["hours"]["days"][0]["agent_hours"], 1.5)
+        self.assertEqual(data["hours"]["days"][0]["agent_sessions"], 2)
+        self.assertIsNotNone(data["active_clocks"]["agent"])
+        self.assertEqual(data["active_clocks"]["agent"]["tool"], "antigravity")
+
+    def test_project_activity_invalid_month_format_rejected(self):
+        with self.assertRaises(WebError):
+            route(
+                self.state,
+                "GET",
+                "/api/projects/workspace/activity?month=202609",
+                {"authorization": "Bearer test-token"},
+            )
+
+    def test_project_activity_missing_project_returns_not_found(self):
+        with self.assertRaises(NotFound):
+            route(
+                self.state,
+                "GET",
+                "/api/projects/nonexistent/activity",
+                {"authorization": "Bearer test-token"},
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

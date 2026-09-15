@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import re
 import secrets
@@ -113,6 +114,12 @@ def route(
             tail = path[len(prefix) :]
             key, task_id = tail.split(task_marker, 1)
             return _json(task_detail(state, unquote(key), unquote(task_id)))
+        activity_suffix = "/activity"
+        if path.startswith(prefix) and path.endswith(activity_suffix):
+            key = unquote(path[len(prefix) : -len(activity_suffix)])
+            query_params = parse_qs(parsed.query)
+            month = query_params.get("month", [None])[0]
+            return _json(get_project_activity(state, key, month=month))
     elif method == "POST":
         prefix = "/api/projects/"
         suffix = "/tasks"
@@ -645,6 +652,223 @@ def move_task(
         },
         status=HTTPStatus.OK,
     )
+
+
+def _calculate_merged_seconds(intervals: list[tuple[int, int]]) -> int:
+    seconds = 0
+    start = end = None
+    for first, last in sorted(intervals):
+        if last < first:
+            continue
+        if start is None:
+            start, end = first, last
+        elif first <= end:
+            end = max(end, last)
+        else:
+            seconds += end - start
+            start, end = first, last
+    if start is not None:
+        seconds += end - start
+    return seconds
+
+
+def _get_usage_data(
+    state: WorkspaceWebState, summary: ProjectSummary, month: str
+) -> dict[str, object]:
+    source_dir = None
+    config_file = state.root / "workspace.conf"
+    if config_file.is_file():
+        for line in config_file.read_text().splitlines():
+            s = line.strip()
+            if s.startswith("usage_source") and "=" in s:
+                val = s.split("=", 1)[1].strip()
+                if val:
+                    source_dir = Path(os.path.expanduser(val))
+    if not source_dir:
+        default_dir = Path(os.path.expanduser("~/.agent-ops"))
+        if default_dir.is_dir():
+            source_dir = default_dir
+
+    if not source_dir or not source_dir.is_dir():
+        return {
+            "available": False,
+            "source": None,
+            "total_sessions": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "by_tool": {},
+            "days": [],
+        }
+
+    usage_file = source_dir / "ops" / "usage" / f"{month}.jsonl"
+    if not usage_file.is_file():
+        return {
+            "available": True,
+            "source": str(source_dir),
+            "total_sessions": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "by_tool": {},
+            "days": [],
+        }
+
+    project_folder = str((state.root / summary.folder).resolve()) if summary.folder and summary.folder != "-" else ""
+    total_sessions = 0
+    total_input = 0
+    total_output = 0
+    by_tool: dict[str, int] = {}
+    day_stats: dict[str, dict[str, int]] = {}
+
+    try:
+        for line in usage_file.read_text().splitlines():
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            rec_proj = rec.get("projectKey")
+            rec_root = rec.get("projectRoot")
+            matches = False
+            if rec_proj and rec_proj == summary.key:
+                matches = True
+            elif rec_root and project_folder:
+                res_root = os.path.realpath(os.path.expanduser(rec_root))
+                if res_root == project_folder or project_folder.startswith(res_root + "/"):
+                    matches = True
+            if not matches:
+                continue
+
+            total_sessions += 1
+            tool = rec.get("tool") or "unknown"
+            by_tool[tool] = by_tool.get(tool, 0) + 1
+
+            tokens = rec.get("tokens") or {}
+            inp = int(tokens.get("input") or 0)
+            out = int(tokens.get("output") or 0)
+            total_input += inp
+            total_output += out
+
+            day = (rec.get("start") or "")[:10]
+            if day:
+                st = day_stats.setdefault(day, {"sessions": 0, "input": 0, "output": 0})
+                st["sessions"] += 1
+                st["input"] += inp
+                st["output"] += out
+    except (json.JSONDecodeError, OSError):
+        pass
+
+    days_list = [
+        {"day": d, "sessions": day_stats[d]["sessions"], "input_tokens": day_stats[d]["input"], "output_tokens": day_stats[d]["output"]}
+        for d in sorted(day_stats.keys())
+    ]
+
+    return {
+        "available": True,
+        "source": str(source_dir),
+        "total_sessions": total_sessions,
+        "input_tokens": total_input,
+        "output_tokens": total_output,
+        "by_tool": by_tool,
+        "days": days_list,
+    }
+
+
+def get_project_activity(
+    state: WorkspaceWebState, project: str, month: str | None = None
+) -> dict[str, object]:
+    summary = _project_summary(state, project)
+    if not month:
+        month = datetime.now().strftime("%Y-%m")
+    elif not re.fullmatch(r"^\d{4}-\d{2}$", month):
+        raise WebError("invalid month format (expected YYYY-MM)")
+
+    works_dir = state.context / "works"
+
+    active_clocks: dict[str, object] = {"human": None, "agent": None}
+    if works_dir.is_dir():
+        for item in works_dir.glob(".open-*.json"):
+            if item.is_file() and not item.is_symlink():
+                try:
+                    data = json.loads(item.read_text())
+                    if data.get("project") == project:
+                        kind = data.get("kind", "human" if "human" in item.name else "agent")
+                        active_clocks[kind] = {
+                            "actor": data.get("actor"),
+                            "tool": data.get("tool"),
+                            "start": data.get("start"),
+                            "note": data.get("note"),
+                        }
+                except (json.JSONDecodeError, OSError):
+                    pass
+
+    human_file = works_dir / "human" / project / f"{month}.jsonl"
+    human_groups: dict[tuple[str, str], list[tuple[int, int]]] = {}
+    human_session_count: dict[str, int] = {}
+    if human_file.is_file() and not human_file.is_symlink():
+        try:
+            for line in human_file.read_text().splitlines():
+                if not line.strip():
+                    continue
+                rec = json.loads(line)
+                day = rec.get("start", "")[:10]
+                actor = rec.get("actor", "legacy")
+                start_ts = int(rec.get("start_ts", 0))
+                end_ts = int(rec.get("end_ts", 0))
+                human_groups.setdefault((day, actor), []).append((start_ts, end_ts))
+                human_session_count[day] = human_session_count.get(day, 0) + 1
+        except (json.JSONDecodeError, OSError, ValueError):
+            pass
+
+    agent_file = works_dir / "agent" / project / f"{month}.jsonl"
+    agent_groups: dict[tuple[str, str], list[tuple[int, int]]] = {}
+    agent_session_count: dict[str, int] = {}
+    if agent_file.is_file() and not agent_file.is_symlink():
+        try:
+            for line in agent_file.read_text().splitlines():
+                if not line.strip():
+                    continue
+                rec = json.loads(line)
+                day = rec.get("start", "")[:10]
+                actor = "elapsed"
+                start_ts = int(rec.get("start_ts", 0))
+                end_ts = int(rec.get("end_ts", 0))
+                agent_groups.setdefault((day, actor), []).append((start_ts, end_ts))
+                agent_session_count[day] = agent_session_count.get(day, 0) + 1
+        except (json.JSONDecodeError, OSError, ValueError):
+            pass
+
+    human_days: dict[str, float] = {}
+    for (day, _), intervals in human_groups.items():
+        human_days[day] = human_days.get(day, 0.0) + (_calculate_merged_seconds(intervals) / 3600.0)
+
+    agent_days: dict[str, float] = {}
+    for (day, _), intervals in agent_groups.items():
+        agent_days[day] = agent_days.get(day, 0.0) + (_calculate_merged_seconds(intervals) / 3600.0)
+
+    all_days = sorted(set(human_days.keys()) | set(agent_days.keys()))
+    days_breakdown = []
+    for d in all_days:
+        days_breakdown.append(
+            {
+                "day": d,
+                "human_hours": round(human_days.get(d, 0.0), 2),
+                "agent_hours": round(agent_days.get(d, 0.0), 2),
+                "human_sessions": human_session_count.get(d, 0),
+                "agent_sessions": agent_session_count.get(d, 0),
+            }
+        )
+
+    usage_info = _get_usage_data(state, summary, month)
+
+    return {
+        "project": _project_to_dict(summary),
+        "month": month,
+        "active_clocks": active_clocks,
+        "hours": {
+            "human_total": round(sum(human_days.values()), 2),
+            "agent_total": round(sum(agent_days.values()), 2),
+            "days": days_breakdown,
+        },
+        "usage": usage_info,
+    }
 
 
 def get_project_commits(state: WorkspaceWebState, project: str, limit: int = 20) -> list[dict[str, str]]:
@@ -1467,6 +1691,7 @@ def index_html() -> str:
       <button class="tab-btn" onclick="switchTab('search')">Search</button>
       <button class="tab-btn" onclick="switchTab('context')">Context</button>
       <button class="tab-btn" onclick="switchTab('commits')">Commits</button>
+      <button class="tab-btn" onclick="switchTab('activity')">Activity</button>
     </div>
     <div class="header-actions">
       <select id="project-select" onchange="onProjectChanged()">
@@ -1587,6 +1812,53 @@ def index_html() -> str:
             </tr>
           </thead>
           <tbody id="commit-rows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Activity & Metrics View -->
+    <section id="view-activity" class="view-panel">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;">
+        <div style="display: flex; gap: 12px; align-items: center;">
+          <h2 style="font-size: 15px; font-weight: 600;">Activity & Metrics</h2>
+          <span id="activity-clock-pill" class="badge" style="display: none;"></span>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <label for="activity-month" style="font-size: 12px; color: var(--text-secondary);">Month:</label>
+          <input type="month" id="activity-month" onchange="loadActivity()" style="padding: 4px 8px; font-size: 12px; background: var(--bg-surface); border: 1px solid var(--border); color: var(--text-primary); border-radius: var(--radius-sm);">
+        </div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px;">
+        <div class="card" style="padding: 16px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-md);">
+          <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; letter-spacing: 0.5px;">Human Hours (Payroll)</div>
+          <div id="stat-human-hours" style="font-size: 24px; font-weight: 700; color: var(--accent-blue); margin: 8px 0 4px 0;">0.00 h</div>
+          <div style="font-size: 11px; color: var(--text-secondary);">Single-threaded human focus</div>
+        </div>
+        <div class="card" style="padding: 16px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-md);">
+          <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; letter-spacing: 0.5px;">Agent Hours (Machine)</div>
+          <div id="stat-agent-hours" style="font-size: 24px; font-weight: 700; color: var(--accent-green); margin: 8px 0 4px 0;">0.00 h</div>
+          <div style="font-size: 11px; color: var(--text-secondary);">Autonomous agent execution</div>
+        </div>
+        <div class="card" style="padding: 16px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-md);">
+          <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; letter-spacing: 0.5px;">Token Usage (Sessions)</div>
+          <div id="stat-token-sessions" style="font-size: 24px; font-weight: 700; color: var(--accent-purple); margin: 8px 0 4px 0;">0</div>
+          <div id="stat-token-counts" style="font-size: 11px; color: var(--text-secondary);">0 in / 0 out</div>
+        </div>
+      </div>
+
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Human Hours</th>
+              <th>Agent Hours</th>
+              <th>Distribution</th>
+              <th>Token Sessions</th>
+            </tr>
+          </thead>
+          <tbody id="activity-rows"></tbody>
         </table>
       </div>
     </section>
@@ -1826,6 +2098,7 @@ def index_html() -> str:
       else if (tabId === "context") loadContext();
       else if (tabId === "commits") loadCommits();
       else if (tabId === "search") executeSearch();
+      else if (tabId === "activity") loadActivity();
     }
 
     async function loadProjects() {
@@ -1853,7 +2126,18 @@ def index_html() -> str:
     function onProjectChanged() {
       state.project = document.getElementById("project-select").value;
       sessionStorage.setItem("ws_project", state.project);
-      loadBoard();
+      const activeTab = document.querySelector(".tab-btn.active");
+      if (activeTab) {
+        const text = activeTab.textContent.trim().toLowerCase();
+        if (text.includes("backlog")) renderBacklog();
+        else if (text.includes("search")) executeSearch();
+        else if (text.includes("context")) loadContext();
+        else if (text.includes("commits")) loadCommits();
+        else if (text.includes("activity")) loadActivity();
+        else loadBoard();
+      } else {
+        loadBoard();
+      }
     }
 
     // --- Board ---
@@ -2276,6 +2560,90 @@ def index_html() -> str:
           <td>${escapeHtml(c.author)}</td>
           <td style="color:var(--text-muted); font-family:monospace;">${c.date.split("T")[0]}</td>
           <td><button class="btn btn-sm" onclick="copyToClipboard('${c.sha}', this)">Copy SHA</button></td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    // --- Activity & Metrics View ---
+    async function loadActivity() {
+      if (!state.project) return;
+      const monthInput = document.getElementById("activity-month");
+      if (!monthInput.value) {
+        const now = new Date();
+        const y = now.getFullYear();
+        const m = String(now.getMonth() + 1).padStart(2, "0");
+        monthInput.value = y + "-" + m;
+      }
+      const month = monthInput.value;
+      const res = await api("/api/projects/" + encodeURIComponent(state.project) + "/activity?month=" + encodeURIComponent(month));
+      if (!res.ok) return;
+      const data = res.data;
+
+      document.getElementById("stat-human-hours").textContent = (data.hours.human_total || 0).toFixed(2) + " h";
+      document.getElementById("stat-agent-hours").textContent = (data.hours.agent_total || 0).toFixed(2) + " h";
+
+      const usage = data.usage || {};
+      document.getElementById("stat-token-sessions").textContent = usage.total_sessions || 0;
+      const inTok = (usage.input_tokens || 0).toLocaleString();
+      const outTok = (usage.output_tokens || 0).toLocaleString();
+      document.getElementById("stat-token-counts").textContent = inTok + " in / " + outTok + " out";
+
+      const pill = document.getElementById("activity-clock-pill");
+      if (data.active_clocks) {
+        if (data.active_clocks.human) {
+          pill.style.display = "inline-block";
+          pill.className = "badge badge-primary";
+          pill.textContent = "HUMAN CLOCKED IN: " + (data.active_clocks.human.actor || "active");
+        } else if (data.active_clocks.agent) {
+          pill.style.display = "inline-block";
+          pill.className = "badge badge-success";
+          pill.textContent = "AGENT ACTIVE: " + (data.active_clocks.agent.tool || "agent");
+        } else {
+          pill.style.display = "none";
+        }
+      } else {
+        pill.style.display = "none";
+      }
+
+      const tbody = document.getElementById("activity-rows");
+      tbody.innerHTML = "";
+
+      const days = data.hours.days || [];
+      const usageDays = {};
+      (usage.days || []).forEach(ud => { usageDays[ud.day] = ud; });
+
+      const allDates = Array.from(new Set([...days.map(d => d.day), ...(usage.days || []).map(d => d.day)])).sort().reverse();
+
+      if (allDates.length === 0) {
+        tbody.innerHTML = "<tr><td colspan='5' style='text-align: center; color: var(--text-muted); padding: 24px;'>No activity recorded for this month.</td></tr>";
+        return;
+      }
+
+      allDates.forEach(d => {
+        const hDay = days.find(x => x.day === d) || { human_hours: 0, agent_hours: 0, human_sessions: 0, agent_sessions: 0 };
+        const uDay = usageDays[d] || { sessions: 0, input_tokens: 0, output_tokens: 0 };
+
+        const totalHours = (hDay.human_hours || 0) + (hDay.agent_hours || 0);
+        const humanPct = totalHours > 0 ? ((hDay.human_hours / totalHours) * 100).toFixed(0) : 0;
+        const agentPct = totalHours > 0 ? ((hDay.agent_hours / totalHours) * 100).toFixed(0) : 0;
+
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td style="font-family: monospace; font-weight: 500;">${d}</td>
+          <td style="font-family: monospace; color: var(--accent-blue);">${hDay.human_hours ? hDay.human_hours.toFixed(2) + ' h' : '-'}</td>
+          <td style="font-family: monospace; color: var(--accent-green);">${hDay.agent_hours ? hDay.agent_hours.toFixed(2) + ' h' : '-'}</td>
+          <td style="width: 140px;">
+            ${totalHours > 0 ? `
+            <div style="display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--border-subtle); width: 100%;">
+              <div style="width: ${humanPct}%; background: var(--accent-blue);" title="Human: ${humanPct}%"></div>
+              <div style="width: ${agentPct}%; background: var(--accent-green);" title="Agent: ${agentPct}%"></div>
+            </div>
+            ` : '<span style="color: var(--text-muted); font-size: 11px;">-</span>'}
+          </td>
+          <td style="font-family: monospace; font-size: 12px; color: var(--text-secondary);">
+            ${uDay.sessions ? `${uDay.sessions} sess (${(uDay.input_tokens + uDay.output_tokens).toLocaleString()} tok)` : '-'}
+          </td>
         `;
         tbody.appendChild(tr);
       });
