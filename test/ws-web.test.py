@@ -24,8 +24,11 @@ labels:
 acceptance_criteria:
   - Board returns ready task
 related_plans:
+  - runs/workspace/demo/plan.md
 related_runs:
+  - runs/workspace/demo
 git_links:
+  - workspace@abcdef1
 blocked: false
 blocked_reason: ""
 created_at: 2026-09-14T00:00:00Z
@@ -56,6 +59,7 @@ class WebControlReadFlow(unittest.TestCase):
         (self.context / "memory/projects/workspace/active.md").write_text("Active workspace state\n")
         (self.context / "memory/projects/workspace/decisions.md").write_text("Decisions\n")
         (self.context / "runs/workspace/demo/handoff.md").write_text("Continue here\n")
+        (self.context / "runs/workspace/demo/plan.md").write_text("Plan details\n")
         (self.context / "tasks/workspace").mkdir(parents=True)
         (self.context / "tasks/workspace/ready.md").write_text(TASK_READY)
         (self.context / "tasks/workspace/review.md").write_text(TASK_REVIEW)
@@ -105,6 +109,42 @@ class WebControlReadFlow(unittest.TestCase):
         self.assertEqual(payload["columns"]["review"][0]["id"], "task_board_review")
         self.assertEqual(payload["columns"]["backlog"], [])
         self.assertEqual(payload["legacy_candidates"][0]["title"], "Adopt old checklist")
+
+    def test_task_detail_resolves_plan_run_and_git_links(self):
+        status, _content_type, body = route(
+            self.state,
+            "GET",
+            "/api/projects/workspace/tasks/task_board_ready",
+            {"authorization": "Bearer test-token"},
+        )
+
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        task = payload["task"]
+        self.assertEqual(task["id"], "task_board_ready")
+        self.assertEqual(task["body"], "Board task body.")
+        self.assertEqual(task["acceptance_criteria"], ["Board returns ready task"])
+        self.assertTrue(task["related_plans"][0]["resolved"])
+        self.assertEqual(task["related_plans"][0]["file"]["path"], "context/runs/workspace/demo/plan.md")
+        self.assertTrue(task["related_runs"][0]["resolved"])
+        self.assertEqual(task["related_runs"][0]["file"]["path"], "context/runs/workspace/demo/handoff.md")
+        self.assertEqual(task["git_links"], [{"repository": "workspace", "sha": "abcdef1"}])
+
+    def test_task_detail_rejects_cross_project_or_unknown_task(self):
+        with self.assertRaisesRegex(WebError, "task not found"):
+            route(
+                self.state,
+                "GET",
+                "/api/projects/workspace/tasks/task_missing",
+                {"authorization": "Bearer test-token"},
+            )
+        with self.assertRaisesRegex(WebError, "project not found"):
+            route(
+                self.state,
+                "GET",
+                "/api/projects/missing/tasks/task_board_ready",
+                {"authorization": "Bearer test-token"},
+            )
 
     def test_rejects_unknown_or_bad_project(self):
         with self.assertRaisesRegex(WebError, "project not found"):

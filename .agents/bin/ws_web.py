@@ -83,6 +83,11 @@ def route(state: WorkspaceWebState, method: str, raw_path: str, headers: dict[st
     if path.startswith(prefix) and path.endswith(board_suffix):
         key = unquote(path[len(prefix) : -len(board_suffix)])
         return _json(project_board(state, key))
+    task_marker = "/tasks/"
+    if path.startswith(prefix) and task_marker in path[len(prefix) :]:
+        tail = path[len(prefix) :]
+        key, task_id = tail.split(task_marker, 1)
+        return _json(task_detail(state, unquote(key), unquote(task_id)))
     raise NotFound("route not found")
 
 
@@ -126,15 +131,7 @@ def project_context(state: WorkspaceWebState, project: str) -> dict[str, object]
 
 def project_board(state: WorkspaceWebState, project: str) -> dict[str, object]:
     summary = _project_summary(state, project)
-    tasks_root = _contained(state.context, "tasks")
-    if not tasks_root.exists():
-        tasks: list[TaskRecord] = []
-        legacy = []
-    else:
-        try:
-            tasks, legacy = load_tasks(load_source("context", state.context))
-        except TaskError as error:
-            raise WebError(str(error)) from error
+    tasks, legacy = _load_context_tasks(state)
     project_tasks = [task for task in tasks if task.project == project]
     columns = {status: [] for status in ["backlog", "ready", "in_progress", "review", "done"]}
     for task in sorted(project_tasks, key=lambda item: (item.status, item.updated_at, item.id)):
@@ -145,6 +142,21 @@ def project_board(state: WorkspaceWebState, project: str) -> dict[str, object]:
         "source": {"id": "context", "root": state.context.relative_to(state.root).as_posix(), "writable": True},
         "columns": columns,
         "legacy_candidates": project_legacy,
+    }
+
+
+def task_detail(state: WorkspaceWebState, project: str, task_id: str) -> dict[str, object]:
+    summary = _project_summary(state, project)
+    if not re.fullmatch(r"task_[a-z0-9][a-z0-9_-]*", task_id):
+        raise NotFound("task not found")
+    tasks, _legacy = _load_context_tasks(state)
+    matches = [task for task in tasks if task.project == project and task.id == task_id]
+    if not matches:
+        raise NotFound("task not found")
+    task = matches[0]
+    return {
+        "project": _project_to_dict(summary),
+        "task": _task_detail_payload(state, task),
     }
 
 
@@ -215,6 +227,16 @@ def _project_summary(state: WorkspaceWebState, project: str) -> ProjectSummary:
     return summary
 
 
+def _load_context_tasks(state: WorkspaceWebState) -> tuple[list[TaskRecord], list[object]]:
+    tasks_root = _contained(state.context, "tasks")
+    if not tasks_root.exists():
+        return [], []
+    try:
+        return load_tasks(load_source("context", state.context))
+    except TaskError as error:
+        raise WebError(str(error)) from error
+
+
 def _require_token(state: WorkspaceWebState, headers: dict[str, str]) -> None:
     auth = headers.get("authorization", "")
     if auth != f"Bearer {state.token}":
@@ -263,6 +285,33 @@ def _task_card(task: TaskRecord) -> dict[str, object]:
         "updated_at": task.updated_at,
         "path": task.path,
     }
+
+
+def _task_detail_payload(state: WorkspaceWebState, task: TaskRecord) -> dict[str, object]:
+    data = _task_card(task)
+    data.update(
+        {
+            "body": task.body,
+            "acceptance_criteria": list(task.acceptance_criteria),
+            "related_plans": [_resolve_related_ref(state, ref) for ref in task.related_plans],
+            "related_runs": [_resolve_related_ref(state, ref, prefer_handoff=True) for ref in task.related_runs],
+            "git_links": [link.__dict__.copy() for link in task.git_links],
+            "created_at": task.created_at,
+            "revision": task.revision,
+        }
+    )
+    return data
+
+
+def _resolve_related_ref(state: WorkspaceWebState, ref: str, *, prefer_handoff: bool = False) -> dict[str, object]:
+    path = _contained(state.context, ref)
+    if prefer_handoff and path.is_dir():
+        handoff = path / "handoff.md"
+        if handoff.exists():
+            path = handoff
+    if path.exists() and path.is_file():
+        return {"ref": ref, "resolved": True, "file": _file_payload(state.root, path)}
+    return {"ref": ref, "resolved": False}
 
 
 def _json(data: object) -> tuple[int, str, bytes]:
