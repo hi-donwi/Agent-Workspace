@@ -1,0 +1,36 @@
+# Who owns this clone of the workspace. Copy to workspace.conf, or run `ws init`.
+#
+# workspace.conf itself is NOT tracked. This file is the only place an organisation
+# is ever named, and keeping it untracked is what lets the same framework repository
+# be shared publicly and reused by anyone.
+
+org_name  = Example Organisation
+org_key   = example
+git_group = git@gitlab.com:example
+
+# This access boundary's private context: memory, runs, the product registry,
+# client ADRs, and domain skills. A SEPARATE git repository cloned into context/,
+# ignored here exactly like projects/ is. Leave context_remote empty for a
+# personal/private-local context. Set it only for a team/shared context; everyone
+# with access to that remote can read every file in it.
+context_dir    = context
+context_remote =
+
+# Which project the editor hooks attribute a session to when the working directory
+# is not inside a product repo. Leave it empty and such sessions are not recorded
+# at all — an hour on the wrong project is worse than an hour on none.
+default_project =
+
+# Standards packs this organisation applies. Each name must match a directory under
+# .agents/standards/ — `ws doctor` fails if one does not exist.
+#
+# `core` carries git workflow, the REST API contract and the definition of done.
+# The concrete testing, security and observability rules live in the stack packs,
+# so `core` alone leaves you without binding rules for those three; doctor says so.
+packs = core, java
+
+# Optional: where a SEPARATE, personal AI usage/token-tracking tool keeps its
+# data (a tool this workspace does not own, vendor, or require — `ws usage`
+# only ever reads it). Leave empty to default to ~/.agent-ops if present, or
+# leave it absent entirely; `ws usage` and `ws doctor` both degrade quietly.
+usage_source =

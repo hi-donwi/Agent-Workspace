@@ -1,0 +1,27 @@
+# Merge strategy for files several people and agents write to at once.
+#
+# This file lives HERE, not in the workspace root, because context/ is its own
+# git repository. .gitattributes only ever governs merges inside the repo that
+# tracks it — a rule in the workspace root's .gitattributes about a path under
+# context/ does nothing, because git never merges across a repository boundary.
+
+# Append-only chronologies: two people adding a row on the same day is not a
+# conflict worth resolving by hand, so let git keep both sides.
+memory/projects/*/log.md merge=union
+
+# The project registry only ever grows by one row per project. Keeping both
+# sides of a concurrent add is always right; `ws doctor` then catches a
+# duplicate key or a project pointing at a client that does not exist.
+registry.tsv merge=union
+
+# Work sessions are append-only and written by several people and agents at once.
+works/**/*.jsonl merge=union
+
+# Everything else merges normally. memory/projects/index.md, each
+# decisions.md (project- and client-level), and clients/<c>/decisions.md are
+# deliberately left out: a conflict there means two people changed the same
+# fact, and that needs a human to read both sides rather than silently keeping
+# both.
+
+# skills/index.json is generated. On a conflict do not merge it by hand — run
+# `ws skills` and commit the regenerated file.
