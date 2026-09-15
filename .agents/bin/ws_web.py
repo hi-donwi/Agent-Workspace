@@ -2231,7 +2231,8 @@ def serve(root: str | Path, host: str, port: int, token: str | None = None) -> N
     server = ThreadingHTTPServer((host, port), Handler)
     actual_host, actual_port = server.server_address
     print(f"Agent Workspace Control: http://{actual_host}:{actual_port}/")
-    print(f"Bearer token: {state.token}")
+    print(f"Open in browser:         http://{actual_host}:{actual_port}/?token={state.token}")
+    print(f"Bearer token:            {state.token}")
     server.serve_forever()
 
 

@@ -36,9 +36,11 @@
 # --- Agent state that is personal, not team knowledge -------------------------
 .agents/ops/
 
-# --- OS / editor --------------------------------------------------------------
+# --- OS / editor / runtime ---------------------------------------------------
 .DS_Store
 Thumbs.db
+__pycache__/
+*.py[cod]
 .idea/
 *.iml
 .vscode/*
