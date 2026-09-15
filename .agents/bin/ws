@@ -388,7 +388,8 @@ registry_validate() {
     fi
     case "$scope" in client|group|org) ;; *) c_red "x $key: unknown context_scope '$scope'"; fail=1 ;; esac
     is_empty "$group" && continue
-    if ! group_valid "$group" "$client"; then
+    row="$(group_get "$group")"
+    if ! group_valid "$row" "$client"; then
       c_red "x $key: group '$group' belongs to a different client - every group has exactly one"
       c_dim "    context/groups.tsv: key, client. Fix the project's client or the group's owner"
       fail=1

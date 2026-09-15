@@ -9,9 +9,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
 import re
 import sys
+import tempfile
 from typing import Iterable
 
 
@@ -24,6 +26,10 @@ SHA_RE = re.compile(r"[0-9a-f]{7,40}")
 
 class TaskError(ValueError):
     """Raised when a task source or task document is invalid."""
+
+
+class TaskConflict(TaskError):
+    """Raised when a task write encounters a revision conflict or duplicate id."""
 
 
 @dataclass(frozen=True)
@@ -173,6 +179,155 @@ def parse_legacy_candidates(source: str, path: str, revision: str, text: str) ->
         if match:
             candidates.append(LegacyCandidate(source, path, revision, project, match.group(1), index))
     return candidates
+ 
+ 
+def serialize_task_document(task: TaskRecord) -> str:
+    if task.schema_version != 1:
+        raise TaskError("unsupported task schema_version")
+    if not TASK_ID_RE.fullmatch(task.id):
+        raise TaskError("invalid task id")
+    if not PROJECT_RE.fullmatch(task.project):
+        raise TaskError("invalid project key")
+    if not task.title.strip() or "\n" in task.title or "\r" in task.title:
+        raise TaskError("invalid task title")
+    if task.status not in TASK_STATUSES:
+        raise TaskError("invalid task status")
+    if task.priority not in TASK_PRIORITIES:
+        raise TaskError("invalid task priority")
+    if task.blocked and not task.blocked_reason.strip():
+        raise TaskError("blocked tasks require blocked_reason")
+    if not task.blocked and task.blocked_reason.strip():
+        raise TaskError("blocked_reason requires blocked=true")
+    for label in task.labels:
+        if not _is_key(label):
+            raise TaskError("invalid label")
+    for ref in (*task.related_plans, *task.related_runs):
+        if ref.startswith("/") or ".." in Path(ref).parts:
+            raise TaskError("unsafe reference in related_plans/related_runs")
+
+    lines = [
+        "---",
+        f"schema_version: {task.schema_version}",
+        f"id: {task.id}",
+        f"project: {task.project}",
+        f"title: {task.title.strip()}",
+        f"status: {task.status}",
+        f"priority: {task.priority}",
+        f"owner: {task.owner or 'unassigned'}",
+    ]
+    lines.append("labels:")
+    for label in task.labels:
+        lines.append(f"  - {label}")
+    lines.append("acceptance_criteria:")
+    for criteria in task.acceptance_criteria:
+        lines.append(f"  - {criteria}")
+    lines.append("related_plans:")
+    for plan in task.related_plans:
+        lines.append(f"  - {plan}")
+    lines.append("related_runs:")
+    for run in task.related_runs:
+        lines.append(f"  - {run}")
+    lines.append("git_links:")
+    for link in task.git_links:
+        lines.append(f"  - {link.repository}@{link.sha}")
+    if task.blocked:
+        lines.append("blocked: true")
+        reason = task.blocked_reason.strip().replace('"', '\\"')
+        lines.append(f'blocked_reason: "{reason}"')
+    else:
+        lines.append("blocked: false")
+        lines.append('blocked_reason: ""')
+    lines.append(f"created_at: {task.created_at}")
+    lines.append(f"updated_at: {task.updated_at}")
+    lines.append("---")
+    lines.append("")
+    if task.body.strip():
+        lines.append(task.body.strip())
+        lines.append("")
+    return "\n".join(lines)
+
+
+def write_task_document(
+    source: TaskSource,
+    project: str,
+    task: TaskRecord,
+    *,
+    expected_revision: str | None = None,
+) -> TaskRecord:
+    if not source.writable:
+        raise TaskError("task source is not writable")
+    if not PROJECT_RE.fullmatch(project):
+        raise TaskError("invalid project key")
+    if task.project != project:
+        raise TaskError(f"task project '{task.project}' does not match '{project}'")
+    if not TASK_ID_RE.fullmatch(task.id):
+        raise TaskError(f"invalid task id '{task.id}'")
+
+    tasks_dir = source.root / "tasks" / project
+    tasks_dir.mkdir(parents=True, exist_ok=True)
+    if task.path:
+        target_path = (source.root / task.path).resolve()
+        relative_path = _contained(source.root, target_path)
+        if _project_from_path(relative_path) != project:
+            raise TaskError("task path project mismatch")
+    else:
+        target_path = tasks_dir / f"{task.id}.md"
+        relative_path = _contained(source.root, target_path)
+
+    if target_path.is_symlink():
+        raise TaskError("symlinks are not allowed in task source")
+
+    if target_path.exists():
+        current_rev = _revision(target_path)
+        if expected_revision is None:
+            raise TaskConflict(f"task '{task.id}' already exists")
+        if current_rev != expected_revision:
+            raise TaskConflict(f"revision mismatch: expected '{expected_revision}', found '{current_rev}'")
+    else:
+        if expected_revision is not None:
+            raise TaskConflict("expected revision provided but task file does not exist")
+
+    content = serialize_task_document(task)
+    parse_task_document(source.id, relative_path, "check", content)
+
+    target_dir = target_path.parent
+    target_dir.mkdir(parents=True, exist_ok=True)
+    fd, temp_file = tempfile.mkstemp(prefix=f".tmp.{task.id}.", dir=target_dir)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            file.write(content)
+        os.replace(temp_file, target_path)
+    except Exception:
+        if os.path.exists(temp_file):
+            try:
+                os.unlink(temp_file)
+            except OSError:
+                pass
+        raise
+
+    new_rev = _revision(target_path)
+    return TaskRecord(
+        source=source.id,
+        path=relative_path,
+        revision=new_rev,
+        schema_version=task.schema_version,
+        id=task.id,
+        project=task.project,
+        title=task.title,
+        status=task.status,
+        priority=task.priority,
+        owner=task.owner,
+        labels=task.labels,
+        acceptance_criteria=task.acceptance_criteria,
+        related_plans=task.related_plans,
+        related_runs=task.related_runs,
+        git_links=task.git_links,
+        blocked=task.blocked,
+        blocked_reason=task.blocked_reason,
+        created_at=task.created_at,
+        updated_at=task.updated_at,
+        body=task.body,
+    )
 
 
 def to_json(tasks: Iterable[TaskRecord], legacy: Iterable[LegacyCandidate]) -> str:

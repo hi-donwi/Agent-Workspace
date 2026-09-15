@@ -134,6 +134,9 @@ not_exists "$WS/context/memory/projects/orphan" "nothing was registered for the 
 check_fails "ws new refuses to register a project with no client at all" \
   ws new clientless projects/y
 not_exists "$WS/context/memory/projects/clientless" "nothing was registered without a client either"
+check "ws group new registers a product group inside a client" \
+  ws group new platform --client acme
+contains "$WS/context/groups.tsv" "$(printf 'platform\tacme\t')" "the group records its owning client"
 
 section "skills: take only what the manifest asks for"
 cat > "$WS/.agents/skills.manifest" <<EOF
@@ -165,10 +168,11 @@ mkdir -p "$PROD" && git -C "$PROD" init -q
 echo 'class Order {}' > "$PROD/Order.java"
 git -C "$PROD" add -A && git -C "$PROD" commit -qm init
 check "ws new registers the project and builds its memory" \
-  ws new api projects/acme/api --client acme
+  ws new api projects/acme/api --client acme --group platform
 exists "$WS/context/memory/projects/api/log.md" "memory is created from templates"
 contains "$WS/context/registry.tsv" "api" "the registry gains a row"
 contains "$WS/context/registry.tsv" "$(printf 'api\tacme\t')" "the row records its client"
+contains "$WS/context/registry.tsv" "$(printf 'api\tacme\tplatform\t')" "the row records its group"
 
 # A client's own skill is discoverable by ws route the same way a framework
 # skill is - it is not tied to any one of that client's projects.
@@ -410,6 +414,13 @@ cp "$WS/context/registry.tsv" "$TMP/reg3.bak"
 printf 'clientless\t-\tprojects/clientless\t-\tno client at all\n' >> "$WS/context/registry.tsv"
 check_fails "doctor fails when a project names no client at all" ws doctor --ci
 cp "$TMP/reg3.bak" "$WS/context/registry.tsv"
+
+cp "$WS/context/registry.tsv" "$TMP/reg4.bak"
+mkdir -p "$WS/context/clients/other"
+printf 'badgroup\tother\tplatform\tprojects/other/badgroup\t-\tclient\t-\tgroup owned by acme\n' >> "$WS/context/registry.tsv"
+check_fails "doctor fails when a project uses another client's group" ws doctor --ci
+cp "$TMP/reg4.bak" "$WS/context/registry.tsv"
+rm -rf "$WS/context/clients/other"
 
 # Assembled from pieces on purpose: a literal machine path here would trip the
 # very check this case exists to test, and fail doctor on this file in CI.
