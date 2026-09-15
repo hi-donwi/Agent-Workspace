@@ -855,38 +855,46 @@ def index_html() -> str:
   <title>Agent Workspace Control</title>
   <style>
     :root {
-      --bg-base: #090d16;
-      --bg-header: #111827;
-      --bg-card: #1e293b;
-      --bg-card-hover: #26354a;
-      --bg-input: #0f172a;
-      --border: #334155;
-      --border-light: #475569;
-      --text: #f8fafc;
-      --text-muted: #94a3b8;
-      --text-dim: #64748b;
-      --sky: #38bdf8;
-      --indigo: #818cf8;
-      --emerald: #34d399;
-      --amber: #fbbf24;
-      --rose: #f43f5e;
-      --purple: #c084fc;
+      --bg-base: #0d1117;
+      --bg-surface: #161b22;
+      --bg-surface-elevated: #21262d;
+      --bg-surface-hover: #30363d;
+      --bg-input: #0d1117;
+      --border: #30363d;
+      --border-subtle: #21262d;
+      --border-focus: #58a6ff;
+      --text-primary: #f0f6fc;
+      --text-secondary: #8b949e;
+      --text-muted: #6e7681;
+      --accent-blue: #58a6ff;
+      --accent-blue-bg: rgba(56, 139, 253, 0.15);
+      --accent-green: #2ea043;
+      --accent-green-bg: rgba(46, 160, 67, 0.15);
+      --accent-amber: #d29922;
+      --accent-amber-bg: rgba(210, 153, 34, 0.15);
+      --accent-red: #f85149;
+      --accent-red-bg: rgba(248, 81, 73, 0.15);
+      --accent-purple: #bc8cff;
+      --accent-purple-bg: rgba(188, 140, 255, 0.15);
+      --radius-sm: 4px;
+      --radius-md: 6px;
+      --radius-lg: 10px;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       background-color: var(--bg-base);
-      color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      font-size: 14px;
+      color: var(--text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+      font-size: 13px;
       line-height: 1.5;
       min-height: 100vh;
       display: flex;
       flex-direction: column;
     }
     header {
-      background: var(--bg-header);
+      background: var(--bg-surface);
       border-bottom: 1px solid var(--border);
-      padding: 10px 20px;
+      padding: 10px 24px;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -900,139 +908,175 @@ def index_html() -> str:
       display: flex;
       align-items: center;
       gap: 10px;
-      font-weight: 700;
-      font-size: 16px;
-      color: var(--sky);
-      letter-spacing: -0.3px;
+      text-decoration: none;
     }
-    .brand-badge {
-      background: rgba(56, 189, 248, 0.15);
-      border: 1px solid rgba(56, 189, 248, 0.4);
-      padding: 2px 8px;
-      border-radius: 12px;
+    .brand-mark {
+      background: var(--accent-blue-bg);
+      border: 1px solid var(--accent-blue);
+      color: var(--accent-blue);
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
       font-size: 11px;
-      color: var(--sky);
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: var(--radius-sm);
+      letter-spacing: 0.5px;
+    }
+    .brand-title {
+      font-size: 14px;
       font-weight: 600;
+      color: var(--text-primary);
+      letter-spacing: -0.2px;
+    }
+    .brand-subtitle {
+      font-size: 11px;
+      color: var(--text-secondary);
+      background: var(--bg-surface-elevated);
+      border: 1px solid var(--border-subtle);
+      padding: 1px 6px;
+      border-radius: var(--radius-sm);
     }
     .nav-tabs {
       display: flex;
       align-items: center;
-      gap: 4px;
-      background: var(--bg-input);
-      padding: 4px;
-      border-radius: 8px;
+      gap: 2px;
+      background: var(--bg-base);
+      padding: 3px;
+      border-radius: var(--radius-md);
       border: 1px solid var(--border);
     }
     .tab-btn {
       background: transparent;
       border: none;
-      color: var(--text-muted);
-      padding: 6px 14px;
-      border-radius: 6px;
+      color: var(--text-secondary);
+      padding: 5px 12px;
+      border-radius: var(--radius-sm);
       cursor: pointer;
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 500;
-      transition: all 0.15s ease;
+      transition: all 0.12s ease;
     }
-    .tab-btn:hover { color: var(--text); background: rgba(255,255,255,0.05); }
+    .tab-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.04); }
     .tab-btn.active {
-      background: var(--bg-card);
-      color: var(--sky);
+      background: var(--bg-surface-elevated);
+      color: var(--accent-blue);
       font-weight: 600;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
     }
-    .header-controls {
+    .header-actions {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 10px;
     }
     select, input, textarea {
       background: var(--bg-input);
       border: 1px solid var(--border);
-      color: var(--text);
-      padding: 6px 12px;
-      border-radius: 6px;
-      font-size: 13px;
+      color: var(--text-primary);
+      padding: 5px 10px;
+      border-radius: var(--radius-md);
+      font-size: 12px;
       outline: none;
-      transition: border-color 0.15s;
+      transition: border-color 0.15s, box-shadow 0.15s;
     }
-    select:focus, input:focus, textarea:focus { border-color: var(--sky); }
+    select:focus, input:focus, textarea:focus {
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.2);
+    }
     .btn {
-      background: var(--bg-card);
+      background: var(--bg-surface-elevated);
       border: 1px solid var(--border);
-      color: var(--text);
-      padding: 6px 14px;
-      border-radius: 6px;
+      color: var(--text-primary);
+      padding: 5px 12px;
+      border-radius: var(--radius-md);
       cursor: pointer;
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 500;
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      transition: all 0.15s ease;
+      transition: all 0.12s ease;
+      user-select: none;
     }
-    .btn:hover { background: var(--border); }
+    .btn:hover {
+      background: var(--bg-surface-hover);
+      border-color: var(--text-muted);
+    }
     .btn-primary {
-      background: #0284c7;
-      border-color: #38bdf8;
-      color: #fff;
+      background: #1f6feb;
+      border-color: #388bfd;
+      color: #ffffff;
     }
-    .btn-primary:hover { background: #0369a1; }
+    .btn-primary:hover {
+      background: #388bfd;
+      border-color: #58a6ff;
+    }
     .btn-success {
-      background: #059669;
-      border-color: #34d399;
-      color: #fff;
+      background: #238636;
+      border-color: #2ea043;
+      color: #ffffff;
     }
-    .btn-success:hover { background: #047857; }
+    .btn-success:hover {
+      background: #2ea043;
+      border-color: #3fb950;
+    }
     .btn-danger {
-      background: #dc2626;
-      border-color: #f87171;
-      color: #fff;
+      background: rgba(248, 81, 73, 0.15);
+      border-color: rgba(248, 81, 73, 0.4);
+      color: #f85149;
     }
-    .btn-danger:hover { background: #b91c1c; }
-    .btn-sm { padding: 3px 8px; font-size: 12px; }
-    .auth-box {
+    .btn-danger:hover {
+      background: #da3633;
+      border-color: #f85149;
+      color: #ffffff;
+    }
+    .btn-sm { padding: 3px 8px; font-size: 11px; }
+    .btn-icon { padding: 2px 6px; font-family: monospace; font-size: 11px; }
+    .auth-cluster {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
+      border-left: 1px solid var(--border);
+      padding-left: 12px;
     }
-    .status-dot {
+    .status-indicator {
       width: 8px;
       height: 8px;
       border-radius: 50%;
-      background: var(--rose);
+      background: var(--accent-red);
       display: inline-block;
     }
-    .status-dot.connected { background: var(--emerald); }
+    .status-indicator.connected {
+      background: var(--accent-green);
+      box-shadow: 0 0 6px var(--accent-green);
+    }
     #banner {
-      padding: 8px 20px;
-      font-size: 13px;
+      padding: 8px 24px;
+      font-size: 12px;
       display: none;
       align-items: center;
       justify-content: space-between;
+      border-bottom: 1px solid transparent;
     }
     #banner.warning {
-      background: #78350f;
-      color: #fef3c7;
-      border-bottom: 1px solid #b45309;
+      background: rgba(210, 153, 34, 0.15);
+      color: #e3b341;
+      border-color: rgba(210, 153, 34, 0.3);
       display: flex;
     }
     #banner.error {
-      background: #7f1d1d;
-      color: #fee2e2;
-      border-bottom: 1px solid #b91c1c;
+      background: var(--accent-red-bg);
+      color: #ff7b72;
+      border-color: rgba(248, 81, 73, 0.3);
       display: flex;
     }
     #banner.info {
-      background: #0c4a6e;
-      color: #e0f2fe;
-      border-bottom: 1px solid #0284c7;
+      background: var(--accent-blue-bg);
+      color: #79c0ff;
+      border-color: rgba(56, 139, 253, 0.3);
       display: flex;
     }
     main {
       flex: 1;
-      padding: 20px;
-      max-width: 1600px;
+      padding: 24px;
+      max-width: 1680px;
       margin: 0 auto;
       width: 100%;
     }
@@ -1042,48 +1086,51 @@ def index_html() -> str:
     .board-container {
       display: grid;
       grid-template-columns: repeat(5, minmax(280px, 1fr));
-      gap: 16px;
+      gap: 14px;
       align-items: start;
       overflow-x: auto;
-      padding-bottom: 20px;
+      padding-bottom: 24px;
     }
     .board-col {
-      background: rgba(17, 24, 39, 0.7);
+      background: var(--bg-surface);
       border: 1px solid var(--border);
-      border-radius: 10px;
+      border-radius: var(--radius-lg);
       display: flex;
       flex-direction: column;
-      max-height: calc(100vh - 170px);
+      max-height: calc(100vh - 160px);
     }
     .col-header {
-      padding: 12px 14px;
+      padding: 10px 14px;
       border-bottom: 1px solid var(--border);
       display: flex;
       align-items: center;
       justify-content: space-between;
-      font-weight: 600;
-      font-size: 13px;
+      background: rgba(22, 27, 34, 0.8);
+      border-radius: var(--radius-lg) var(--radius-lg) 0 0;
     }
     .col-title {
       display: flex;
       align-items: center;
       gap: 8px;
+      font-weight: 600;
+      font-size: 12px;
       text-transform: capitalize;
     }
     .col-count {
-      background: var(--bg-card);
+      background: var(--bg-base);
       border: 1px solid var(--border);
-      padding: 1px 7px;
+      padding: 1px 6px;
       border-radius: 10px;
       font-size: 11px;
-      color: var(--text-muted);
+      color: var(--text-secondary);
+      font-family: monospace;
     }
     .col-limit {
       font-size: 11px;
-      color: var(--text-dim);
+      color: var(--text-muted);
     }
     .col-limit.exceeded {
-      color: var(--rose);
+      color: var(--accent-red);
       font-weight: 700;
     }
     .card-list {
@@ -1092,56 +1139,76 @@ def index_html() -> str:
       display: flex;
       flex-direction: column;
       gap: 10px;
-      min-height: 120px;
+      min-height: 140px;
     }
     .card {
-      background: var(--bg-card);
+      background: var(--bg-surface-elevated);
       border: 1px solid var(--border);
-      border-radius: 8px;
+      border-radius: var(--radius-md);
       padding: 12px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
-      transition: all 0.15s ease;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+      transition: border-color 0.12s ease, transform 0.12s ease;
       display: flex;
       flex-direction: column;
       gap: 8px;
       cursor: pointer;
     }
     .card:hover {
-      border-color: var(--border-light);
-      background: var(--bg-card-hover);
+      border-color: var(--accent-blue);
       transform: translateY(-1px);
     }
-    .card.blocked-card {
-      border-left: 4px solid var(--rose);
+    .card.is-blocked {
+      border-left: 3px solid var(--accent-red);
     }
-    .card-meta {
+    .card-top {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 6px;
     }
     .badge {
-      padding: 2px 6px;
-      border-radius: 4px;
-      font-size: 11px;
+      padding: 1px 6px;
+      border-radius: var(--radius-sm);
+      font-size: 10px;
       font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.3px;
+      letter-spacing: 0.5px;
+      font-family: monospace;
     }
-    .badge-urgent { background: rgba(244,63,94,0.15); color: #fda4af; border: 1px solid rgba(244,63,94,0.3); }
-    .badge-high { background: rgba(251,191,36,0.15); color: #fde68a; border: 1px solid rgba(251,191,36,0.3); }
-    .badge-normal { background: rgba(56,189,248,0.15); color: #bae6fd; border: 1px solid rgba(56,189,248,0.3); }
-    .badge-low { background: rgba(148,163,184,0.15); color: #cbd5e1; border: 1px solid rgba(148,163,184,0.3); }
-    .badge-blocked { background: rgba(244,63,94,0.2); color: #fecdd3; border: 1px solid var(--rose); font-size: 10px; }
+    .badge-urgent { background: var(--accent-red-bg); color: #ff7b72; border: 1px solid rgba(248,81,73,0.4); }
+    .badge-high { background: var(--accent-amber-bg); color: #d29922; border: 1px solid rgba(210,153,34,0.4); }
+    .badge-normal { background: var(--accent-blue-bg); color: #79c0ff; border: 1px solid rgba(56,139,253,0.4); }
+    .badge-low { background: rgba(110,118,129,0.15); color: #8b949e; border: 1px solid var(--border); }
+    .badge-blocked {
+      background: var(--accent-red-bg);
+      color: #ff7b72;
+      border: 1px solid rgba(248,81,73,0.4);
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 500;
+    }
+    .badge-blocked-tag {
+      font-weight: 700;
+      font-family: monospace;
+      font-size: 9px;
+      background: #da3633;
+      color: #ffffff;
+      padding: 0 4px;
+      border-radius: 2px;
+    }
     .card-id {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
       font-size: 11px;
-      color: var(--text-dim);
+      color: var(--text-muted);
     }
     .card-title {
       font-size: 13px;
       font-weight: 600;
-      color: var(--text);
+      color: var(--text-primary);
       line-height: 1.4;
     }
     .card-labels {
@@ -1150,12 +1217,19 @@ def index_html() -> str:
       gap: 4px;
     }
     .pill {
-      background: rgba(255,255,255,0.06);
-      border: 1px solid rgba(255,255,255,0.1);
+      background: var(--bg-base);
+      border: 1px solid var(--border);
       padding: 1px 6px;
-      border-radius: 4px;
+      border-radius: var(--radius-sm);
       font-size: 11px;
-      color: var(--text-muted);
+      color: var(--text-secondary);
+    }
+    .pill-git {
+      font-family: monospace;
+      font-size: 10px;
+      color: var(--accent-purple);
+      border-color: rgba(188, 140, 255, 0.3);
+      background: var(--accent-purple-bg);
     }
     .card-footer {
       display: flex;
@@ -1164,19 +1238,19 @@ def index_html() -> str:
       gap: 6px;
       margin-top: 4px;
       padding-top: 8px;
-      border-top: 1px solid rgba(255,255,255,0.06);
+      border-top: 1px solid var(--border-subtle);
       font-size: 11px;
-      color: var(--text-dim);
+      color: var(--text-muted);
     }
     .card-actions {
       display: flex;
-      gap: 4px;
+      gap: 3px;
     }
     /* Backlog & Table Views */
     .table-container {
-      background: var(--bg-card);
+      background: var(--bg-surface);
       border: 1px solid var(--border);
-      border-radius: 8px;
+      border-radius: var(--radius-md);
       overflow: hidden;
     }
     table {
@@ -1185,16 +1259,16 @@ def index_html() -> str:
       text-align: left;
     }
     th, td {
-      padding: 10px 14px;
+      padding: 9px 14px;
       border-bottom: 1px solid var(--border);
-      font-size: 13px;
+      font-size: 12px;
     }
     th {
-      background: var(--bg-header);
-      color: var(--text-muted);
+      background: var(--bg-surface-elevated);
+      color: var(--text-secondary);
       font-weight: 600;
     }
-    tr:hover td { background: var(--bg-card-hover); cursor: pointer; }
+    tr:hover td { background: var(--bg-surface-hover); cursor: pointer; }
     /* Search View */
     .search-layout {
       display: grid;
@@ -1202,38 +1276,43 @@ def index_html() -> str:
       gap: 20px;
     }
     .facet-card {
-      background: var(--bg-card);
+      background: var(--bg-surface);
       border: 1px solid var(--border);
-      border-radius: 8px;
+      border-radius: var(--radius-md);
       padding: 14px;
-      margin-bottom: 16px;
+      margin-bottom: 14px;
     }
     .facet-card h4 {
-      font-size: 12px;
+      font-size: 11px;
       text-transform: uppercase;
       letter-spacing: 0.5px;
       color: var(--text-muted);
-      margin-bottom: 10px;
+      margin-bottom: 8px;
+      font-weight: 600;
     }
     .facet-item {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 4px 0;
-      font-size: 13px;
-      color: var(--text);
+      padding: 4px 6px;
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+      color: var(--text-secondary);
       cursor: pointer;
     }
-    .facet-item:hover { color: var(--sky); }
+    .facet-item:hover {
+      background: var(--bg-surface-elevated);
+      color: var(--accent-blue);
+    }
     .snippet-box {
-      background: var(--bg-input);
-      border-left: 3px solid var(--sky);
+      background: var(--bg-base);
+      border-left: 2px solid var(--accent-blue);
       padding: 6px 10px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 12px;
-      color: #cbd5e1;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 11px;
+      color: #c9d1d9;
       margin-top: 6px;
-      border-radius: 0 4px 4px 0;
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
     }
     /* Context View */
     .context-layout {
@@ -1242,52 +1321,60 @@ def index_html() -> str:
       gap: 20px;
     }
     .file-tree {
-      background: var(--bg-card);
+      background: var(--bg-surface);
       border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 10px;
+      border-radius: var(--radius-md);
+      padding: 8px;
       display: flex;
       flex-direction: column;
-      gap: 4px;
+      gap: 3px;
     }
     .file-item {
-      padding: 8px 12px;
-      border-radius: 6px;
+      padding: 7px 10px;
+      border-radius: var(--radius-sm);
       cursor: pointer;
-      color: var(--text-muted);
-      font-size: 13px;
+      color: var(--text-secondary);
+      font-size: 12px;
       display: flex;
       align-items: center;
       justify-content: space-between;
     }
-    .file-item:hover { background: var(--bg-card-hover); color: var(--text); }
-    .file-item.active { background: #0284c7; color: #fff; }
+    .file-item:hover { background: var(--bg-surface-elevated); color: var(--text-primary); }
+    .file-item.active { background: #1f6feb; color: #ffffff; }
+    .doc-tag {
+      font-family: monospace;
+      font-size: 10px;
+      padding: 1px 4px;
+      border-radius: 2px;
+      background: var(--border);
+      color: var(--text-secondary);
+    }
     .file-preview {
-      background: var(--bg-card);
+      background: var(--bg-surface);
       border: 1px solid var(--border);
-      border-radius: 8px;
+      border-radius: var(--radius-md);
       padding: 16px;
       display: flex;
       flex-direction: column;
       gap: 12px;
     }
     .file-content {
-      background: var(--bg-input);
+      background: var(--bg-base);
       border: 1px solid var(--border);
-      border-radius: 6px;
+      border-radius: var(--radius-md);
       padding: 14px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
       font-size: 12px;
-      color: #e2e8f0;
+      color: #e6edf3;
       white-space: pre-wrap;
-      max-height: 600px;
+      max-height: 620px;
       overflow-y: auto;
     }
     /* Modal */
     .modal-backdrop {
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0,0,0,0.7);
+      background: rgba(1, 4, 9, 0.75);
       backdrop-filter: blur(4px);
       display: none;
       align-items: center;
@@ -1296,18 +1383,18 @@ def index_html() -> str:
     }
     .modal-backdrop.open { display: flex; }
     .modal {
-      background: var(--bg-header);
-      border: 1px solid var(--border-light);
-      border-radius: 12px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
       width: 680px;
       max-width: 95vw;
       max-height: 90vh;
       display: flex;
       flex-direction: column;
-      box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5);
+      box-shadow: 0 24px 48px rgba(0,0,0,0.6);
     }
     .modal-header {
-      padding: 16px 20px;
+      padding: 14px 20px;
       border-bottom: 1px solid var(--border);
       display: flex;
       align-items: center;
@@ -1321,12 +1408,12 @@ def index_html() -> str:
       gap: 14px;
     }
     .modal-footer {
-      padding: 14px 20px;
+      padding: 12px 20px;
       border-top: 1px solid var(--border);
       display: flex;
       align-items: center;
       justify-content: flex-end;
-      gap: 10px;
+      gap: 8px;
     }
     .form-group {
       display: flex;
@@ -1334,34 +1421,46 @@ def index_html() -> str:
       gap: 6px;
     }
     .form-group label {
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 600;
-      color: var(--text-muted);
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
     }
     .form-row {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
       gap: 12px;
     }
     .conflict-alert {
-      background: #7f1d1d;
-      border: 1px solid #ef4444;
-      color: #fee2e2;
+      background: var(--accent-red-bg);
+      border: 1px solid rgba(248, 81, 73, 0.4);
+      color: #ff7b72;
       padding: 10px 14px;
-      border-radius: 6px;
-      font-size: 13px;
+      border-radius: var(--radius-md);
+      font-size: 12px;
       display: none;
       align-items: center;
       justify-content: space-between;
+    }
+    .conflict-label {
+      font-weight: 700;
+      font-family: monospace;
+      background: #da3633;
+      color: #ffffff;
+      padding: 1px 4px;
+      border-radius: 2px;
+      margin-right: 6px;
     }
   </style>
 </head>
 <body>
   <header>
-    <div class="brand">
-      <span>⚡ Agent Workspace</span>
-      <span class="brand-badge">Local Control</span>
-    </div>
+    <a href="#" class="brand">
+      <span class="brand-mark">WS</span>
+      <span class="brand-title">Agent Workspace</span>
+      <span class="brand-subtitle">Control</span>
+    </a>
     <div class="nav-tabs">
       <button class="tab-btn active" onclick="switchTab('board')">Kanban Board</button>
       <button class="tab-btn" onclick="switchTab('backlog')">Backlog</button>
@@ -1369,14 +1468,14 @@ def index_html() -> str:
       <button class="tab-btn" onclick="switchTab('context')">Context</button>
       <button class="tab-btn" onclick="switchTab('commits')">Commits</button>
     </div>
-    <div class="header-controls">
+    <div class="header-actions">
       <select id="project-select" onchange="onProjectChanged()">
         <option value="">Loading projects...</option>
       </select>
       <button class="btn btn-primary" onclick="openCreateTaskModal()">+ New Task</button>
-      <div class="auth-box">
-        <span id="status-dot" class="status-dot" title="Not connected"></span>
-        <input id="token-input" type="password" placeholder="Bearer token..." style="width: 140px;">
+      <div class="auth-cluster">
+        <span id="status-indicator" class="status-indicator" title="Disconnected"></span>
+        <input id="token-input" type="password" placeholder="Bearer token..." style="width: 130px;">
         <button class="btn btn-sm" onclick="saveToken()">Connect</button>
       </div>
     </div>
@@ -1390,15 +1489,13 @@ def index_html() -> str:
   <main>
     <!-- Board View -->
     <section id="view-board" class="view-panel active">
-      <div class="board-container" id="board-columns">
-        <!-- Injected via JS -->
-      </div>
+      <div class="board-container" id="board-columns"></div>
     </section>
 
     <!-- Backlog View -->
     <section id="view-backlog" class="view-panel">
-      <div style="display: flex; gap: 12px; margin-bottom: 16px;">
-        <input id="backlog-filter" type="text" placeholder="Filter backlog..." style="width: 300px;" oninput="renderBacklog()">
+      <div style="display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap;">
+        <input id="backlog-filter" type="text" placeholder="Filter backlog tasks..." style="width: 280px;" oninput="renderBacklog()">
         <select id="backlog-status" onchange="renderBacklog()">
           <option value="">All Statuses</option>
           <option value="backlog">Backlog</option>
@@ -1436,27 +1533,27 @@ def index_html() -> str:
 
     <!-- Search View -->
     <section id="view-search" class="view-panel">
-      <div style="display: flex; gap: 12px; margin-bottom: 16px;">
-        <input id="search-q" type="text" placeholder="Search tasks by title, body, criteria, labels..." style="flex: 1;" onkeydown="if(event.key==='Enter') executeSearch()">
+      <div style="display: flex; gap: 10px; margin-bottom: 14px;">
+        <input id="search-q" type="text" placeholder="Search tasks by title, description, criteria, tags, owner..." style="flex: 1;" onkeydown="if(event.key==='Enter') executeSearch()">
         <button class="btn btn-primary" onclick="executeSearch()">Search</button>
       </div>
       <div class="search-layout">
         <aside id="search-facets">
           <div class="facet-card">
-            <h4>By Status</h4>
+            <h4>Status</h4>
             <div id="facet-status"></div>
           </div>
           <div class="facet-card">
-            <h4>By Priority</h4>
+            <h4>Priority</h4>
             <div id="facet-priority"></div>
           </div>
           <div class="facet-card">
-            <h4>By Owner</h4>
+            <h4>Owner</h4>
             <div id="facet-owner"></div>
           </div>
         </aside>
         <div>
-          <div id="search-meta" style="color: var(--text-muted); font-size: 12px; margin-bottom: 12px;"></div>
+          <div id="search-meta" style="color: var(--text-secondary); font-size: 12px; margin-bottom: 12px;"></div>
           <div id="search-results" style="display: flex; flex-direction: column; gap: 10px;"></div>
         </div>
       </div>
@@ -1468,10 +1565,10 @@ def index_html() -> str:
         <div class="file-tree" id="context-file-list"></div>
         <div class="file-preview">
           <div style="display: flex; justify-content: space-between; align-items: center;">
-            <h3 id="context-file-path" style="font-size: 14px; color: var(--sky);">Select a file</h3>
-            <span id="context-file-size" style="font-size: 12px; color: var(--text-dim);"></span>
+            <h3 id="context-file-path" style="font-size: 13px; color: var(--accent-blue);">Select a file</h3>
+            <span id="context-file-size" style="font-size: 11px; color: var(--text-muted); font-family: monospace;"></span>
           </div>
-          <pre id="context-file-body" class="file-content">Select a context file from the left to view its contents.</pre>
+          <pre id="context-file-body" class="file-content">Select a context file from the list to view its contents.</pre>
         </div>
       </div>
     </section>
@@ -1482,10 +1579,11 @@ def index_html() -> str:
         <table>
           <thead>
             <tr>
-              <th>SHA</th>
+              <th>Commit</th>
               <th>Subject</th>
               <th>Author</th>
               <th>Date</th>
+              <th>Action</th>
             </tr>
           </thead>
           <tbody id="commit-rows"></tbody>
@@ -1498,12 +1596,12 @@ def index_html() -> str:
   <div id="modal-create" class="modal-backdrop">
     <div class="modal">
       <div class="modal-header">
-        <h3>Create New Task</h3>
-        <button class="btn btn-sm" onclick="closeModal('modal-create')">✕</button>
+        <h3 style="font-size: 14px;">Create New Task</h3>
+        <button class="btn btn-sm" onclick="closeModal('modal-create')">Close</button>
       </div>
       <div class="modal-body">
         <div class="form-group">
-          <label>Task Title *</label>
+          <label>Title *</label>
           <input id="create-title" type="text" placeholder="Concise task title...">
         </div>
         <div class="form-row">
@@ -1537,11 +1635,11 @@ def index_html() -> str:
         </div>
         <div class="form-group">
           <label>Acceptance Criteria (one per line)</label>
-          <textarea id="create-criteria" rows="3" placeholder="- User can view board&#10;- Status is persisted"></textarea>
+          <textarea id="create-criteria" rows="3" placeholder="- Feature is verified&#10;- Standards are checked"></textarea>
         </div>
         <div class="form-group">
-          <label>Description / Body (Markdown)</label>
-          <textarea id="create-body" rows="4" placeholder="Detailed requirements and context..."></textarea>
+          <label>Description (Markdown)</label>
+          <textarea id="create-body" rows="4" placeholder="Task description and context..."></textarea>
         </div>
       </div>
       <div class="modal-footer">
@@ -1555,15 +1653,18 @@ def index_html() -> str:
   <div id="modal-detail" class="modal-backdrop">
     <div class="modal">
       <div class="modal-header">
-        <div style="display: flex; align-items: center; gap: 10px;">
-          <h3 id="detail-task-id" style="font-family: monospace; color: var(--sky);">task_id</h3>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <h3 id="detail-task-id" style="font-family: monospace; font-size: 13px; color: var(--accent-blue);">task_id</h3>
           <span id="detail-task-source" class="pill">context</span>
         </div>
-        <button class="btn btn-sm" onclick="closeModal('modal-detail')">✕</button>
+        <button class="btn btn-sm" onclick="closeModal('modal-detail')">Close</button>
       </div>
       <div class="modal-body">
         <div id="detail-conflict" class="conflict-alert">
-          <span>⚠️ Revision Conflict: This task was modified concurrently by another writer.</span>
+          <div>
+            <span class="conflict-label">CONFLICT</span>
+            <span>This task was modified concurrently by another writer.</span>
+          </div>
           <button class="btn btn-sm" onclick="reloadCurrentTask()">Reload Latest</button>
         </div>
         <div class="form-group">
@@ -1602,7 +1703,7 @@ def index_html() -> str:
         <div class="form-row" style="align-items: center;">
           <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
             <input id="detail-blocked" type="checkbox" onchange="toggleBlockedReason()">
-            <span>Task is Blocked</span>
+            <span style="font-size: 12px; font-weight: 600; color: var(--accent-red);">Task is Blocked</span>
           </label>
           <input id="detail-blocked-reason" type="text" placeholder="Blocker reason..." style="display: none; flex: 1;">
         </div>
@@ -1611,15 +1712,15 @@ def index_html() -> str:
           <textarea id="detail-criteria" rows="3"></textarea>
         </div>
         <div class="form-group">
-          <label>Body (Markdown)</label>
+          <label>Description (Markdown)</label>
           <textarea id="detail-body" rows="4"></textarea>
         </div>
         <!-- Git Evidence Links -->
-        <div class="form-group" style="background: var(--bg-input); padding: 10px; border-radius: 6px; border: 1px solid var(--border);">
-          <label style="color: var(--sky);">Local Git Evidence Links</label>
+        <div class="form-group" style="background: var(--bg-base); padding: 12px; border-radius: var(--radius-md); border: 1px solid var(--border);">
+          <label style="color: var(--accent-purple);">Local Git Evidence Links</label>
           <div id="detail-git-links" style="display: flex; flex-direction: column; gap: 6px; margin-top: 6px;"></div>
           <div style="display: flex; gap: 8px; margin-top: 8px;">
-            <input id="attach-commit-sha" type="text" placeholder="Commit SHA (7-40 hex chars)..." style="flex: 1;">
+            <input id="attach-commit-sha" type="text" placeholder="Commit SHA (7-40 hex chars)..." style="flex: 1; font-family: monospace;">
             <button class="btn btn-sm btn-success" onclick="attachCommitToDetail()">Attach Link</button>
           </div>
         </div>
@@ -1657,9 +1758,9 @@ def index_html() -> str:
     }
 
     function setConnected(connected) {
-      const dot = document.getElementById("status-dot");
-      dot.className = "status-dot " + (connected ? "connected" : "");
-      dot.title = connected ? "Connected" : "Not connected";
+      const el = document.getElementById("status-indicator");
+      el.className = "status-indicator " + (connected ? "connected" : "");
+      el.title = connected ? "Connected" : "Disconnected";
     }
 
     function saveToken() {
@@ -1693,7 +1794,7 @@ def index_html() -> str:
         }
         if (res.status === 401) {
           setConnected(false);
-          showBanner("Authentication required. Please enter the startup Bearer token.", "warning");
+          showBanner("Authentication required. Please enter the Bearer token.", "warning");
         } else if (res.status === 200 || res.status === 201) {
           setConnected(true);
         }
@@ -1763,7 +1864,7 @@ def index_html() -> str:
       state.boardData = res.data;
 
       if (res.data.wip_warnings && res.data.wip_warnings.length > 0) {
-        showBanner("WIP Limit Exceeded: " + res.data.wip_warnings.join("; "), "warning");
+        showBanner("WIP Limit Warning: " + res.data.wip_warnings.join("; "), "warning");
       } else {
         hideBanner();
       }
@@ -1800,27 +1901,27 @@ def index_html() -> str:
 
     function createCardElement(task) {
       const el = document.createElement("div");
-      el.className = "card" + (task.blocked ? " blocked-card" : "");
+      el.className = "card" + (task.blocked ? " is-blocked" : "");
       const currIdx = STATUSES.indexOf(task.status);
 
       const labelsHtml = (task.labels || []).map(l => `<span class="pill">${escapeHtml(l)}</span>`).join("");
-      const gitBadge = task.git_links && task.git_links.length > 0 ? `<span class="pill">⎇ ${task.git_links.length}</span>` : "";
+      const gitBadge = task.git_links && task.git_links.length > 0 ? `<span class="pill pill-git">${task.git_links.length} ${task.git_links.length === 1 ? 'commit' : 'commits'}</span>` : "";
 
       el.innerHTML = `
-        <div class="card-meta">
+        <div class="card-top">
           <span class="badge badge-${task.priority}">${task.priority}</span>
           <span class="card-id">${task.id}</span>
         </div>
         <div class="card-title">${escapeHtml(task.title)}</div>
-        ${task.blocked ? `<div class="badge badge-blocked">⛔ Blocked: ${escapeHtml(task.blocked_reason || "")}</div>` : ''}
+        ${task.blocked ? `<div class="badge-blocked"><span class="badge-blocked-tag">BLOCKED</span> <span>${escapeHtml(task.blocked_reason || "")}</span></div>` : ''}
         ${labelsHtml ? `<div class="card-labels">${labelsHtml}</div>` : ''}
         <div class="card-footer">
           <span>@${escapeHtml(task.owner || "unassigned")}</span>
-          <div style="display:flex; gap:4px; align-items:center;">
+          <div style="display:flex; gap:6px; align-items:center;">
             ${gitBadge}
             <div class="card-actions">
-              ${currIdx > 0 ? `<button class="btn btn-sm" onclick="event.stopPropagation(); quickMove('${task.id}', '${STATUSES[currIdx - 1]}')">←</button>` : ''}
-              ${currIdx < STATUSES.length - 1 ? `<button class="btn btn-sm" onclick="event.stopPropagation(); quickMove('${task.id}', '${STATUSES[currIdx + 1]}')">→</button>` : ''}
+              ${currIdx > 0 ? `<button class="btn btn-icon btn-sm" title="Move to ${STATUSES[currIdx - 1]}" onclick="event.stopPropagation(); quickMove('${task.id}', '${STATUSES[currIdx - 1]}')">&larr;</button>` : ''}
+              ${currIdx < STATUSES.length - 1 ? `<button class="btn btn-icon btn-sm" title="Move to ${STATUSES[currIdx + 1]}" onclick="event.stopPropagation(); quickMove('${task.id}', '${STATUSES[currIdx + 1]}')">&rarr;</button>` : ''}
             </div>
           </div>
         </div>
@@ -1830,7 +1931,6 @@ def index_html() -> str:
     }
 
     async function quickMove(taskId, targetStatus) {
-      // First fetch detail to get latest revision
       const detailRes = await api("/api/projects/" + encodeURIComponent(state.project) + "/tasks/" + encodeURIComponent(taskId));
       if (!detailRes.ok) return;
       const rev = detailRes.data.task.revision;
@@ -1928,7 +2028,7 @@ def index_html() -> str:
       const container = document.getElementById("detail-git-links");
       container.innerHTML = "";
       if (links.length === 0) {
-        container.innerHTML = `<span style="font-size:12px; color:var(--text-dim);">No commits linked.</span>`;
+        container.innerHTML = `<span style="font-size:11px; color:var(--text-muted);">No commits linked.</span>`;
         return;
       }
       links.forEach(link => {
@@ -1936,7 +2036,7 @@ def index_html() -> str:
         item.style.display = "flex";
         item.style.alignItems = "center";
         item.style.justifyContent = "space-between";
-        item.style.fontSize = "12px";
+        item.style.fontSize = "11px";
         item.innerHTML = `
           <code>${link.repository}@${link.sha.substring(0, 8)}</code>
           <button class="btn btn-sm btn-danger" onclick="detachCommitFromDetail('${link.sha}')">Detach</button>
@@ -2068,8 +2168,8 @@ def index_html() -> str:
           <td><span class="badge badge-${t.priority}">${t.priority}</span></td>
           <td>@${escapeHtml(t.owner)}</td>
           <td>${(t.labels || []).map(l => `<span class="pill">${escapeHtml(l)}</span>`).join(" ")}</td>
-          <td>${t.blocked ? '<span class="badge badge-blocked">Blocked</span>' : '-'}</td>
-          <td style="color:var(--text-dim);">${t.updated_at ? t.updated_at.split("T")[0] : "-"}</td>
+          <td>${t.blocked ? '<span class="badge badge-urgent">Blocked</span>' : '-'}</td>
+          <td style="color:var(--text-muted); font-family:monospace;">${t.updated_at ? t.updated_at.split("T")[0] : "-"}</td>
         `;
         tr.onclick = () => openTaskDetail(t.id);
         tbody.appendChild(tr);
@@ -2086,20 +2186,18 @@ def index_html() -> str:
       const meta = document.getElementById("search-meta");
       meta.textContent = `Found ${res.data.total} tasks (scanned ${res.data.freshness.scanned_tasks} tasks at ${res.data.freshness.scanned_at})`;
 
-      // Render Facets
       const counts = res.data.counts;
       document.getElementById("facet-status").innerHTML = Object.entries(counts.by_status || {})
-        .map(([k, v]) => `<div class="facet-item"><span>${k}</span><span>${v}</span></div>`).join("");
+        .map(([k, v]) => `<div class="facet-item" onclick="filterByFacet('status', '${k}')"><span>${k}</span><span style="font-family:monospace;">${v}</span></div>`).join("");
       document.getElementById("facet-priority").innerHTML = Object.entries(counts.by_priority || {})
-        .map(([k, v]) => `<div class="facet-item"><span>${k}</span><span>${v}</span></div>`).join("");
+        .map(([k, v]) => `<div class="facet-item" onclick="filterByFacet('priority', '${k}')"><span>${k}</span><span style="font-family:monospace;">${v}</span></div>`).join("");
       document.getElementById("facet-owner").innerHTML = Object.entries(counts.by_owner || {})
-        .map(([k, v]) => `<div class="facet-item"><span>${k}</span><span>${v}</span></div>`).join("");
+        .map(([k, v]) => `<div class="facet-item"><span>${k}</span><span style="font-family:monospace;">${v}</span></div>`).join("");
 
-      // Render Results
       const list = document.getElementById("search-results");
       list.innerHTML = "";
       if (res.data.results.length === 0) {
-        list.innerHTML = `<p style="color:var(--text-dim);">No tasks matched your query.</p>`;
+        list.innerHTML = `<p style="color:var(--text-muted); font-size:12px;">No tasks matched your query.</p>`;
         return;
       }
       res.data.results.forEach(item => {
@@ -2107,18 +2205,23 @@ def index_html() -> str:
         const card = document.createElement("div");
         card.className = "card";
         card.innerHTML = `
-          <div class="card-meta">
+          <div class="card-top">
             <span class="badge badge-${t.priority}">${t.priority}</span>
             <span class="pill">${t.status}</span>
             <span class="card-id">${t.id}</span>
           </div>
           <div class="card-title">${escapeHtml(t.title)}</div>
-          ${item.matches && item.matches.length > 0 ? `<div style="font-size:11px; color:var(--sky);">Matches in: ${item.matches.join(", ")}</div>` : ''}
+          ${item.matches && item.matches.length > 0 ? `<div style="font-size:11px; color:var(--accent-blue);">Matched fields: ${item.matches.join(", ")}</div>` : ''}
           ${item.snippet ? `<div class="snippet-box">${escapeHtml(item.snippet)}</div>` : ''}
         `;
         card.onclick = () => openTaskDetail(t.id);
         list.appendChild(card);
       });
+    }
+
+    function filterByFacet(field, val) {
+      document.getElementById("search-q").value = val;
+      executeSearch();
     }
 
     // --- Context View ---
@@ -2133,7 +2236,7 @@ def index_html() -> str:
       state.contextFiles.forEach((file, idx) => {
         const item = document.createElement("div");
         item.className = "file-item" + (idx === 0 ? " active" : "");
-        item.innerHTML = `<span>📄 ${escapeHtml(file.path)}</span><span style="font-size:11px;">${file.bytes}B</span>`;
+        item.innerHTML = `<span><span class="doc-tag">DOC</span> ${escapeHtml(file.path)}</span><span style="font-size:11px; font-family:monospace;">${file.bytes}B</span>`;
         item.onclick = () => selectContextFile(idx);
         list.appendChild(item);
       });
@@ -2162,7 +2265,7 @@ def index_html() -> str:
       const tbody = document.getElementById("commit-rows");
       tbody.innerHTML = "";
       if (commits.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="4" style="color:var(--text-dim);">No commits found in local repository folder.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="5" style="color:var(--text-muted);">No commits found in local repository folder.</td></tr>`;
         return;
       }
       commits.forEach(c => {
@@ -2171,9 +2274,18 @@ def index_html() -> str:
           <td><code>${c.short_sha}</code></td>
           <td style="font-weight:500;">${escapeHtml(c.subject)}</td>
           <td>${escapeHtml(c.author)}</td>
-          <td style="color:var(--text-dim);">${c.date.split("T")[0]}</td>
+          <td style="color:var(--text-muted); font-family:monospace;">${c.date.split("T")[0]}</td>
+          <td><button class="btn btn-sm" onclick="copyToClipboard('${c.sha}', this)">Copy SHA</button></td>
         `;
         tbody.appendChild(tr);
+      });
+    }
+
+    function copyToClipboard(text, btn) {
+      navigator.clipboard.writeText(text).then(() => {
+        const original = btn.textContent;
+        btn.textContent = "Copied";
+        setTimeout(() => { btn.textContent = original; }, 1500);
       });
     }
 
@@ -2233,7 +2345,12 @@ def serve(root: str | Path, host: str, port: int, token: str | None = None) -> N
     print(f"Agent Workspace Control: http://{actual_host}:{actual_port}/")
     print(f"Open in browser:         http://{actual_host}:{actual_port}/?token={state.token}")
     print(f"Bearer token:            {state.token}")
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nStopping Agent Workspace Control server...")
+    finally:
+        server.server_close()
 
 
 def _context_dir(root: Path) -> str:
@@ -2411,6 +2528,8 @@ def main(argv: list[str]) -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        raise SystemExit(0)
     except WebError as error:
         print(f"workspace web: {error}", file=sys.stderr)
         raise SystemExit(1)
