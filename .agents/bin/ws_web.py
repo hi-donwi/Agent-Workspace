@@ -82,8 +82,10 @@ def route(
 ) -> tuple[int, str, bytes]:
     parsed = urlparse(raw_path)
     path = parsed.path
-    if method not in ("GET", "HEAD", "POST", "PUT", "DELETE"):
+    if method not in ("GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS"):
         raise WebError(f"unsupported method: {method}")
+    if method == "OPTIONS":
+        return HTTPStatus.NO_CONTENT, "text/plain", b""
     if method in ("GET", "HEAD") and path == "/":
         return HTTPStatus.OK, "text/html; charset=utf-8", index_html().encode()
     _require_token(state, headers)
@@ -2691,9 +2693,22 @@ def serve(root: str | Path, host: str, port: int, token: str | None = None) -> N
             self.send_header("Content-Type", content_type)
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(response_body)))
+            self._send_cors_headers()
             self.end_headers()
             if method != "HEAD":
                 self.wfile.write(response_body)
+
+        def _send_cors_headers(self) -> None:
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD")
+            self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, If-Match")
+            self.send_header("Access-Control-Max-Age", "86400")
+
+        def do_OPTIONS(self) -> None:  # noqa: N802 - stdlib callback name
+            self.send_response(HTTPStatus.NO_CONTENT)
+            self._send_cors_headers()
+            self.send_header("Content-Length", "0")
+            self.end_headers()
 
         def do_HEAD(self) -> None:  # noqa: N802 - stdlib callback name
             self._handle("HEAD")
