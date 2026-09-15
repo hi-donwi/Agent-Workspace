@@ -110,6 +110,26 @@ class WebControlReadFlow(unittest.TestCase):
         payload = json.loads(body)
         self.assertEqual(payload["projects"][0]["key"], "workspace")
 
+    def test_head_method_supported_on_root_and_api(self):
+        # Root path supports HEAD without token
+        status, content_type, body = route(self.state, "HEAD", "/", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(content_type, "text/html; charset=utf-8")
+        self.assertTrue(len(body) > 0)
+
+        # API requires bearer token on HEAD
+        with self.assertRaises(Unauthorized):
+            route(self.state, "HEAD", "/api/projects", {})
+
+        status, content_type, body = route(
+            self.state,
+            "HEAD",
+            "/api/projects",
+            {"authorization": "Bearer test-token"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(content_type, "application/json; charset=utf-8")
+
     def test_project_context_returns_context_files_and_handoff(self):
         payload = project_context(self.state, "workspace")
 

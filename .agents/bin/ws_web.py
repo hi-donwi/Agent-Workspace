@@ -81,12 +81,12 @@ def route(
 ) -> tuple[int, str, bytes]:
     parsed = urlparse(raw_path)
     path = parsed.path
-    if method not in ("GET", "POST", "PUT", "DELETE"):
+    if method not in ("GET", "HEAD", "POST", "PUT", "DELETE"):
         raise WebError(f"unsupported method: {method}")
-    if method == "GET" and path == "/":
+    if method in ("GET", "HEAD") and path == "/":
         return HTTPStatus.OK, "text/html; charset=utf-8", index_html().encode()
     _require_token(state, headers)
-    if method == "GET":
+    if method in ("GET", "HEAD"):
         if path == "/api/projects":
             return _json({"projects": [_project_to_dict(project) for project in load_projects(state)]})
         prefix = "/api/projects/"
@@ -2322,8 +2322,13 @@ def serve(root: str | Path, host: str, port: int, token: str | None = None) -> N
             self.send_response(int(status))
             self.send_header("Content-Type", content_type)
             self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(response_body)))
             self.end_headers()
-            self.wfile.write(response_body)
+            if method != "HEAD":
+                self.wfile.write(response_body)
+
+        def do_HEAD(self) -> None:  # noqa: N802 - stdlib callback name
+            self._handle("HEAD")
 
         def do_GET(self) -> None:  # noqa: N802 - stdlib callback name
             self._handle("GET")
