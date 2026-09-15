@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import mimetypes
 import os
 from pathlib import Path
 import re
@@ -23,6 +24,7 @@ import subprocess
 import sys
 from urllib.parse import parse_qs, unquote, urlparse
 
+import ws_state
 from ws_tasks import GitLink, TaskConflict, TaskError, TaskRecord, load_source, load_tasks, write_task_document
 
 
@@ -63,14 +65,46 @@ class WorkspaceWebState:
     root: Path
     context: Path
     token: str
+    runtime: str = "vanilla"
 
 
-def build_state(root: str | Path, *, token: str | None = None) -> WorkspaceWebState:
+def build_state(
+    root: str | Path,
+    *,
+    token: str | None = None,
+    runtime: str = "vanilla",
+) -> WorkspaceWebState:
     base = Path(root).resolve()
     context = base / _context_dir(base)
     if not (context / "registry.tsv").is_file():
         raise WebError("context registry not found")
-    return WorkspaceWebState(base, context.resolve(), token or secrets.token_urlsafe(32))
+    return WorkspaceWebState(base, context.resolve(), token or secrets.token_urlsafe(32), runtime=runtime)
+
+
+def _serve_static_uidl(state: WorkspaceWebState, subpath: str) -> tuple[int, str, bytes]:
+    dist_dir = (state.root / "projects/donwi/public/UIDL-Runtime/apps/workspace-control/dist").resolve()
+    if not dist_dir.is_dir():
+        raise NotFound("UIDL runtime static distribution not found. Run 'npm run build:workspace-control' in projects/donwi/public/UIDL-Runtime.")
+
+    clean_subpath = subpath.lstrip("/")
+    if not clean_subpath:
+        clean_subpath = "index.html"
+
+    target_path = (dist_dir / clean_subpath).resolve()
+    try:
+        target_path.relative_to(dist_dir)
+    except ValueError:
+        raise NotFound(f"invalid static path: {subpath}")
+
+    if not target_path.is_file():
+        raise NotFound(f"static file not found: {subpath}")
+
+    mime, _ = mimetypes.guess_type(str(target_path))
+    content_type = mime or "application/octet-stream"
+    if content_type.startswith("text/") or content_type in ("application/javascript", "application/json"):
+        content_type += "; charset=utf-8"
+
+    return HTTPStatus.OK, content_type, target_path.read_bytes()
 
 
 def route(
@@ -86,8 +120,17 @@ def route(
         raise WebError(f"unsupported method: {method}")
     if method == "OPTIONS":
         return HTTPStatus.NO_CONTENT, "text/plain", b""
-    if method in ("GET", "HEAD") and path == "/":
-        return HTTPStatus.OK, "text/html; charset=utf-8", index_html().encode()
+    if method in ("GET", "HEAD"):
+        if path.startswith("/uidl"):
+            rel = path[len("/uidl") :]
+            return _serve_static_uidl(state, rel)
+        if state.runtime == "uidl":
+            if path == "/":
+                return _serve_static_uidl(state, "index.html")
+            if path.startswith("/assets/"):
+                return _serve_static_uidl(state, path)
+        if path == "/":
+            return HTTPStatus.OK, "text/html; charset=utf-8", index_html().encode()
     _require_token(state, headers)
     if method in ("GET", "HEAD"):
         if path == "/api/projects":
@@ -124,6 +167,11 @@ def route(
             return _json(get_project_activity(state, key, month=month))
     elif method == "POST":
         prefix = "/api/projects/"
+        clock_suffix = "/clock"
+        if path.startswith(prefix) and path.endswith(clock_suffix):
+            key = unquote(path[len(prefix) : -len(clock_suffix)])
+            payload = _parse_json_body(body)
+            return handle_project_clock(state, key, payload)
         suffix = "/tasks"
         if path.startswith(prefix) and path.endswith(suffix):
             key = unquote(path[len(prefix) : -len(suffix)])
@@ -871,6 +919,98 @@ def get_project_activity(
         },
         "usage": usage_info,
     }
+
+
+def handle_project_clock(
+    state: WorkspaceWebState,
+    project_key: str,
+    payload: dict[str, object],
+) -> tuple[int, str, bytes]:
+    summary = _project_summary(state, project_key)
+    action = str(payload.get("action") or "").strip().lower()
+    kind = str(payload.get("kind") or "human").strip().lower()
+    if kind not in ("human", "agent"):
+        raise WebError("kind must be 'human' or 'agent'")
+    if action not in ("in", "out"):
+        raise WebError("action must be 'in' or 'out'")
+
+    note = str(payload.get("note") or "").strip()
+    works_dir = state.context / "works"
+    works_dir.mkdir(parents=True, exist_ok=True)
+
+    actor = str(payload.get("actor") or "").strip()
+    if not actor:
+        try:
+            actor = subprocess.check_output(
+                ["git", "config", "--get", "user.email"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+        except Exception:
+            actor = os.environ.get("USER", "web-user")
+        if not actor:
+            actor = "web-user"
+    actor_slug = re.sub(r"[^a-zA-Z0-9_-]", "-", actor).strip("-") or "web-user"
+
+    tool = str(payload.get("tool") or ("web-control" if kind == "human" else "agent")).strip()
+    session = str(payload.get("session") or "default").strip()
+    session_slug = re.sub(r"[^a-zA-Z0-9_-]", "-", session).strip("-") or "default"
+
+    if kind == "human":
+        open_filename = works_dir / f".open-human-{actor_slug}.json"
+    else:
+        open_filename = works_dir / f".open-agent-{actor_slug}-{tool}-{session_slug}.json"
+
+    if action == "in":
+        if open_filename.exists():
+            try:
+                rec = json.loads(open_filename.read_text())
+                active_proj = rec.get("project", "")
+                raise Conflict(f"already clocked in on project '{active_proj}' since {rec.get('start')}")
+            except (json.JSONDecodeError, OSError):
+                pass
+        try:
+            ws_state.clock_in(open_filename, summary.key, actor, tool, note)
+        except Exception as exc:
+            raise WebError(f"failed to clock in: {exc}")
+
+        return _json({
+            "ok": True,
+            "action": "in",
+            "kind": kind,
+            "project": summary.key,
+            "actor": actor,
+            "tool": tool,
+            "message": f"Clocked in {kind} on {summary.key}",
+        })
+    else:
+        target_file = open_filename
+        if not target_file.exists():
+            matching = []
+            for candidate in works_dir.glob(f".open-{kind}-*.json"):
+                try:
+                    data = json.loads(candidate.read_text())
+                    if data.get("project") == summary.key:
+                        matching.append(candidate)
+                except Exception:
+                    pass
+            if not matching:
+                raise NotFound(f"not currently clocked in for {kind} on project '{summary.key}'")
+            target_file = matching[0]
+
+        try:
+            ws_state.clock_out(target_file, note)
+        except Exception as exc:
+            raise WebError(f"failed to clock out: {exc}")
+
+        return _json({
+            "ok": True,
+            "action": "out",
+            "kind": kind,
+            "project": summary.key,
+            "message": f"Clocked out {kind} on {summary.key}; session recorded",
+        })
+
 
 
 def get_project_commits(state: WorkspaceWebState, project: str, limit: int = 20) -> list[dict[str, str]]:
@@ -1824,6 +1964,8 @@ def index_html() -> str:
         <div style="display: flex; gap: 12px; align-items: center;">
           <h2 style="font-size: 15px; font-weight: 600;">Activity & Metrics</h2>
           <span id="activity-clock-pill" class="badge" style="display: none;"></span>
+          <button id="btn-clock-in" class="btn btn-sm btn-primary" onclick="clockAction('in')">Clock In</button>
+          <button id="btn-clock-out" class="btn btn-sm" onclick="clockAction('out')" style="display: none;">Clock Out</button>
         </div>
         <div style="display: flex; gap: 8px; align-items: center;">
           <label for="activity-month" style="font-size: 12px; color: var(--text-secondary);">Month:</label>
@@ -2592,20 +2734,30 @@ def index_html() -> str:
       document.getElementById("stat-token-counts").textContent = inTok + " in / " + outTok + " out";
 
       const pill = document.getElementById("activity-clock-pill");
+      const btnIn = document.getElementById("btn-clock-in");
+      const btnOut = document.getElementById("btn-clock-out");
       if (data.active_clocks) {
         if (data.active_clocks.human) {
           pill.style.display = "inline-block";
           pill.className = "badge badge-primary";
           pill.textContent = "HUMAN CLOCKED IN: " + (data.active_clocks.human.actor || "active");
+          if (btnIn) btnIn.style.display = "none";
+          if (btnOut) btnOut.style.display = "inline-block";
         } else if (data.active_clocks.agent) {
           pill.style.display = "inline-block";
           pill.className = "badge badge-success";
           pill.textContent = "AGENT ACTIVE: " + (data.active_clocks.agent.tool || "agent");
+          if (btnIn) btnIn.style.display = "inline-block";
+          if (btnOut) btnOut.style.display = "none";
         } else {
           pill.style.display = "none";
+          if (btnIn) btnIn.style.display = "inline-block";
+          if (btnOut) btnOut.style.display = "none";
         }
       } else {
         pill.style.display = "none";
+        if (btnIn) btnIn.style.display = "inline-block";
+        if (btnOut) btnOut.style.display = "none";
       }
 
       const tbody = document.getElementById("activity-rows");
@@ -2651,6 +2803,27 @@ def index_html() -> str:
       });
     }
 
+    async function clockAction(action) {
+      if (!state.project) return;
+      const promptMsg = action === "in" ? "Optional note for clock in:" : "Optional note for clock out:";
+      const note = prompt(promptMsg, "");
+      if (note === null) return;
+      try {
+        const res = await api("/api/projects/" + encodeURIComponent(state.project) + "/clock", {
+          method: "POST",
+          body: JSON.stringify({ action: action, kind: "human", note: note.trim() }),
+        });
+        if (res.ok) {
+          showBanner(res.data.message || ("Clock " + action + " succeeded"), "success");
+          loadActivity();
+        } else {
+          showBanner(res.error || "Clock action failed", "danger");
+        }
+      } catch (err) {
+        showBanner("Clock action failed: " + err.message, "danger");
+      }
+    }
+
     function copyToClipboard(text, btn) {
       navigator.clipboard.writeText(text).then(() => {
         const original = btn.textContent;
@@ -2677,8 +2850,14 @@ def index_html() -> str:
 """
 
 
-def serve(root: str | Path, host: str, port: int, token: str | None = None) -> None:
-    state = build_state(root, token=token)
+def serve(
+    root: str | Path,
+    host: str,
+    port: int,
+    token: str | None = None,
+    runtime: str = "vanilla",
+) -> None:
+    state = build_state(root, token=token, runtime=runtime)
 
     class Handler(BaseHTTPRequestHandler):
         def _handle(self, method: str) -> None:
@@ -2908,8 +3087,9 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=0, type=int)
     parser.add_argument("--token")
+    parser.add_argument("--runtime", choices=["vanilla", "uidl"], default="vanilla", help="Web UI runtime (default: vanilla)")
     args = parser.parse_args(argv)
-    serve(args.root, args.host, args.port, args.token)
+    serve(args.root, args.host, args.port, args.token, runtime=args.runtime)
     return 0
 
 

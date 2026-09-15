@@ -901,14 +901,131 @@ class WebControlReadFlow(unittest.TestCase):
                 {"authorization": "Bearer test-token"},
             )
 
-    def test_project_activity_missing_project_returns_not_found(self):
+    def test_clock_in_and_clock_out_human(self):
+        # 1. Clock in human
+        status, content_type, body = route(
+            self.state,
+            "POST",
+            "/api/projects/workspace/clock",
+            {"authorization": "Bearer test-token"},
+            body=json.dumps({"action": "in", "kind": "human", "actor": "tester", "note": "working on test"}).encode(),
+        )
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["action"], "in")
+        self.assertEqual(data["kind"], "human")
+        self.assertEqual(data["project"], "workspace")
+
+        # Verify open file exists
+        works_dir = self.context / "works"
+        open_file = works_dir / ".open-human-tester.json"
+        self.assertTrue(open_file.exists())
+
+        # 2. Clock out human
+        status, content_type, body = route(
+            self.state,
+            "POST",
+            "/api/projects/workspace/clock",
+            {"authorization": "Bearer test-token"},
+            body=json.dumps({"action": "out", "kind": "human", "actor": "tester", "note": "finished test"}).encode(),
+        )
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["action"], "out")
+        self.assertFalse(open_file.exists())
+
+    def test_clock_in_already_clocked_in_raises_conflict(self):
+        # Clock in first
+        route(
+            self.state,
+            "POST",
+            "/api/projects/workspace/clock",
+            {"authorization": "Bearer test-token"},
+            body=json.dumps({"action": "in", "kind": "human", "actor": "busy-person"}).encode(),
+        )
+        # Attempting second clock-in on same actor raises Conflict
+        with self.assertRaises(Conflict):
+            route(
+                self.state,
+                "POST",
+                "/api/projects/workspace/clock",
+                {"authorization": "Bearer test-token"},
+                body=json.dumps({"action": "in", "kind": "human", "actor": "busy-person"}).encode(),
+            )
+        # Clean up
+        route(
+            self.state,
+            "POST",
+            "/api/projects/workspace/clock",
+            {"authorization": "Bearer test-token"},
+            body=json.dumps({"action": "out", "kind": "human", "actor": "busy-person"}).encode(),
+        )
+
+    def test_clock_out_not_clocked_in_raises_not_found(self):
         with self.assertRaises(NotFound):
             route(
                 self.state,
-                "GET",
-                "/api/projects/nonexistent/activity",
+                "POST",
+                "/api/projects/workspace/clock",
                 {"authorization": "Bearer test-token"},
+                body=json.dumps({"action": "out", "kind": "human", "actor": "ghost-user"}).encode(),
             )
+
+    def test_clock_invalid_action_or_kind_raises_weberror(self):
+        with self.assertRaises(WebError):
+            route(
+                self.state,
+                "POST",
+                "/api/projects/workspace/clock",
+                {"authorization": "Bearer test-token"},
+                body=json.dumps({"action": "invalid_action", "kind": "human"}).encode(),
+            )
+        with self.assertRaises(WebError):
+            route(
+                self.state,
+                "POST",
+                "/api/projects/workspace/clock",
+                {"authorization": "Bearer test-token"},
+                body=json.dumps({"action": "in", "kind": "alien"}).encode(),
+            )
+
+    def test_static_uidl_serving(self):
+        # Create mock dist directory in state.root
+        dist_dir = self.root / "projects/donwi/public/UIDL-Runtime/apps/workspace-control/dist"
+        dist_dir.mkdir(parents=True, exist_ok=True)
+        (dist_dir / "index.html").write_text("<!doctype html><html><body>Mock UIDL</body></html>")
+        assets_dir = dist_dir / "assets"
+        assets_dir.mkdir(parents=True, exist_ok=True)
+        (assets_dir / "mock.js").write_text("console.log('mock');")
+
+        # Test GET /uidl/
+        status, content_type, body = route(self.state, "GET", "/uidl/", {})
+        self.assertEqual(status, 200)
+        self.assertIn("text/html", content_type)
+        self.assertIn(b"Mock UIDL", body)
+
+        # Test GET /uidl/assets/mock.js
+        status, content_type, body = route(self.state, "GET", "/uidl/assets/mock.js", {})
+        self.assertEqual(status, 200)
+        self.assertIn("javascript", content_type)
+        self.assertIn(b"console.log", body)
+
+        # Test path traversal prevention
+        with self.assertRaises(NotFound):
+            route(self.state, "GET", "/uidl/../../secret.txt", {})
+
+    def test_uidl_runtime_mode_serves_uidl_at_root(self):
+        dist_dir = self.root / "projects/donwi/public/UIDL-Runtime/apps/workspace-control/dist"
+        dist_dir.mkdir(parents=True, exist_ok=True)
+        (dist_dir / "index.html").write_text("<!doctype html><html><body>UIDL Root</body></html>")
+
+        uidl_state = build_state(self.root, token="test-token", runtime="uidl")
+        status, content_type, body = route(uidl_state, "GET", "/", {})
+        self.assertEqual(status, 200)
+        self.assertIn("text/html", content_type)
+        self.assertIn(b"UIDL Root", body)
 
 
 if __name__ == "__main__":
