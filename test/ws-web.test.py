@@ -130,6 +130,11 @@ class WebControlReadFlow(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(content_type, "application/json; charset=utf-8")
 
+    def test_options_preflight_supported_without_auth(self):
+        status, _content_type, body = route(self.state, "OPTIONS", "/api/projects", {})
+        self.assertEqual(status, 204)
+        self.assertEqual(body, b"")
+
     def test_project_context_returns_context_files_and_handoff(self):
         payload = project_context(self.state, "workspace")
 
