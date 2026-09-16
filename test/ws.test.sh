@@ -119,6 +119,11 @@ check_fails "a second context init refuses" ws context init
 git -C "$WS" add -A >/dev/null 2>&1
 equals "$(git -C "$WS" ls-files context | wc -l | tr -d ' ')" "0" "context is never tracked by the framework"
 check "ws web help is available" ws web --help
+check "ws context sync is a no-op without a remote" ws context sync
+OUT="$(ws doctor --ci 2>&1 || true)"
+printf '%s' "$OUT" | grep -q "private-local" \
+  && ok "doctor reports a context with no remote as private-local" \
+  || bad "doctor reports a context with no remote as private-local" "$OUT"
 
 section "clients: a client may span several projects"
 contains "$WS/context/registry.tsv" "client" "the registry header has a client column"

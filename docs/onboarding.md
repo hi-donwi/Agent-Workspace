@@ -21,10 +21,11 @@ never has to match anyone else's; `ws where` resolves the root from anywhere.
 Runs and log entries are attributed to you by the local part of your git email. If that
 gives an awkward handle, set your own once: `export WS_USER=doni` in your shell profile.
 
-`ws doctor` must be green before you write anything. It checks Java 21, git, Docker (needed
-for Testcontainers), that no product repo has leaked into this repo's git index, that
-`.local/` is ignored, that no tracked file carries one machine's absolute paths, and that
-each product repo still has its pointer, its exclude entries, and its commit guard.
+`ws doctor` must be green before you write anything. It checks git, isolation (no product
+repo leaked into this index, `.local/` ignored, no machine-absolute paths tracked), and
+that each product repo still has its pointer, exclude entries, and commit guard. Java 21
+and Docker are required only when the `java` pack is enabled. A context repository with
+no remote is valid: doctor reports it as private-local.
 
 **Open your editor at that root**, not at `projects/<x>`. Agents find rules by walking up
 the directory tree; opening the root makes standards and skills load while the product repo
