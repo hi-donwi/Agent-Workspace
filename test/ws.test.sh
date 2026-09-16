@@ -53,6 +53,9 @@ git config --global user.name  "Test Runner"
 git config --global init.defaultBranch main
 git config --global commit.gpgsign false
 export WS_USER=tester WS_AGENT=testagent
+# Runtime session ids from the host agent must not leak into the suite.
+unset WS_SESSION_ID GROK_SESSION_ID GROK_SESSION CLAUDE_SESSION_ID CODEX_THREAD_ID CURSOR_TRACE_ID
+export -n WS_SESSION_ID GROK_SESSION_ID GROK_SESSION CLAUDE_SESSION_ID CODEX_THREAD_ID CURSOR_TRACE_ID 2>/dev/null || true
 
 # ── a workspace built from this repository's framework files ──────────────────
 WS="$TMP/workspace"
@@ -305,6 +308,42 @@ printf '%s' "$HOURS" | grep -qiE '^\s*combined|total across' \
 exists "$WS/context/works/rollup/$(date +%Y-%m).json" "clocking out writes the rollup"
 contains "$WS/context/works/rollup/$(date +%Y-%m).json" '"human_hours"' "rollup keeps the two apart"
 
+section "parallel agent sessions and worktrees"
+WS_SESSION_ID=alpha check "two agents can clock in with distinct WS_SESSION_ID" \
+  ws agent in api "alpha session"
+WS_SESSION_ID=beta check "the second session is independent" \
+  ws agent in api "beta session"
+exists "$WS/context/works/.open-agent-tester-testagent-alpha.json" "alpha clock file"
+exists "$WS/context/works/.open-agent-tester-testagent-beta.json" "beta clock file"
+WS_SESSION_ID=alpha check "alpha clocks out without closing beta" ws agent out
+exists "$WS/context/works/.open-agent-tester-testagent-beta.json" "beta still open"
+WS_SESSION_ID=beta check "beta clocks out" ws agent out
+
+DOC="$(ws doctor --ci 2>&1 || true)"
+printf '%s' "$DOC" | grep -q "session id is 'default'" \
+  && bad "doctor does not warn about default when no default clock is open" \
+  || ok "doctor does not warn about default when no default clock is open"
+
+check "default session clock-in still works" ws agent in api "legacy default"
+DOC="$(ws doctor --ci 2>&1 || true)"
+printf '%s' "$DOC" | grep -q "session id is 'default'" \
+  && ok "doctor warns when the agent session id is default" \
+  || bad "doctor warns when the agent session id is default" "$DOC"
+check "default session clock-out" ws agent out
+
+WS_SESSION_ID=wt1 check "ws agent start creates a worktree" ws agent start api "isolated"
+[ -e "$WS/.local/worktrees/api/wt1/.git" ] && ok "worktree path exists" || bad "worktree path exists" "missing .local/worktrees/api/wt1"
+gdir="$(git -C "$PROD" rev-parse --path-format=absolute --git-common-dir)"
+exists "$gdir/ws-agent-sessions/wt1.lock" "session lock is recorded"
+START_OUT="$(WS_SESSION_ID=wt1 ws agent start api "reuse" 2>&1)"
+printf '%s' "$START_OUT" | grep -q "reusing worktree" \
+  && ok "ws agent start reuses an existing worktree" \
+  || bad "ws agent start reuses an existing worktree" "$START_OUT"
+WS_SESSION_ID=wt1 check "ws agent stop drops the lock and clocks out" ws agent stop
+not_exists "$gdir/ws-agent-sessions/wt1.lock" "session lock is removed"
+[ -e "$WS/.local/worktrees/api/wt1" ] && ok "worktree is kept after stop" \
+  || bad "worktree is kept after stop"
+
 section "overlap is merged, not summed"
 # Two agent sessions covering the same hour are one hour of elapsed work.
 M="$(date +%Y-%m)"; F="$WS/context/works/agent/overlap/$M.jsonl"; mkdir -p "${F%/*}"
@@ -346,6 +385,15 @@ check "ws hooks remove" ws hooks remove
 not_exists "$WS/.claude/settings.json" "the hooks are removed again"
 
 section "log and route"
+# Preserve an existing Current focus so parallel agents cannot stomp it.
+sed -i.bak 's/^- \*\*Current focus:\*\*.*/- **Current focus:** keep this line/' \
+  "$WS/context/memory/projects/api/active.md" && rm -f "$WS/context/memory/projects/api/active.md.bak"
+check "ws run creates a run directory" ws run api "do the isolated thing"
+contains "$WS/context/memory/projects/api/active.md" "keep this line" \
+  "ws run does not overwrite Current focus"
+contains "$WS/context/memory/projects/api/active.md" "do-the-isolated-thing" \
+  "ws run appends the new run to the Active runs table"
+
 check "ws log appends a milestone" ws log api "did a thing"
 contains "$WS/context/memory/projects/api/log.md" "did a thing" "the milestone is in the log"
 contains "$WS/context/memory/projects/api/log.md" "tester" "it is attributed to a person"
