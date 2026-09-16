@@ -149,6 +149,14 @@ def route(
             return _json(workspace_overview(state))
         if path == "/api/health":
             return _json(workspace_health(state))
+        if path == "/api/clients":
+            return _json(list_clients(state))
+        if path == "/api/plans":
+            query_params = parse_qs(parsed.query)
+            project_filter = query_params.get("project", [None])[0]
+            return _json(list_plans(state, project_filter))
+        if path == "/api/settings":
+            return _json(workspace_settings(state))
         if path == "/api/projects":
             return _json({"projects": [_project_to_dict(project) for project in load_projects(state)]})
         prefix = "/api/projects/"
@@ -1232,6 +1240,90 @@ def remove_task_git_link(
     return _json({"project": _project_to_dict(summary), "task": _task_detail_payload(state, saved)}, status=HTTPStatus.OK)
 
 
+def _parse_conf(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not path.is_file():
+        return values
+    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
+def _first_heading(text: str, fallback: str) -> str:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("# "):
+            return stripped[2:].strip() or fallback
+    return fallback
+
+
+def list_clients(state: WorkspaceWebState) -> dict[str, object]:
+    projects = load_projects(state)
+    grouped: dict[str, list[dict[str, str]]] = {}
+    for project in projects:
+        grouped.setdefault(project.client or "(none)", []).append(_project_to_dict(project))
+    clients_dir = state.context / "clients"
+    keys = set(grouped)
+    if clients_dir.is_dir():
+        keys.update(path.name for path in clients_dir.iterdir() if path.is_dir() and not path.name.startswith("."))
+    clients = []
+    for key in sorted(keys):
+        summary = ""
+        client_md = clients_dir / key / "client.md"
+        if client_md.is_file():
+            text = client_md.read_text(encoding="utf-8", errors="replace")
+            summary = text[:600]
+        clients.append({"key": key, "summary": summary, "projects": grouped.get(key, [])})
+    return {"clients": clients}
+
+
+def list_plans(state: WorkspaceWebState, project: str | None = None) -> dict[str, object]:
+    if project and not PROJECT_RE.fullmatch(project):
+        raise NotFound("project not found")
+    runs_root = state.context / "runs"
+    plans: list[dict[str, object]] = []
+    if not runs_root.is_dir():
+        return {"plans": plans}
+    for proj_dir in sorted(runs_root.iterdir()):
+        if not proj_dir.is_dir() or proj_dir.name.startswith("."):
+            continue
+        if project and proj_dir.name != project:
+            continue
+        for run_dir in sorted(proj_dir.iterdir(), key=lambda item: item.stat().st_mtime, reverse=True):
+            plan = run_dir / "plan.md"
+            if not plan.is_file():
+                continue
+            text = plan.read_text(encoding="utf-8", errors="replace")
+            plans.append(
+                {
+                    "project": proj_dir.name,
+                    "run": run_dir.name,
+                    "path": str(plan.relative_to(state.context)),
+                    "title": _first_heading(text, run_dir.name),
+                    "body": text[:8000],
+                    "updated": datetime.fromtimestamp(plan.stat().st_mtime, tz=timezone.utc).isoformat(),
+                }
+            )
+    return {"plans": plans}
+
+
+def workspace_settings(state: WorkspaceWebState) -> dict[str, object]:
+    conf = _parse_conf(state.root / "workspace.conf")
+    allowed = ("org_name", "org_key", "packs", "context_dir", "context_remote", "default_project")
+    identity = {key: conf.get(key, "") for key in allowed}
+    return {
+        "identity": identity,
+        "root_name": state.root.name,
+        "context_local": not bool(_git_origin(state.context)),
+        "runtime": state.runtime,
+        "loopback": True,
+    }
+
+
 def _git_origin(path: Path) -> str:
     try:
         completed = subprocess.run(
@@ -1992,6 +2084,19 @@ def index_html() -> str:
     .run-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px 14px; margin-bottom: 10px; }
     .run-card h4 { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--accent-blue); }
     .run-card pre { margin-top: 8px; white-space: pre-wrap; color: var(--text-secondary); font-size: 12px; }
+    .md-body { font-size: 13px; line-height: 1.55; color: var(--text-primary); }
+    .md-body h1, .md-body h2, .md-body h3 { margin: 0.8em 0 0.4em; }
+    .md-body h1 { font-size: 18px; }
+    .md-body h2 { font-size: 15px; }
+    .md-body h3 { font-size: 13px; color: var(--text-secondary); }
+    .md-body p { margin: 0.5em 0; }
+    .md-body ul, .md-body ol { margin: 0.4em 0 0.4em 1.3em; }
+    .md-body code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: var(--bg-base); padding: 1px 4px; border-radius: 3px; }
+    .md-body pre { background: var(--bg-base); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px; overflow: auto; }
+    .md-body pre code { background: none; padding: 0; }
+    .md-body a { color: var(--accent-blue); }
+    .settings-row { display: grid; grid-template-columns: 160px 1fr; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
+    .settings-row dt { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px; }
     @media (max-width: 860px) {
       .app-shell { flex-direction: column; }
       .sidebar { width: 100%; flex-direction: row; flex-wrap: wrap; align-items: center; }
@@ -2011,14 +2116,17 @@ def index_html() -> str:
     </a>
     <nav>
       <button class="nav-item active" data-tab="overview" onclick="switchTab('overview')">Overview <kbd>1</kbd></button>
+      <button class="nav-item" data-tab="clients" onclick="switchTab('clients')">Clients</button>
       <button class="nav-item" data-tab="board" onclick="switchTab('board')">Board <kbd>2</kbd></button>
       <button class="nav-item" data-tab="backlog" onclick="switchTab('backlog')">Backlog <kbd>3</kbd></button>
       <button class="nav-item" data-tab="search" onclick="switchTab('search')">Search <kbd>4</kbd></button>
       <button class="nav-item" data-tab="context" onclick="switchTab('context')">Context <kbd>5</kbd></button>
+      <button class="nav-item" data-tab="plans" onclick="switchTab('plans')">Plans</button>
       <button class="nav-item" data-tab="runs" onclick="switchTab('runs')">Runs <kbd>6</kbd></button>
       <button class="nav-item" data-tab="commits" onclick="switchTab('commits')">Commits <kbd>7</kbd></button>
       <button class="nav-item" data-tab="activity" onclick="switchTab('activity')">Activity <kbd>8</kbd></button>
       <button class="nav-item" data-tab="health" onclick="switchTab('health')">Health <kbd>9</kbd></button>
+      <button class="nav-item" data-tab="settings" onclick="switchTab('settings')">Settings</button>
     </nav>
     <div class="sidebar-foot">
       Local loopback control. Press <kbd>n</kbd> for a new task, <kbd>/</kbd> to search.
@@ -2131,7 +2239,7 @@ def index_html() -> str:
             <h3 id="context-file-path" style="font-size: 13px; color: var(--accent-blue);">Select a file</h3>
             <span id="context-file-size" style="font-size: 11px; color: var(--text-muted); font-family: monospace;"></span>
           </div>
-          <pre id="context-file-body" class="file-content">Select a context file from the list to view its contents.</pre>
+          <div id="context-file-body" class="file-content md-body">Select a context file from the list to view its contents.</div>
         </div>
       </div>
     </section>
@@ -2208,6 +2316,15 @@ def index_html() -> str:
     </section>
     <section id="view-health" class="view-panel">
       <div class="table-container" id="health-list"></div>
+    </section>
+    <section id="view-clients" class="view-panel">
+      <div id="clients-list" class="empty-state">Connect to load clients.</div>
+    </section>
+    <section id="view-plans" class="view-panel">
+      <div id="plans-list" class="empty-state">Connect to load plans.</div>
+    </section>
+    <section id="view-settings" class="view-panel">
+      <div class="table-container" id="settings-list"></div>
     </section>
   </main>
   </div>
@@ -2453,6 +2570,9 @@ def index_html() -> str:
       else if (tabId === "activity") loadActivity();
       else if (tabId === "runs") loadRuns();
       else if (tabId === "health") loadHealth();
+      else if (tabId === "clients") loadClients();
+      else if (tabId === "plans") loadPlans();
+      else if (tabId === "settings") loadSettings();
     }
 
     async function loadProjects() {
@@ -2536,7 +2656,7 @@ def index_html() -> str:
         <article class="run-card">
           <h4>${escapeHtml(run.id)}</h4>
           <div style="font-size:11px;color:var(--text-muted)">${escapeHtml(run.path)} · ${escapeHtml((run.updated || "").slice(0,19))}</div>
-          <pre>${escapeHtml(run.handoff || "No handoff.md")}</pre>
+          <div class="md-body">${renderMarkdown(run.handoff || "No handoff.md")}</div>
         </article>`).join("");
     }
 
@@ -2947,7 +3067,7 @@ def index_html() -> str:
       if (f) {
         document.getElementById("context-file-path").textContent = f.path;
         document.getElementById("context-file-size").textContent = f.bytes + " bytes";
-        document.getElementById("context-file-body").textContent = f.content;
+        document.getElementById("context-file-body").innerHTML = renderMarkdown(f.content || "");
       }
     }
 
@@ -3110,12 +3230,92 @@ def index_html() -> str:
       return (str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     }
 
+    function renderMarkdown(src) {
+      const fences = [];
+      let text = escapeHtml(src || "");
+      text = text.replace(/```[a-zA-Z0-9_-]*\\n([\\s\\S]*?)```/g, (_, code) => {
+        fences.push("<pre><code>" + code + "</code></pre>");
+        return "%%FENCE" + (fences.length - 1) + "%%";
+      });
+      text = text.replace(/`([^`]+)`/g, "<code>$1</code>");
+      text = text.replace(/^### (.*)$/gm, "<h3>$1</h3>");
+      text = text.replace(/^## (.*)$/gm, "<h2>$1</h2>");
+      text = text.replace(/^# (.*)$/gm, "<h1>$1</h1>");
+      text = text.replace(/\\*\\*([^*]+)\\*\\*/g, "<strong>$1</strong>");
+      text = text.replace(/\\*([^*]+)\\*/g, "<em>$1</em>");
+      text = text.replace(/\\[([^\\]]+)\\]\\((https?:[^)]+)\\)/g, '<a href="$2" rel="noreferrer" target="_blank">$1</a>');
+      text = text.replace(/^(?:- |\\* )(.*)$/gm, "<li>$1</li>");
+      text = text.replace(/(<li>.*<\\/li>\\n?)+/g, (block) => "<ul>" + block + "</ul>");
+      text = text.replace(/\\n{2,}/g, "</p><p>");
+      text = "<p>" + text + "</p>";
+      fences.forEach((html, idx) => {
+        text = text.replace("%%FENCE" + idx + "%%", html);
+      });
+      return text;
+    }
+
+    async function loadClients() {
+      const res = await api("/api/clients");
+      if (!res.ok) return;
+      const host = document.getElementById("clients-list");
+      const clients = res.data.clients || [];
+      if (!clients.length) {
+        host.innerHTML = `<div class="empty-state">No clients in this context.</div>`;
+        return;
+      }
+      host.innerHTML = clients.map(client => {
+        const cards = (client.projects || []).map(p => `
+          <div class="project-card" onclick="selectProject('${escapeHtml(p.key)}')">
+            <h4>${escapeHtml(p.key)}</h4>
+            <div style="font-size:12px;color:var(--text-secondary)">${escapeHtml(p.description || "")}</div>
+          </div>`).join("") || `<div class="empty-state">No projects</div>`;
+        return `<div class="client-block"><h3>${escapeHtml(client.key)}</h3><div class="md-body">${renderMarkdown(client.summary || "")}</div><div class="project-grid">${cards}</div></div>`;
+      }).join("");
+    }
+
+    async function loadPlans() {
+      const query = state.project ? ("?project=" + encodeURIComponent(state.project)) : "";
+      const res = await api("/api/plans" + query);
+      if (!res.ok) return;
+      const host = document.getElementById("plans-list");
+      const plans = res.data.plans || [];
+      if (!plans.length) {
+        host.innerHTML = `<div class="empty-state">No plan.md files found.</div>`;
+        return;
+      }
+      host.innerHTML = plans.map(plan => `
+        <article class="run-card">
+          <h4>${escapeHtml(plan.title)}</h4>
+          <div style="font-size:11px;color:var(--text-muted)">${escapeHtml(plan.project)} · ${escapeHtml(plan.path)}</div>
+          <div class="md-body">${renderMarkdown(plan.body || "")}</div>
+        </article>`).join("");
+    }
+
+    async function loadSettings() {
+      const res = await api("/api/settings");
+      if (!res.ok) return;
+      const id = res.data.identity || {};
+      const rows = [
+        ["Root", res.data.root_name || ""],
+        ["Organisation", id.org_name || ""],
+        ["Org key", id.org_key || ""],
+        ["Packs", id.packs || ""],
+        ["Context dir", id.context_dir || ""],
+        ["Context remote", id.context_remote || "(local-only)"],
+        ["Default project", id.default_project || "(none)"],
+        ["Runtime", res.data.runtime || ""],
+        ["Loopback", res.data.loopback ? "yes" : "no"],
+      ].map(([k, v]) => `<div class="settings-row"><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(String(v))}</dd></div>`).join("");
+      document.getElementById("settings-list").innerHTML = rows;
+    }
+
     document.addEventListener("keydown", (event) => {
       const typing = /INPUT|TEXTAREA|SELECT/.test((event.target && event.target.tagName) || "");
       if (typing) return;
       const keys = { "1": "overview", "2": "board", "3": "backlog", "4": "search", "5": "context", "6": "runs", "7": "commits", "8": "activity", "9": "health" };
       if (keys[event.key]) { event.preventDefault(); switchTab(keys[event.key]); }
       if (event.key === "n") { event.preventDefault(); openCreateTaskModal(); }
+      if (event.key === ",") { event.preventDefault(); switchTab("settings"); }
       if (event.key === "/") { event.preventDefault(); switchTab("search"); const q = document.getElementById("search-q"); if (q) q.focus(); }
     });
 

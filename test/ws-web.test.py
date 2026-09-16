@@ -238,6 +238,48 @@ class WebControlReadFlow(unittest.TestCase):
         self.assertEqual(payload["runs"][0]["id"], "demo")
         self.assertIn("Continue here", payload["runs"][0]["handoff"])
 
+    def test_clients_lists_registry_clients(self):
+        (self.context / "clients/example").mkdir(parents=True)
+        (self.context / "clients/example/client.md").write_text("# Example Org\nThey buy software.\n")
+        status, _content_type, body = route(
+            self.state,
+            "GET",
+            "/api/clients",
+            {"authorization": "Bearer test-token"},
+        )
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["clients"][0]["key"], "example")
+        self.assertIn("Example Org", payload["clients"][0]["summary"])
+        self.assertEqual(payload["clients"][0]["projects"][0]["key"], "workspace")
+
+    def test_plans_lists_run_plan_markdown(self):
+        status, _content_type, body = route(
+            self.state,
+            "GET",
+            "/api/plans?project=workspace",
+            {"authorization": "Bearer test-token"},
+        )
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(len(payload["plans"]), 1)
+        self.assertEqual(payload["plans"][0]["run"], "demo")
+        self.assertIn("Plan details", payload["plans"][0]["body"])
+
+    def test_settings_returns_allowlisted_identity_only(self):
+        status, _content_type, body = route(
+            self.state,
+            "GET",
+            "/api/settings",
+            {"authorization": "Bearer test-token"},
+        )
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["identity"]["context_dir"], "context")
+        self.assertTrue(payload["context_local"])
+        self.assertTrue(payload["loopback"])
+        self.assertNotIn("test-token", json.dumps(payload))
+
     def test_rejects_unknown_or_bad_project(self):
         with self.assertRaisesRegex(WebError, "project not found"):
             project_context(self.state, "missing")
@@ -256,6 +298,10 @@ class WebControlReadFlow(unittest.TestCase):
         self.assertIn(b"Search", body)
         self.assertIn(b"Context", body)
         self.assertIn(b"data-tab=\"health\"", body)
+        self.assertIn(b"data-tab=\"clients\"", body)
+        self.assertIn(b"data-tab=\"plans\"", body)
+        self.assertIn(b"data-tab=\"settings\"", body)
+        self.assertIn(b"renderMarkdown", body)
         self.assertIn(b"modal-create", body)
         self.assertIn(b"modal-detail", body)
 
