@@ -128,7 +128,33 @@ def _serve_static_uidl(state: WorkspaceWebState, subpath: str) -> tuple[int, str
     if content_type.startswith("text/") or content_type in ("application/javascript", "application/json"):
         content_type += "; charset=utf-8"
 
-    return HTTPStatus.OK, content_type, target_path.read_bytes()
+    payload = target_path.read_bytes()
+    if clean_subpath == "index.html":
+        payload = _inject_uidl_token(payload, state.token)
+    return HTTPStatus.OK, content_type, payload
+
+
+def _inject_uidl_token(html: bytes, token: str) -> bytes:
+    """Put the process token into the companion URL without editing UIDL-Runtime.
+
+    The companion already reads `?token=` on boot. This script runs before the
+    module bundle so a bare `/` becomes `/?token=...` in the same origin.
+    """
+    token_js = json.dumps(token)
+    snippet = (
+        "<script>(function(){var t="
+        + token_js
+        + ";var u=new URL(location.href);if(!u.searchParams.get('token'))"
+        + "{u.searchParams.set('token',t);location.replace(u.toString());}})();</script>"
+    )
+    text = html.decode("utf-8", errors="replace")
+    if "</head>" in text:
+        text = text.replace("</head>", snippet + "</head>", 1)
+    elif "<body>" in text:
+        text = text.replace("<body>", "<body>" + snippet, 1)
+    else:
+        text = snippet + text
+    return text.encode("utf-8")
 
 
 def route(

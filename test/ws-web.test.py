@@ -1119,6 +1119,8 @@ class WebControlReadFlow(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("text/html", content_type)
         self.assertIn(b"UIDL Root", body)
+        self.assertIn(b"test-token", body)
+        self.assertIn(b"searchParams.set('token'", body)
 
     def test_default_runtime_is_uidl_when_dist_exists(self):
         dist_dir = self.root / "projects/donwi/public/UIDL-Runtime/apps/workspace-control/dist"
@@ -1129,6 +1131,19 @@ class WebControlReadFlow(unittest.TestCase):
         status, _content_type, body = route(default_state, "GET", "/", {})
         self.assertEqual(status, 200)
         self.assertIn(b"Preferred UIDL", body)
+        self.assertIn(b"test-token", body)
+
+    def test_uidl_token_inject_skips_assets(self):
+        dist_dir = self.root / "projects/core/UIDL-Runtime/apps/workspace-control/dist"
+        dist_dir.mkdir(parents=True, exist_ok=True)
+        (dist_dir / "index.html").write_text("<!doctype html><html><head></head><body>UIDL</body></html>")
+        assets = dist_dir / "assets"
+        assets.mkdir(parents=True, exist_ok=True)
+        (assets / "app.js").write_text("console.log('plain')")
+        uidl_state = build_state(self.root, token="secret-token", runtime="uidl")
+        _status, _type, js = route(uidl_state, "GET", "/assets/app.js", {})
+        self.assertEqual(js, b"console.log('plain')")
+        self.assertNotIn(b"secret-token", js)
 
     def test_uidl_falls_back_to_vanilla_without_dist(self):
         default_state = build_state(self.root, token="test-token", runtime="uidl")
