@@ -2097,6 +2097,50 @@ def index_html() -> str:
     .md-body a { color: var(--accent-blue); }
     .settings-row { display: grid; grid-template-columns: 160px 1fr; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
     .settings-row dt { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px; }
+    .md-body table { width: 100%; border-collapse: collapse; margin: 0.6em 0; }
+    .md-body th, .md-body td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; }
+    .md-body th { background: var(--bg-surface-elevated); }
+    .md-body blockquote { border-left: 3px solid var(--accent-blue); margin: 0.6em 0; padding: 4px 12px; color: var(--text-secondary); }
+    .md-body hr { border: none; border-top: 1px solid var(--border); margin: 1em 0; }
+    .md-body del { color: var(--text-muted); }
+    .palette {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(1, 4, 9, 0.72);
+      z-index: 300;
+      align-items: flex-start;
+      justify-content: center;
+      padding-top: 12vh;
+    }
+    .palette.open { display: flex; }
+    .palette-panel {
+      width: min(560px, 92vw);
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      box-shadow: 0 24px 48px rgba(0,0,0,0.55);
+      overflow: hidden;
+    }
+    .palette-panel input {
+      width: 100%;
+      border: none;
+      border-bottom: 1px solid var(--border);
+      border-radius: 0;
+      padding: 12px 14px;
+      font-size: 14px;
+    }
+    .palette-list { max-height: 360px; overflow: auto; }
+    .palette-item {
+      padding: 8px 14px;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--text-secondary);
+      font-size: 13px;
+    }
+    .palette-item:hover, .palette-item.active { background: var(--bg-surface-elevated); color: var(--text-primary); }
+    .palette-item kbd { font-size: 10px; color: var(--text-muted); }
     @media (max-width: 860px) {
       .app-shell { flex-direction: column; }
       .sidebar { width: 100%; flex-direction: row; flex-wrap: wrap; align-items: center; }
@@ -2129,8 +2173,8 @@ def index_html() -> str:
       <button class="nav-item" data-tab="settings" onclick="switchTab('settings')">Settings</button>
     </nav>
     <div class="sidebar-foot">
-      Local loopback control. Press <kbd>n</kbd> for a new task, <kbd>/</kbd> to search.
-      Token stays in this session only.
+      Local loopback control. <kbd>Ctrl/Cmd+K</kbd> command palette,
+      <kbd>n</kbd> new task, <kbd>/</kbd> search. Token stays in this session.
     </div>
   </aside>
   <div class="app-main">
@@ -2326,6 +2370,12 @@ def index_html() -> str:
     <section id="view-settings" class="view-panel">
       <div class="table-container" id="settings-list"></div>
     </section>
+  <div id="command-palette" class="palette" onclick="if(event.target===this) closePalette()">
+    <div class="palette-panel">
+      <input id="palette-q" type="text" placeholder="Jump to a view, project, or action…" oninput="filterPalette()" onkeydown="paletteKey(event)">
+      <div id="palette-list" class="palette-list"></div>
+    </div>
+  </div>
   </main>
   </div>
   </div>
@@ -3232,26 +3282,131 @@ def index_html() -> str:
 
     function renderMarkdown(src) {
       const fences = [];
-      let text = escapeHtml(src || "");
-      text = text.replace(/```[a-zA-Z0-9_-]*\\n([\\s\\S]*?)```/g, (_, code) => {
+      let raw = escapeHtml(src || "");
+      raw = raw.replace(/```[a-zA-Z0-9_-]*\\n([\\s\\S]*?)```/g, (_, code) => {
         fences.push("<pre><code>" + code + "</code></pre>");
         return "%%FENCE" + (fences.length - 1) + "%%";
       });
-      text = text.replace(/`([^`]+)`/g, "<code>$1</code>");
-      text = text.replace(/^### (.*)$/gm, "<h3>$1</h3>");
-      text = text.replace(/^## (.*)$/gm, "<h2>$1</h2>");
-      text = text.replace(/^# (.*)$/gm, "<h1>$1</h1>");
-      text = text.replace(/\\*\\*([^*]+)\\*\\*/g, "<strong>$1</strong>");
-      text = text.replace(/\\*([^*]+)\\*/g, "<em>$1</em>");
-      text = text.replace(/\\[([^\\]]+)\\]\\((https?:[^)]+)\\)/g, '<a href="$2" rel="noreferrer" target="_blank">$1</a>');
-      text = text.replace(/^(?:- |\\* )(.*)$/gm, "<li>$1</li>");
-      text = text.replace(/(<li>.*<\\/li>\\n?)+/g, (block) => "<ul>" + block + "</ul>");
-      text = text.replace(/\\n{2,}/g, "</p><p>");
-      text = "<p>" + text + "</p>";
-      fences.forEach((html, idx) => {
-        text = text.replace("%%FENCE" + idx + "%%", html);
-      });
-      return text;
+      function inline(s) {
+        s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
+        s = s.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+        s = s.replace(/\\*\\*([^*]+)\\*\\*/g, "<strong>$1</strong>");
+        s = s.replace(/\\*([^*]+)\\*/g, "<em>$1</em>");
+        s = s.replace(/\\[([^\\]]+)\\]\\((https?:[^)]+)\\)/g, '<a href="$2" rel="noreferrer" target="_blank">$1</a>');
+        return s;
+      }
+      const lines = raw.split("\\n");
+      const out = [];
+      let i = 0;
+      while (i < lines.length) {
+        const line = lines[i];
+        if (line.indexOf("%%FENCE") === 0) { out.push(line); i++; continue; }
+        if (line === "---" || line === "***") { out.push("<hr>"); i++; continue; }
+        if (line.indexOf("&gt;") === 0) {
+          out.push("<blockquote>" + inline(line.replace(/^(&gt;\\s?)+/, "")) + "</blockquote>");
+          i++; continue;
+        }
+        if (line.charAt(0) === "|" && i + 1 < lines.length && /-/.test(lines[i + 1]) && lines[i + 1].indexOf("|") !== -1) {
+          const rows = [];
+          while (i < lines.length && lines[i].charAt(0) === "|") {
+            if (/^\\|\\s*:?-+/.test(lines[i]) || /^\\|[-:| ]+$/.test(lines[i])) { i++; continue; }
+            const cells = lines[i].split("|").slice(1, -1).map(function(c) { return "<td>" + inline(c.trim()) + "</td>"; }).join("");
+            rows.push("<tr>" + cells + "</tr>");
+            i++;
+          }
+          if (rows.length) {
+            rows[0] = rows[0].replace(/<td>/g, "<th>").replace(/<\\/td>/g, "</th>");
+            out.push("<table>" + rows.join("") + "</table>");
+          }
+          continue;
+        }
+        if (/^\\d+\\. /.test(line)) {
+          const items = [];
+          while (i < lines.length && /^\\d+\\. /.test(lines[i])) {
+            items.push("<li>" + inline(lines[i].replace(/^\\d+\\. /, "")) + "</li>");
+            i++;
+          }
+          out.push("<ol>" + items.join("") + "</ol>");
+          continue;
+        }
+        if (/^(- \\[[ xX]\\] |[-*+] )/.test(line)) {
+          const items = [];
+          while (i < lines.length && /^(- \\[[ xX]\\] |[-*+] )/.test(lines[i])) {
+            let t = lines[i];
+            if (/^- \\[[xX]\\] /.test(t)) items.push("<li><input type='checkbox' disabled checked> " + inline(t.replace(/^- \\[[xX]\\] /, "")) + "</li>");
+            else if (/^- \\[ \\] /.test(t)) items.push("<li><input type='checkbox' disabled> " + inline(t.replace(/^- \\[ \\] /, "")) + "</li>");
+            else items.push("<li>" + inline(t.replace(/^[-*+] /, "")) + "</li>");
+            i++;
+          }
+          out.push("<ul>" + items.join("") + "</ul>");
+          continue;
+        }
+        if (line.indexOf("### ") === 0) { out.push("<h3>" + inline(line.slice(4)) + "</h3>"); i++; continue; }
+        if (line.indexOf("## ") === 0) { out.push("<h2>" + inline(line.slice(3)) + "</h2>"); i++; continue; }
+        if (line.indexOf("# ") === 0) { out.push("<h1>" + inline(line.slice(2)) + "</h1>"); i++; continue; }
+        if (!line.trim()) { i++; continue; }
+        out.push("<p>" + inline(line) + "</p>");
+        i++;
+      }
+      let html = out.join("");
+      fences.forEach(function(block, idx) { html = html.replace("%%FENCE" + idx + "%%", block); });
+      return html;
+    }
+
+    const PALETTE_COMMANDS = [
+      { id: "overview", label: "Overview", hint: "1" },
+      { id: "clients", label: "Clients", hint: "" },
+      { id: "board", label: "Board", hint: "2" },
+      { id: "backlog", label: "Backlog", hint: "3" },
+      { id: "search", label: "Search", hint: "/" },
+      { id: "context", label: "Context", hint: "5" },
+      { id: "plans", label: "Plans", hint: "" },
+      { id: "runs", label: "Runs", hint: "6" },
+      { id: "commits", label: "Commits", hint: "7" },
+      { id: "activity", label: "Activity", hint: "8" },
+      { id: "health", label: "Health", hint: "9" },
+      { id: "settings", label: "Settings", hint: "," },
+      { id: "new-task", label: "New task", hint: "n" }
+    ];
+    let paletteIndex = 0;
+
+    function paletteItems() {
+      const q = (document.getElementById("palette-q").value || "").toLowerCase();
+      const cmds = PALETTE_COMMANDS.filter(c => c.label.toLowerCase().includes(q) || c.id.includes(q));
+      const projects = (state.projects || []).filter(p => !q || p.key.toLowerCase().includes(q) || (p.client || "").toLowerCase().includes(q))
+        .map(p => ({ id: "project:" + p.key, label: "Project " + p.key, hint: p.client || "" }));
+      return cmds.concat(projects);
+    }
+    function renderPalette() {
+      const items = paletteItems();
+      if (paletteIndex >= items.length) paletteIndex = 0;
+      document.getElementById("palette-list").innerHTML = items.map((item, i) =>
+        `<div class="palette-item${i===paletteIndex?" active":""}" data-id="${escapeHtml(item.id)}" onclick="runPalette('${escapeHtml(item.id)}')">${escapeHtml(item.label)}<kbd>${escapeHtml(item.hint || "")}</kbd></div>`
+      ).join("") || `<div class="palette-item">No matches</div>`;
+    }
+    function openPalette() {
+      document.getElementById("command-palette").classList.add("open");
+      document.getElementById("palette-q").value = "";
+      paletteIndex = 0;
+      renderPalette();
+      document.getElementById("palette-q").focus();
+    }
+    function closePalette() {
+      document.getElementById("command-palette").classList.remove("open");
+    }
+    function filterPalette() { paletteIndex = 0; renderPalette(); }
+    function runPalette(id) {
+      closePalette();
+      if (id === "new-task") { openCreateTaskModal(); return; }
+      if (id.indexOf("project:") === 0) { selectProject(id.slice(8)); return; }
+      switchTab(id);
+    }
+    function paletteKey(event) {
+      const items = paletteItems();
+      if (event.key === "ArrowDown") { event.preventDefault(); paletteIndex = (paletteIndex + 1) % Math.max(items.length, 1); renderPalette(); }
+      if (event.key === "ArrowUp") { event.preventDefault(); paletteIndex = (paletteIndex - 1 + Math.max(items.length, 1)) % Math.max(items.length, 1); renderPalette(); }
+      if (event.key === "Enter") { event.preventDefault(); if (items[paletteIndex]) runPalette(items[paletteIndex].id); }
+      if (event.key === "Escape") { event.preventDefault(); closePalette(); }
     }
 
     async function loadClients() {
@@ -3310,6 +3465,14 @@ def index_html() -> str:
     }
 
     document.addEventListener("keydown", (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        const pal = document.getElementById("command-palette");
+        if (pal.classList.contains("open")) closePalette(); else openPalette();
+        return;
+      }
+      if (event.key === "Escape") closePalette();
+      if (document.getElementById("command-palette").classList.contains("open")) return;
       const typing = /INPUT|TEXTAREA|SELECT/.test((event.target && event.target.tagName) || "");
       if (typing) return;
       const keys = { "1": "overview", "2": "board", "3": "backlog", "4": "search", "5": "context", "6": "runs", "7": "commits", "8": "activity", "9": "health" };
