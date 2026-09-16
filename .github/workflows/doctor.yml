@@ -9,7 +9,21 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
+  security:
+    uses: hi-donwi/Agent-Secure/.github/workflows/agent-secure-gate.yml@0982c6f5818e06f425fe014a685eeceace432330
+    with:
+      root: .
+      engine_version: v0.1.5
+      engine_sha256: 491c0f4b9b4fe379b13f85be0a8956343a6731694e714763d33b3827e65649c9
+      gitleaks_version: 8.30.1
+      gitleaks_sha256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+      osv_scanner_version: 2.5.1
+      osv_scanner_sha256: f9f25499a2c8cc367b3af45df2ea7eeca7fbccceab9c35079968f4b3652194be
+
   test:
     name: ws test suite
     runs-on: ubuntu-latest

@@ -7,6 +7,16 @@
 # .ignore present, index.json current.
 stages: [verify]
 
+include:
+  - local: 'ci/agent-secure.gitlab-ci.yml'
+
+workspace:security:
+  extends: .agent-secure
+  stage: verify
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
 # Same promise as the GitHub workflow: a regression in the ws CLI damages real
 # repositories (it writes hooks into client repos and runs rm -rf over skill
 # directories), so the suite runs on every merge request, not just main.

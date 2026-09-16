@@ -1697,6 +1697,19 @@ cmd_doctor() {
   fi
   echo
 
+  echo "-- Agent-Secure --"
+  if command -v agent-secure >/dev/null; then
+    c_grn "ok agent-secure on PATH"
+    if [ -d "$ROOT/.local/secure/policies" ]; then
+      c_dim "  operator policies: .local/secure/policies/ (ws scan <key>)"
+    else
+      c_dim "  no operator policies yet — ws scan reads .local/secure/policies/<profile>.json"
+    fi
+  else
+    c_dim "- agent-secure not on PATH (optional; required for ws scan)"
+  fi
+  echo
+
   [ "$fail" = 0 ] && c_grn "doctor: healthy" || { c_red "doctor: problems reported above"; exit 1; }
 }
 
@@ -1749,6 +1762,65 @@ cmd_ide() {
   c_grn "-> .vscode/settings.json written from the shared defaults"
 }
 
+# ─────────────────────────────────────────────────────────────── scan
+# Operator-owned Agent-Secure policy, selected by the registry's security_profile.
+# The scanned product repo must not supply the policy: that would let an untrusted
+# checkout weaken its own gate. Policies live under .local/secure/policies/.
+cmd_scan() {
+  local doctor=0 policy="" key=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --doctor) doctor=1; shift ;;
+      --policy)
+        [ -n "${2:-}" ] || die "usage: ws scan <project-key> [--doctor] [--policy <file>]"
+        policy="$2"; shift 2 ;;
+      --help|-h) die "usage: ws scan <project-key> [--doctor] [--policy <file>]" ;;
+      --*) die "usage: ws scan <project-key> [--doctor] [--policy <file>]" ;;
+      *)
+        [ -z "$key" ] || die "usage: ws scan <project-key> [--doctor] [--policy <file>]"
+        key="$1"; shift ;;
+    esac
+  done
+  [ -n "$key" ] || die "usage: ws scan <project-key> [--doctor] [--policy <file>]"
+  local row; row="$(reg_get "$key")"
+  [ -n "$row" ] || die "unknown project: $key"
+  local folder profile
+  folder="$(printf '%s' "$row" | cut -f4)"
+  profile="$(printf '%s' "$row" | cut -f7)"
+  local dst; dst="$(repo_path "$folder")"
+  is_repo "$dst" || die "not a product repository: $folder"
+
+  if [ -z "$policy" ]; then
+    policy="${WS_SECURE_POLICY:-}"
+  fi
+  if [ -z "$policy" ]; then
+    local name="$profile"
+    is_empty "$name" && name="default"
+    policy="$ROOT/.local/secure/policies/${name}.json"
+  fi
+  [ -f "$policy" ] || die "no operator policy at $policy
+    Agent-Secure policies are operator-owned and live outside the product repo.
+    Bootstrap one with Agent-Secure's scripts/bootstrap-policy.sh into
+    .local/secure/policies/<profile>.json (or default.json), or pass --policy."
+
+  local abs_policy abs_root
+  abs_policy="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$policy")"
+  abs_root="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$dst")"
+  case "$abs_policy" in
+    "$abs_root"|"$abs_root"/*) die "policy must not live inside the scanned repository" ;;
+  esac
+
+  local bin="${WS_SECURE_BIN:-}"
+  if [ -z "$bin" ]; then
+    bin="$(command -v agent-secure 2>/dev/null || true)"
+  fi
+  [ -n "$bin" ] && [ -x "$bin" ] || die "agent-secure not found on PATH (install it, or set WS_SECURE_BIN)"
+
+  local sub=scan
+  [ "$doctor" = 1 ] && sub=doctor
+  "$bin" "$sub" --root "$abs_root" --policy "$abs_policy"
+}
+
 cmd_help() {
   cat <<'H'
 ws — engineering workspace CLI
@@ -1780,6 +1852,7 @@ ws — engineering workspace CLI
   ws hooks [status|install|remove]  clock agent time automatically in Claude Code
   ws where                         print the workspace root from anywhere
   ws doctor [--ci]                 check repo isolation, ignores, toolchain
+  ws scan <key> [--doctor] [--policy f]  Agent-Secure gate; policy is operator-owned
   ws help                          this help
 
 Add to PATH (run once, from inside your clone):
@@ -1815,6 +1888,7 @@ case "${1:-help}" in
   ide) shift; cmd_ide "$@" ;;
   hooks) shift; cmd_hooks "$@" ;;
   doctor) shift; cmd_doctor "$@" ;;
+  scan) shift; cmd_scan "$@" ;;
   help|-h|--help) cmd_help ;;
   *) die "unknown command: $1 (try: ws help)" ;;
 esac
