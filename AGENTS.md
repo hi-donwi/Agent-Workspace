@@ -95,6 +95,21 @@ the code it then clones. An unreachable skills source is a warning, not a failur
 machine on a bad network still ends up with its repositories, and `ws doctor` keeps
 reporting the missing skills until someone syncs them.
 
+### Local web control — `ws web`
+
+`ws web` is a **loopback** control UI for this clone (board, runs, hours, health). It is
+not a hosted product.
+
+- Default runtime is **UIDL-Runtime** (`apps/workspace-control` in that repo). `ws web`
+  serves that companion's `dist/` when it exists under `projects/**/apps/workspace-control/dist`.
+- If that dist is missing, it **falls back** to the stdlib vanilla UI. Force vanilla with
+  `ws web --runtime vanilla`. Rebuild the companion with `npm run build:workspace-control`
+  inside the UIDL-Runtime checkout.
+- The process prints a URL with `?token=`. Opening `/` without the query also works: the
+  server injects the token into the companion HTML so it redirects to `/?token=...`. The
+  token is per-process, loopback-only, and is not written to disk.
+- APIs under `/api/` still require `Authorization: Bearer <token>`.
+
 ### Open your editor at the workspace root, not at `projects/<x>`
 
 Agents discover rules by walking up the directory tree. Opening the workspace root makes

@@ -31,6 +31,16 @@ no remote is valid: doctor reports it as private-local.
 the directory tree; opening the root makes standards and skills load while the product repo
 stays isolated in git terms.
 
+### Local web control
+
+```bash
+ws web --port 8765
+```
+
+Open the printed URL (it includes `?token=`). Default UI is the UIDL-Runtime companion;
+vanilla HTML is the fallback if that companion's `dist/` is not built. Loopback only — do
+not expose the port. See [AGENTS.md](../AGENTS.md) §2 "Local web control".
+
 ---
 
 ## 2. Read, in this order (60 minutes)
