@@ -464,8 +464,9 @@ Rules:
 1. **One agent, one worktree.** Do not `git checkout` the primary clone of a product repo another agent is using. A TUI label like `feat/ws-agent-isolation ~/Agent-Workspace` on several agents means they share **one directory and one HEAD** — not four isolated checkouts. `ws where` prints `primary clone` in that case.
 2. **One agent owns framework `main`.** Pinning `skills.lock` or editing `ws` is serialized.
 3. **`ws agent start` never uses the primary checkout**; it always adds a worktree under `.local/worktrees/<key>/<session>/`.
-4. **`ws doctor`** warns if the agent session id is `default`, and if a product's primary tree is dirty while worktree locks exist.
+4. **`ws doctor`** warns if the agent session id is `default`, if a product's primary tree is dirty while worktree locks exist, if context is dirty with a remote, and if agent clocks are open on the primary clone.
 5. Stop with `ws agent stop` (clock-out + lock removal; the worktree is kept until you `git worktree remove`).
+6. **Shared context:** `ws context sync` stashes, rebases, and restores local work (no longer `pull --ff-only` that dies on a dirty tree). `ws context switch <remote>` refuses a different origin — use another workspace clone (ADR-0010). `ws bootstrap --only <client|group|project>` clones one audience, not every row in the registry.
 
 Two habits prevent most of the remaining friction:
 

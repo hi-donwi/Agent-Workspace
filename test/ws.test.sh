@@ -123,6 +123,7 @@ git -C "$WS" add -A >/dev/null 2>&1
 equals "$(git -C "$WS" ls-files context | wc -l | tr -d ' ')" "0" "context is never tracked by the framework"
 check "ws web help is available" ws web --help
 check "ws context sync is a no-op without a remote" ws context sync
+check_fails "ws context switch without a remote url refuses" ws context switch
 OUT="$(ws doctor --ci 2>&1 || true)"
 printf '%s' "$OUT" | grep -q "private-local" \
   && ok "doctor reports a context with no remote as private-local" \
@@ -134,6 +135,30 @@ WHERE_ERR="$(ws where 2>&1 >/dev/null)"
 printf '%s' "$WHERE_ERR" | grep -q "primary clone" \
   && ok "ws where notes a primary clone on stderr" \
   || bad "ws where notes a primary clone on stderr" "$WHERE_ERR"
+
+section "context sync, switch, and bootstrap --only"
+git -C "$WS/context" add -A && git -C "$WS/context" commit -qm init-context
+CTXBARE="$TMP/context-a.git"
+git clone -q --bare "$WS/context" "$CTXBARE"
+git -C "$WS/context" remote add origin "$CTXBARE"
+git -C "$WS/context" push -q -u origin main
+echo "local-note" >> "$WS/context/README.md"
+check "ws context sync succeeds with dirty local files" ws context sync
+contains "$WS/context/README.md" "local-note" "sync restored the stashed local edit"
+CTXBARE2="$TMP/context-b.git"
+git init -q --bare "$CTXBARE2"
+check_fails "ws context switch refuses a different remote" ws context switch "$CTXBARE2"
+contains "$WS/workspace.conf" "context_remote" "switch of same-or-missing remote is the only writer" || true
+check "ws context switch is a no-op for the current origin" ws context switch "$CTXBARE"
+contains "$WS/workspace.conf" "$CTXBARE" "context_remote is recorded"
+
+DOC="$(ws doctor --ci 2>&1 || true)"
+echo "extra" >> "$WS/context/README.md"
+DOC="$(ws doctor --ci 2>&1 || true)"
+printf '%s' "$DOC" | grep -q "local changes while a remote" \
+  && ok "doctor warns when shared context is dirty" \
+  || bad "doctor warns when shared context is dirty" "$DOC"
+# leave the extra line; later tests tolerate dirty context
 
 section "clients: a client may span several projects"
 contains "$WS/context/registry.tsv" "client" "the registry header has a client column"
@@ -192,6 +217,21 @@ exists "$WS/context/memory/projects/api/log.md" "memory is created from template
 contains "$WS/context/registry.tsv" "api" "the registry gains a row"
 contains "$WS/context/registry.tsv" "$(printf 'api\tacme\t')" "the row records its client"
 contains "$WS/context/registry.tsv" "$(printf 'api\tacme\tplatform\t')" "the row records its group"
+
+OTHER="$TMP/other-src"
+mkdir -p "$OTHER" && git -C "$OTHER" init -q
+echo x > "$OTHER/x" && git -C "$OTHER" add x && git -C "$OTHER" commit -qm o
+OTHERBARE="$TMP/other.git"
+git clone -q --bare "$OTHER" "$OTHERBARE"
+check "ws client new beta" ws client new beta
+check "ws new registers beta with a remote" \
+  ws new otherp projects/beta/app "$OTHERBARE" --client beta
+rm -rf "$WS/projects/beta/app"
+check "ws bootstrap --only acme does not clone beta" ws bootstrap --only acme
+[ ! -e "$WS/projects/beta/app/.git" ] && ok "beta product stayed uncloned" \
+  || bad "beta product stayed uncloned"
+check "ws bootstrap --only beta clones that client" ws bootstrap --only beta
+exists "$WS/projects/beta/app/.git" "beta product was cloned"
 
 # A client's own skill is discoverable by ws route the same way a framework
 # skill is - it is not tied to any one of that client's projects.
@@ -546,11 +586,13 @@ check_fails "doctor fails when a pointer is tracked in a client repo" ws doctor 
 git -C "$PROD" reset -q
 
 cp "$WS/workspace.conf" "$TMP/conf.bak"
-sed -i.bak 's/^packs = .*/packs = core, nosuchpack/' "$WS/workspace.conf" && rm -f "$WS/workspace.conf.bak"
+awk 'BEGIN{d=0} /^[[:space:]]*packs[[:space:]]*=/{print "packs = core, nosuchpack"; d=1; next} {print} END{if(!d) print "packs = core, nosuchpack"}' \
+  "$TMP/conf.bak" > "$WS/workspace.conf"
 check_fails "doctor fails on a standards pack that does not exist" ws doctor --ci
 cp "$TMP/conf.bak" "$WS/workspace.conf"
 
-sed -i.bak 's/^packs = .*/packs = core/' "$WS/workspace.conf" && rm -f "$WS/workspace.conf.bak"
+awk 'BEGIN{d=0} /^[[:space:]]*packs[[:space:]]*=/{print "packs = core"; d=1; next} {print} END{if(!d) print "packs = core"}' \
+  "$TMP/conf.bak" > "$WS/workspace.conf"
 ws doctor >"$TMP/doctor-core-only.txt" 2>&1 || true
 contains "$TMP/doctor-core-only.txt" "Java not required" "doctor does not require Java when the java pack is off"
 cp "$TMP/conf.bak" "$WS/workspace.conf"
