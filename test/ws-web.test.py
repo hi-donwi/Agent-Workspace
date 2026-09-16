@@ -196,6 +196,48 @@ class WebControlReadFlow(unittest.TestCase):
                 {"authorization": "Bearer test-token"},
             )
 
+    def test_overview_groups_projects_and_counts_tasks(self):
+        status, _content_type, body = route(
+            self.state,
+            "GET",
+            "/api/overview",
+            {"authorization": "Bearer test-token"},
+        )
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["counts"]["projects"], 1)
+        self.assertEqual(payload["counts"]["clients"], 1)
+        self.assertGreaterEqual(payload["counts"]["tasks"], 2)
+        self.assertTrue(payload["context_local"])
+        self.assertEqual(payload["clients"][0]["key"], "example")
+
+    def test_health_reports_registry_and_local_context(self):
+        status, _content_type, body = route(
+            self.state,
+            "GET",
+            "/api/health",
+            {"authorization": "Bearer test-token"},
+        )
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        ids = {item["id"]: item for item in payload["checks"]}
+        self.assertTrue(ids["registry"]["ok"])
+        self.assertIn("private-local", ids["context_remote"]["detail"])
+
+    def test_project_runs_lists_handoff_snippet(self):
+        status, _content_type, body = route(
+            self.state,
+            "GET",
+            "/api/projects/workspace/runs",
+            {"authorization": "Bearer test-token"},
+        )
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(len(payload["runs"]), 1)
+        self.assertEqual(payload["runs"][0]["id"], "demo")
+        self.assertIn("Continue here", payload["runs"][0]["handoff"])
+
     def test_rejects_unknown_or_bad_project(self):
         with self.assertRaisesRegex(WebError, "project not found"):
             project_context(self.state, "missing")
@@ -207,11 +249,13 @@ class WebControlReadFlow(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertEqual(content_type, "text/html; charset=utf-8")
-        self.assertIn(b"Agent Workspace", body)
-        self.assertIn(b"Kanban Board", body)
+        self.assertIn(b"Workspace", body)
+        self.assertIn(b"Overview", body)
+        self.assertIn(b"Board", body)
         self.assertIn(b"Backlog", body)
         self.assertIn(b"Search", body)
         self.assertIn(b"Context", body)
+        self.assertIn(b"data-tab=\"health\"", body)
         self.assertIn(b"modal-create", body)
         self.assertIn(b"modal-detail", body)
 

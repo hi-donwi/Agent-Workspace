@@ -298,6 +298,7 @@ their own pack; do not apply these skills to TypeScript, Flutter, or Go work.
 | Logs, metrics, traces, health, correlation IDs | `quarkus-observability` |
 | Large reports/exports, XLSX/PDF/ZIP, async jobs, SSE | `bulk-reporting-export` |
 | Build, CI, release, deploy, systemd/containers | `java-delivery` |
+| TypeScript/JS website or Node service (web pack) | `web-development` |
 
 ### Skills are fetched, not vendored
 
@@ -335,7 +336,7 @@ Automatic routing: `ws route "<task description>"`.
 ## 6. Binding standards
 
 All under `.agents/standards/`, grouped into **packs**. Which packs apply is declared in
-`workspace.conf` (`packs = core, java`). These hold unless an ADR says otherwise:
+`workspace.conf` (`packs = core, java, web`). These hold unless an ADR says otherwise:
 
 | Standard | File | Pack |
 |---|---|---|
@@ -350,12 +351,16 @@ All under `.agents/standards/`, grouped into **packs**. Which packs apply is dec
 | Testing and quality gates | `java/testing.md` | java |
 | Observability | `java/observability.md` | java |
 | Build and CI/CD | `java/build-ci.md` | java |
+| TypeScript/JS locked decisions | `web/00-decisions.md` | web |
+| Web project layout | `web/project-layout.md` | web |
+| Web testing | `web/testing.md` | web |
+| Web security | `web/security.md` | web |
+| Web observability | `web/observability.md` | web |
+| Web definition of done | `web/definition-of-done.md` | web |
 
-An organisation working in another stack **adds a pack**; it does not edit `core`. Note
-that the concrete testing, security, and observability rules currently live in the `java`
-pack — a new stack pack must supply its own rather than assume those transfer. `ws doctor`
-fails if `workspace.conf` names a pack with no directory, and warns when only `core` is
-enabled, because that combination leaves those three unruled.
+An organisation **adds a pack**; it does not edit `core`. Enable `java` and/or `web` for
+the stacks you actually run. `ws doctor` fails if `workspace.conf` names a pack with no
+directory, and warns when only `core` is enabled.
 
 ### Changing the CLI
 

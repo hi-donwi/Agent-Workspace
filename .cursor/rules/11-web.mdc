@@ -1,0 +1,9 @@
+---
+description: Web/TypeScript pack — read these before JS/TS work
+globs: ["**/*.{ts,tsx,js,jsx,vue,svelte,css}"]
+alwaysApply: false
+---
+
+Binding rules: `.agents/standards/web/`. Start with `00-decisions.md` and the file that
+matches the change (`testing.md`, `security.md`, `observability.md`, `project-layout.md`).
+Do not apply the Java pack to this code.

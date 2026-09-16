@@ -25,9 +25,9 @@ default_project =
 # .agents/standards/ — `ws doctor` fails if one does not exist.
 #
 # `core` carries git workflow, the REST API contract and the definition of done.
-# The concrete testing, security and observability rules live in the stack packs,
-# so `core` alone leaves you without binding rules for those three; doctor says so.
-packs = core, java
+# Stack packs supply testing, security and observability: `java` (Quarkus), `web`
+# (TypeScript/JavaScript). `core` alone leaves those three unruled; doctor says so.
+packs = core, java, web
 
 # Optional: where a SEPARATE, personal AI usage/token-tracking tool keeps its
 # data (a tool this workspace does not own, vendor, or require — `ws usage`

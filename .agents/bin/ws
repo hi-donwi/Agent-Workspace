@@ -166,7 +166,7 @@ git_group = $group
 context_dir    = context
 context_remote =
 
-packs = core, java
+packs = core, java, web
 CONF
   c_grn "-> workspace.conf written for $name"
   c_dim "   next: ws context init   (or: ws context clone <remote>)"
@@ -1774,7 +1774,7 @@ ws — engineering workspace CLI
   ws agent in|out|status            AGENT working hours - never summed with human
   ws hours [--month M] [--project k|--client c] [--rollup]   report both, side by side
   ws usage [--month M] [--project k|--client c]  token usage, from a separate optional tool
-  ws web [--host 127.0.0.1] [--port 0]  local read-only web-control shell
+  ws web [--host 127.0.0.1] [--port 0]  local web control (board, runs, hours, health)
   ws ide                           copy the shared VS Code defaults into this clone
   ws hooks [status|install|remove]  clock agent time automatically in Claude Code
   ws where                         print the workspace root from anywhere
