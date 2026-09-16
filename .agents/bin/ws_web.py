@@ -145,6 +145,10 @@ def route(
             return HTTPStatus.OK, "text/html; charset=utf-8", index_html().encode()
     _require_token(state, headers)
     if method in ("GET", "HEAD"):
+        if path == "/api/overview":
+            return _json(workspace_overview(state))
+        if path == "/api/health":
+            return _json(workspace_health(state))
         if path == "/api/projects":
             return _json({"projects": [_project_to_dict(project) for project in load_projects(state)]})
         prefix = "/api/projects/"
@@ -177,6 +181,10 @@ def route(
             query_params = parse_qs(parsed.query)
             month = query_params.get("month", [None])[0]
             return _json(get_project_activity(state, key, month=month))
+        runs_suffix = "/runs"
+        if path.startswith(prefix) and path.endswith(runs_suffix):
+            key = unquote(path[len(prefix) : -len(runs_suffix)])
+            return _json(project_runs(state, key))
     elif method == "POST":
         prefix = "/api/projects/"
         clock_suffix = "/clock"
@@ -1224,6 +1232,97 @@ def remove_task_git_link(
     return _json({"project": _project_to_dict(summary), "task": _task_detail_payload(state, saved)}, status=HTTPStatus.OK)
 
 
+def _git_origin(path: Path) -> str:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(path), "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return ""
+    return completed.stdout.strip()
+
+
+def workspace_overview(state: WorkspaceWebState) -> dict[str, object]:
+    projects = load_projects(state)
+    grouped: dict[str, list[dict[str, str]]] = {}
+    for project in projects:
+        grouped.setdefault(project.client or "(none)", []).append(_project_to_dict(project))
+    tasks, _errors = _load_context_tasks(state)
+    blocked = sum(1 for task in tasks if task.blocked)
+    return {
+        "context_local": not bool(_git_origin(state.context)),
+        "counts": {
+            "projects": len(projects),
+            "clients": len(grouped),
+            "blocked_tasks": blocked,
+            "tasks": len(tasks),
+        },
+        "clients": [
+            {"key": client, "projects": items}
+            for client, items in sorted(grouped.items())
+        ],
+    }
+
+
+def workspace_health(state: WorkspaceWebState) -> dict[str, object]:
+    checks: list[dict[str, object]] = []
+    registry = state.context / "registry.tsv"
+    checks.append(
+        {
+            "id": "registry",
+            "ok": registry.is_file(),
+            "detail": "context/registry.tsv" if registry.is_file() else "registry missing",
+        }
+    )
+    origin = _git_origin(state.context)
+    checks.append(
+        {
+            "id": "context_remote",
+            "ok": True,
+            "detail": origin or "private-local (no remote)",
+        }
+    )
+    missing: list[str] = []
+    for project in load_projects(state):
+        folder = (state.root / project.folder).resolve()
+        if not folder.exists():
+            missing.append(project.key)
+    checks.append(
+        {
+            "id": "checkouts",
+            "ok": not missing,
+            "detail": "all cloned" if not missing else "uncloned: " + ", ".join(missing),
+        }
+    )
+    return {"ok": all(bool(item["ok"]) for item in checks), "checks": checks}
+
+
+def project_runs(state: WorkspaceWebState, project: str) -> dict[str, object]:
+    summary = _project_summary(state, project)
+    root = state.context / "runs" / project
+    runs: list[dict[str, object]] = []
+    if root.is_dir():
+        for path in sorted(root.iterdir(), key=lambda item: item.stat().st_mtime, reverse=True):
+            if not path.is_dir() or path.name.startswith("."):
+                continue
+            handoff = path / "handoff.md"
+            snippet = ""
+            if handoff.is_file():
+                snippet = handoff.read_text(encoding="utf-8", errors="replace")[:480]
+            runs.append(
+                {
+                    "id": path.name,
+                    "path": str(path.relative_to(state.context)),
+                    "handoff": snippet,
+                    "updated": datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat(),
+                }
+            )
+    return {"project": _project_to_dict(summary), "runs": runs}
+
+
 def index_html() -> str:
     return """<!doctype html>
 <html lang="en">
@@ -1830,31 +1929,112 @@ def index_html() -> str:
       border-radius: 2px;
       margin-right: 6px;
     }
+    .app-shell { display: flex; min-height: 100vh; }
+    .sidebar {
+      width: 220px;
+      flex-shrink: 0;
+      background: var(--bg-surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      padding: 16px 12px;
+      gap: 18px;
+    }
+    .sidebar nav { display: flex; flex-direction: column; gap: 2px; }
+    .nav-item {
+      background: transparent;
+      border: none;
+      color: var(--text-secondary);
+      text-align: left;
+      padding: 8px 10px;
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+    }
+    .nav-item:hover { background: var(--bg-surface-elevated); color: var(--text-primary); }
+    .nav-item.active { background: var(--accent-blue-bg); color: var(--accent-blue); }
+    .nav-item kbd {
+      float: right;
+      font-size: 10px;
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      padding: 0 5px;
+      border-radius: 3px;
+    }
+    .sidebar-foot { margin-top: auto; font-size: 11px; color: var(--text-muted); line-height: 1.6; }
+    .app-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
+    .stat-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 14px 16px;
+    }
+    .stat-card .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-muted); font-weight: 600; }
+    .stat-card .value { font-size: 22px; font-weight: 700; margin-top: 6px; }
+    .client-block { margin-bottom: 18px; }
+    .client-block h3 { font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.4px; }
+    .project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+    .project-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 12px;
+      cursor: pointer;
+    }
+    .project-card:hover { border-color: var(--accent-blue); }
+    .project-card h4 { font-size: 13px; margin-bottom: 4px; }
+    .empty-state { color: var(--text-muted); padding: 32px; text-align: center; }
+    .health-row { display: flex; justify-content: space-between; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+    .health-ok { color: var(--accent-green); font-weight: 600; }
+    .health-bad { color: var(--accent-red); font-weight: 600; }
+    .run-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px 14px; margin-bottom: 10px; }
+    .run-card h4 { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--accent-blue); }
+    .run-card pre { margin-top: 8px; white-space: pre-wrap; color: var(--text-secondary); font-size: 12px; }
+    @media (max-width: 860px) {
+      .app-shell { flex-direction: column; }
+      .sidebar { width: 100%; flex-direction: row; flex-wrap: wrap; align-items: center; }
+      .sidebar nav { flex-direction: row; flex-wrap: wrap; }
+      .sidebar-foot { display: none; }
+      .board-container { grid-template-columns: minmax(260px, 1fr); }
+      .search-layout, .context-layout { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
-  <header>
-    <a href="#" class="brand">
+  <div class="app-shell">
+  <aside class="sidebar">
+    <a href="#" class="brand" onclick="switchTab('overview'); return false;">
       <span class="brand-mark">WS</span>
-      <span class="brand-title">Agent Workspace</span>
-      <span class="brand-subtitle">Control</span>
+      <span class="brand-title">Workspace</span>
     </a>
-    <div class="nav-tabs">
-      <button class="tab-btn active" onclick="switchTab('board')">Kanban Board</button>
-      <button class="tab-btn" onclick="switchTab('backlog')">Backlog</button>
-      <button class="tab-btn" onclick="switchTab('search')">Search</button>
-      <button class="tab-btn" onclick="switchTab('context')">Context</button>
-      <button class="tab-btn" onclick="switchTab('commits')">Commits</button>
-      <button class="tab-btn" onclick="switchTab('activity')">Activity</button>
+    <nav>
+      <button class="nav-item active" data-tab="overview" onclick="switchTab('overview')">Overview <kbd>1</kbd></button>
+      <button class="nav-item" data-tab="board" onclick="switchTab('board')">Board <kbd>2</kbd></button>
+      <button class="nav-item" data-tab="backlog" onclick="switchTab('backlog')">Backlog <kbd>3</kbd></button>
+      <button class="nav-item" data-tab="search" onclick="switchTab('search')">Search <kbd>4</kbd></button>
+      <button class="nav-item" data-tab="context" onclick="switchTab('context')">Context <kbd>5</kbd></button>
+      <button class="nav-item" data-tab="runs" onclick="switchTab('runs')">Runs <kbd>6</kbd></button>
+      <button class="nav-item" data-tab="commits" onclick="switchTab('commits')">Commits <kbd>7</kbd></button>
+      <button class="nav-item" data-tab="activity" onclick="switchTab('activity')">Activity <kbd>8</kbd></button>
+      <button class="nav-item" data-tab="health" onclick="switchTab('health')">Health <kbd>9</kbd></button>
+    </nav>
+    <div class="sidebar-foot">
+      Local loopback control. Press <kbd>n</kbd> for a new task, <kbd>/</kbd> to search.
+      Token stays in this session only.
     </div>
-    <div class="header-actions">
+  </aside>
+  <div class="app-main">
+  <header>
+    <div class="header-actions" style="width:100%; justify-content:flex-end;">
       <select id="project-select" onchange="onProjectChanged()">
         <option value="">Loading projects...</option>
       </select>
       <button class="btn btn-primary" onclick="openCreateTaskModal()">+ New Task</button>
       <div class="auth-cluster">
         <span id="status-indicator" class="status-indicator" title="Disconnected"></span>
-        <input id="token-input" type="password" placeholder="Bearer token..." style="width: 130px;">
+        <input id="token-input" type="password" placeholder="Bearer token..." style="width: 130px;" autocomplete="off">
         <button class="btn btn-sm" onclick="saveToken()">Connect</button>
       </div>
     </div>
@@ -1866,8 +2046,12 @@ def index_html() -> str:
   </div>
 
   <main>
+    <section id="view-overview" class="view-panel active">
+      <div class="stat-grid" id="overview-stats"></div>
+      <div id="overview-clients"></div>
+    </section>
     <!-- Board View -->
-    <section id="view-board" class="view-panel active">
+    <section id="view-board" class="view-panel">
       <div class="board-container" id="board-columns"></div>
     </section>
 
@@ -2018,7 +2202,16 @@ def index_html() -> str:
         </table>
       </div>
     </section>
+
+    <section id="view-runs" class="view-panel">
+      <div id="runs-list" class="empty-state">Select a project to load runs.</div>
+    </section>
+    <section id="view-health" class="view-panel">
+      <div class="table-container" id="health-list"></div>
+    </section>
   </main>
+  </div>
+  </div>
 
   <!-- Create Task Modal -->
   <div id="modal-create" class="modal-backdrop">
@@ -2243,18 +2436,23 @@ def index_html() -> str:
     }
 
     function switchTab(tabId) {
-      document.querySelectorAll(".tab-btn").forEach(btn => btn.classList.remove("active"));
+      document.querySelectorAll(".nav-item").forEach(btn => {
+        btn.classList.toggle("active", btn.getAttribute("data-tab") === tabId);
+      });
       document.querySelectorAll(".view-panel").forEach(p => p.classList.remove("active"));
-      event.target.classList.add("active");
       const target = document.getElementById("view-" + tabId);
       if (target) target.classList.add("active");
+      location.hash = tabId;
 
-      if (tabId === "board") loadBoard();
+      if (tabId === "overview") loadOverview();
+      else if (tabId === "board") loadBoard();
       else if (tabId === "backlog") renderBacklog();
       else if (tabId === "context") loadContext();
       else if (tabId === "commits") loadCommits();
       else if (tabId === "search") executeSearch();
       else if (tabId === "activity") loadActivity();
+      else if (tabId === "runs") loadRuns();
+      else if (tabId === "health") loadHealth();
     }
 
     async function loadProjects() {
@@ -2275,25 +2473,82 @@ def index_html() -> str:
         }
         sel.value = state.project;
         sessionStorage.setItem("ws_project", state.project);
-        loadBoard();
+        const initial = (location.hash || "#overview").slice(1);
+        switchTab(initial || "overview");
       }
     }
 
     function onProjectChanged() {
       state.project = document.getElementById("project-select").value;
       sessionStorage.setItem("ws_project", state.project);
-      const activeTab = document.querySelector(".tab-btn.active");
-      if (activeTab) {
-        const text = activeTab.textContent.trim().toLowerCase();
-        if (text.includes("backlog")) renderBacklog();
-        else if (text.includes("search")) executeSearch();
-        else if (text.includes("context")) loadContext();
-        else if (text.includes("commits")) loadCommits();
-        else if (text.includes("activity")) loadActivity();
-        else loadBoard();
-      } else {
-        loadBoard();
+      const active = document.querySelector(".nav-item.active");
+      switchTab(active ? active.getAttribute("data-tab") : "overview");
+    }
+
+    async function loadOverview() {
+      const res = await api("/api/overview");
+      if (!res.ok) return;
+      const data = res.data;
+      const counts = data.counts || {};
+      document.getElementById("overview-stats").innerHTML = `
+        <div class="stat-card"><div class="label">Projects</div><div class="value">${counts.projects || 0}</div></div>
+        <div class="stat-card"><div class="label">Clients</div><div class="value">${counts.clients || 0}</div></div>
+        <div class="stat-card"><div class="label">Tasks</div><div class="value">${counts.tasks || 0}</div></div>
+        <div class="stat-card"><div class="label">Blocked</div><div class="value" style="color:var(--accent-amber)">${counts.blocked_tasks || 0}</div></div>
+        <div class="stat-card"><div class="label">Context</div><div class="value" style="font-size:16px">${data.context_local ? "local" : "shared"}</div></div>
+      `;
+      const host = document.getElementById("overview-clients");
+      host.innerHTML = "";
+      (data.clients || []).forEach(client => {
+        const block = document.createElement("div");
+        block.className = "client-block";
+        const cards = (client.projects || []).map(p => `
+          <div class="project-card" onclick="selectProject('${escapeHtml(p.key)}')">
+            <h4>${escapeHtml(p.key)}</h4>
+            <div style="font-size:12px;color:var(--text-secondary)">${escapeHtml(p.description || p.folder || "")}</div>
+          </div>`).join("");
+        block.innerHTML = `<h3>${escapeHtml(client.key)}</h3><div class="project-grid">${cards}</div>`;
+        host.appendChild(block);
+      });
+    }
+
+    function selectProject(key) {
+      state.project = key;
+      document.getElementById("project-select").value = key;
+      sessionStorage.setItem("ws_project", key);
+      switchTab("board");
+    }
+
+    async function loadRuns() {
+      const host = document.getElementById("runs-list");
+      if (!state.project) {
+        host.innerHTML = `<div class="empty-state">Select a project to load runs.</div>`;
+        return;
       }
+      const res = await api("/api/projects/" + encodeURIComponent(state.project) + "/runs");
+      if (!res.ok) return;
+      const runs = res.data.runs || [];
+      if (!runs.length) {
+        host.innerHTML = `<div class="empty-state">No runs recorded for ${escapeHtml(state.project)}.</div>`;
+        return;
+      }
+      host.innerHTML = runs.map(run => `
+        <article class="run-card">
+          <h4>${escapeHtml(run.id)}</h4>
+          <div style="font-size:11px;color:var(--text-muted)">${escapeHtml(run.path)} · ${escapeHtml((run.updated || "").slice(0,19))}</div>
+          <pre>${escapeHtml(run.handoff || "No handoff.md")}</pre>
+        </article>`).join("");
+    }
+
+    async function loadHealth() {
+      const res = await api("/api/health");
+      if (!res.ok) return;
+      const rows = (res.data.checks || []).map(check => `
+        <div class="health-row">
+          <span>${escapeHtml(check.id)}</span>
+          <span class="${check.ok ? "health-ok" : "health-bad"}">${check.ok ? "ok" : "fail"} — ${escapeHtml(check.detail || "")}</span>
+        </div>`).join("");
+      document.getElementById("health-list").innerHTML = rows || `<div class="empty-state">No checks.</div>`;
     }
 
     // --- Board ---
@@ -2854,6 +3109,15 @@ def index_html() -> str:
     function escapeHtml(str) {
       return (str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     }
+
+    document.addEventListener("keydown", (event) => {
+      const typing = /INPUT|TEXTAREA|SELECT/.test((event.target && event.target.tagName) || "");
+      if (typing) return;
+      const keys = { "1": "overview", "2": "board", "3": "backlog", "4": "search", "5": "context", "6": "runs", "7": "commits", "8": "activity", "9": "health" };
+      if (keys[event.key]) { event.preventDefault(); switchTab(keys[event.key]); }
+      if (event.key === "n") { event.preventDefault(); openCreateTaskModal(); }
+      if (event.key === "/") { event.preventDefault(); switchTab("search"); const q = document.getElementById("search-q"); if (q) q.focus(); }
+    });
 
     window.onload = init;
   </script>

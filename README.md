@@ -29,11 +29,10 @@ This repository is the *how*, kept separate from the *what*:
 Nothing here names an organisation. Clone it, run `ws init`, and it is yours.
 
 > **A caveat worth reading before you adopt it.** `core` carries the git workflow, the
-> REST API contract, and the definition of done. The concrete rules for testing, security,
-> and observability currently live in the `java` pack. If your stack is not Java, you get
-> the mechanism and the practice but no binding rules for those three, and you should
-> write a pack rather than assume the Java ones transfer. `ws doctor` tells you this
-> rather than letting you discover it later.
+> REST API contract, and the definition of done. Testing, security, and observability live
+> in the stack packs: `java` for Quarkus services, `web` for TypeScript/JavaScript. Enable
+> the packs you actually run (`packs = core, java, web`). `ws doctor` warns if only `core`
+> is on.
 
 ---
 
@@ -43,11 +42,15 @@ Nothing here names an organisation. Clone it, run `ws init`, and it is yours.
 
 ```bash
 git clone <workspace-remote> workspace && cd workspace
-cp workspace.conf.example workspace.conf        # then set org_name and context_remote
-.agents/bin/ws bootstrap                        # skills, context, and every product repo
+cp workspace.conf.example workspace.conf        # set org_name; leave context_remote empty for local-only
+.agents/bin/ws bootstrap                        # skills, and product repos that have remotes
+.agents/bin/ws context init                     # only if context/ is not already present
 .agents/bin/ws ide                              # copy the shared editor defaults
 .agents/bin/ws doctor                           # check isolation, ignores, toolchain
 ```
+
+Leave `context_remote` empty while context stays on this machine. Set it only when the
+context repository is shared. `ws doctor` reports a context with no remote as private-local.
 
 **Adopting the workspace for a new organisation, team, or client:**
 
@@ -81,7 +84,7 @@ Three repositories share one directory. Full explanation in [AGENTS.md §1](AGEN
 |---|---|
 | [`AGENTS.md`](AGENTS.md) | Working contract for agents + developers. **Read this first.** |
 | [`workspace.conf`](workspace.conf) | The only file that names an organisation |
-| [`.agents/standards/`](.agents/standards/) | Binding standards, in packs (`core`, `java`) |
+| [`.agents/standards/`](.agents/standards/) | Binding standards, in packs (`core`, `java`, `web`) |
 | [`test/ws.test.sh`](test/ws.test.sh) | The CLI's test suite — zero dependencies, runs in CI |
 | `.agents/skills.manifest` | Which skills to pull, and from where |
 | [`.agents/templates/`](.agents/templates/) | Templates: ADR, run, memory, endpoint spec |
@@ -99,8 +102,9 @@ Three repositories share one directory. Full explanation in [AGENTS.md §1](AGEN
 | `context/works/` | Human and agent hours, kept apart |
 | `context/docs/` | Client ADRs, proposals, kick-off notes |
 
-It must be **private**: it names clients and holds the hours behind invoices. `ws doctor`
-fails if its remote can be read without credentials.
+It must be **private** when it has a remote: it names clients and holds the hours behind
+invoices. A context with **no remote** is valid (private-local). `ws doctor` fails only if
+a configured remote can be read without credentials.
 
 **3. Product — the client's repos, ignored here**
 
@@ -153,6 +157,7 @@ ws sync                                    # pull workspace, report repo state
 ws new <key> <folder> [remote]             # register a new product repo
 ws link <key>                              # pointer + commit guard in a client repo
 ws doctor                                  # health check: isolation, portability, drift
+ws web                                     # local web control (loopback, bearer token)
 ```
 
 Add to `PATH` once, from inside your clone:

@@ -24,6 +24,12 @@ jobs:
       - name: Run tests
         run: ./test/ws.test.sh
 
+      - name: Run Python tests
+        run: |
+          python3 test/ws-web.test.py
+          python3 test/ws-tasks.test.py
+          python3 test/ws-security.test.py
+
   doctor:
     name: workspace hygiene
     runs-on: ubuntu-latest

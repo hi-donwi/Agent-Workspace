@@ -11,18 +11,18 @@ Standards are grouped into packs. Which packs apply is declared in
 [`workspace.conf`](../../workspace.conf):
 
 ```
-packs = core, java
+packs = core, java, web
 ```
 
 | Pack | Applies to | Contents |
 |---|---|---|
 | [`core/`](core/) | Every project, every language | Git workflow, REST API contract, definition of done |
-| [`java/`](java/) | Projects on the Java pack | Java 21, Quarkus, PostgreSQL, Flyway, Maven, and the concrete testing, security, and observability rules for that stack |
+| [`java/`](java/) | Java/Quarkus services | Java 21, Quarkus, PostgreSQL, Flyway, Maven, and that stack's testing, security, and observability rules |
+| [`web/`](web/) | TypeScript/JavaScript web and Node services | TypeScript, layout, testing, security, observability, and web DoD |
 
-`core` is always on. A stack pack carries the concrete rules for its language — which means
-an organisation working in another stack **adds a pack** rather than editing `core`. Until
-such a pack exists, that organisation has no binding rules for testing, security, or
-observability, and should say so explicitly rather than assume the Java ones transfer.
+`core` is always on. A stack pack carries the concrete rules for its language — add `java`,
+`web`, or both rather than editing `core`. `ws doctor` warns if only `core` is enabled,
+because that leaves testing, security, and observability unruled.
 
 ## Core
 
@@ -45,6 +45,17 @@ observability, and should say so explicitly rather than assume the Java ones tra
 | [`java/observability.md`](java/observability.md) | Logs, metrics, traces, health | Preparing a service |
 | [`java/build-ci.md`](java/build-ci.md) | Maven, pipeline, quality gates | Changing the build |
 | [`java/definition-of-done.md`](java/definition-of-done.md) | Java additions to the DoD: endpoint, DB, delivery-stage gates | Closing a task (with core) |
+
+## Web pack
+
+| File | Contents | Read before |
+|---|---|---|
+| [`web/00-decisions.md`](web/00-decisions.md) | TypeScript, runtime, what not to assume | Anything on a JS/TS repo |
+| [`web/project-layout.md`](web/project-layout.md) | UI / domain / data / integration layers | Creating new files |
+| [`web/testing.md`](web/testing.md) | Pyramid, what must have a test | Writing tests |
+| [`web/security.md`](web/security.md) | Secrets, cookies, XSS, CORS, authz | Auth, input, or browser code |
+| [`web/observability.md`](web/observability.md) | Logs, request ids, health | Preparing a service |
+| [`web/definition-of-done.md`](web/definition-of-done.md) | Web additions to the DoD | Closing a task (with core) |
 
 ## Status
 

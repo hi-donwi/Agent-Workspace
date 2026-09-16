@@ -19,3 +19,4 @@ ref    = main
 pack core
 pack agent
 pack java
+pack web
