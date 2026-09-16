@@ -284,6 +284,9 @@ Open a skill's `references/` only when `SKILL.md` is not enough.
 **Before starting a task, check whether a skill applies. If one does, read its `SKILL.md`
 first and follow it.**
 
+The table below is the Java/Quarkus pack. Other stacks use `ws route "<task>"` against
+their own pack; do not apply these skills to TypeScript, Flutter, or Go work.
+
 | Task | Skill |
 |---|---|
 | New Quarkus endpoint/service, layering, config, DI | `quarkus-service` |
@@ -536,7 +539,8 @@ this tool installed at all.
 
 ## 11. Architecture — layer separation (mandatory)
 
-Applies to all Java/Quarkus backend code across every project.
+Applies to Java/Quarkus backend code when the `java` pack is enabled. Other stacks follow
+their own pack; they do not inherit this table.
 
 | Layer | Form | Responsibility |
 |---|---|---|
@@ -559,15 +563,16 @@ Details and examples: `.agents/standards/java/project-layout.md`.
 
 ## 12. Definition of Done
 
-A change is done when **all** of these hold:
+A change is done when the core checklist in `.agents/standards/core/definition-of-done.md`
+holds, plus every extra from the enabled packs. The Java/Quarkus list below applies **only**
+when the `java` pack is on — see `.agents/standards/java/definition-of-done.md`.
 
-- [ ] Build green: `./mvnw verify`
+- [ ] The project's declared verification command is green (`./mvnw verify`, `go test ./...`, `npm test`, `flutter test`, …)
 - [ ] Unit tests for new logic; integration tests for new endpoints
-- [ ] OpenAPI annotations complete; contract regenerated
-- [ ] Flyway migration forward-only, tested against a populated database
-- [ ] No secrets, no `System.out`, no `TODO` without a ticket
-- [ ] Static analysis and dependency check pass
+- [ ] No secrets, no debug leftovers, no `TODO` without a ticket
 - [ ] The run's `handoff.md` is updated
 - [ ] Commits follow Conventional Commits + ticket ID
 
-Full checklist: `.agents/standards/core/definition-of-done.md`.
+Java/Quarkus additions (java pack only): OpenAPI annotations and committed spec, forward-only
+Flyway migrations tested against a populated database, no `System.out`, static analysis and
+dependency check.

@@ -1,7 +1,7 @@
 # Testing & Quality Gates
 
-With 145 endpoints and two developers working in parallel, tests are not ceremony — they
-are the only way to know module A still works after module B changed.
+With many endpoints and more than one developer working in parallel, tests are not
+ceremony — they are the only way to know module A still works after module B changed.
 
 ---
 
@@ -71,10 +71,10 @@ class VendorResourceIT {
                   {"name":"PT XYZ","taxId":"012345678901234","type":"COMPANY"}
                   """)
         .when()
-            .post("/api/v1/masterdata/vendors")
+            .post("/api/v1/catalog/vendors")
         .then()
             .statusCode(201)
-            .header("Location", matchesPattern(".*/api/v1/masterdata/vendors/\\d+"))
+            .header("Location", matchesPattern(".*/api/v1/catalog/vendors/\\d+"))
             .body("name", equalTo("PT XYZ"));
     }
 }
@@ -114,9 +114,9 @@ These changes do not pass review without tests:
 
 ```java
 @Test
-void vendorCannotViewHps() {
-    given().auth().oauth2(vendorToken())
-    .when().get("/api/v1/orders/{id}/reserve-price", orderId)
+void supplierCannotViewListPrice() {
+    given().auth().oauth2(supplierToken())
+    .when().get("/api/v1/orders/{id}/list-price", orderId)
     .then().statusCode(403);
 }
 ```

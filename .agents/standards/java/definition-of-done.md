@@ -45,7 +45,7 @@ workspace's active example.
 | Stage | Done means |
 |---|---|
 | 2 — Early Development | Architecture running, CI green, at least one end-to-end endpoint per module with tests |
-| 3 — Continued Development | All 145 endpoints complete, coverage above threshold, OpenAPI spec complete |
+| 3 — Continued Development | Contracted API scope complete, coverage above threshold, OpenAPI spec complete |
 | 4 — Server Setup & SIT | Automatic staging deploy, health checks green, k6 baseline recorded, SIT passed |
 | 5 — Staging & UAT | UAT defects closed or explicitly scheduled, runbook written, API documentation handed over |
 | 6 — Go-Live | Production running, monitoring and alerts active, rollback tested, handover complete |

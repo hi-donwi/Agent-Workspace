@@ -90,7 +90,7 @@ catch (SQLException e) {
 - `org.jboss.logging.Logger`, one per class, `private static final`.
 - **Parameterised, not concatenated**: `log.infof("vendor %s created", id)`.
 - **Never** `System.out.println`. Static analysis rejects it.
-- Never log sensitive data: passwords, tokens, full tax ID, reserve price values.
+- Never log sensitive data: passwords, tokens, full tax ID, confidential prices.
 - `debug` for flow detail, `info` for business events, `warn` for self-recovering
   conditions, `error` only for things a human must act on.
 

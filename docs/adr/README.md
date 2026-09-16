@@ -19,8 +19,7 @@ An ADR with no rejected alternatives records a preference, not a decision.
 | # | Title | Status | Date |
 |---|---|---|---|
 | [0001](0001-nested-independent-project-repos.md) | Nested independent project repos, not submodules | Accepted | 2026-09-12 |
-| [0002](0002-quarkus-lts-not-latest.md) | Pin Quarkus to the LTS line, not the newest release | Accepted | 2026-09-12 |
-| [0003](0003-production-namespace.md) | Production package namespace | Proposed | 2026-09-12 |
+| 0002–0003 | Moved to the organisation's context repository (stack pin and namespace are not framework decisions) | — | 2026-09-12 |
 | [0004](0004-english-as-workspace-language.md) | English as the workspace language | Accepted | 2026-09-12 |
 | [0005](0005-workspace-portability-and-guard-rails.md) | Workspace portability and isolation guard rails | Accepted | 2026-09-12 |
 | [0006](0006-framework-context-product-split.md) | Framework, context, and product as three repositories | Accepted | 2026-09-12 |

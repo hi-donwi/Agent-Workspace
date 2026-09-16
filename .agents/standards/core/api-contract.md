@@ -1,7 +1,7 @@
 # REST API Contract
 
-145 endpoints are only usable by a frontend if their shape is predictable. This standard
-makes endpoint 145 behave like endpoint 1.
+A large API is only usable by a frontend if every endpoint's shape is predictable. This
+standard makes the last endpoint behave like the first.
 
 ---
 
@@ -12,18 +12,18 @@ makes endpoint 145 behave like endpoint 1.
 ```
 
 - Version in the URL from day one: `/api/v1/`.
-- Module matches the package: `masterdata`, `dashboard`, `inbox`, `auction`, `reporting`, …
-- Resources are **plural, kebab-case**: `/order-types`, `/price-references`.
+- Module matches the package: `catalog`, `orders`, `billing`, `reporting`, …
+- Resources are **plural, kebab-case**: `/order-types`, `/price-lists`.
 - No verbs in paths. Actions are expressed by the HTTP method.
 - Non-CRUD actions become sub-resources: `POST /orders/{id}/submission`, not
   `POST /submitOrder`.
 
 ```
-RIGHT  GET    /api/v1/masterdata/vendors?q=abc&page=0&size=50
-RIGHT  POST   /api/v1/masterdata/vendors
-RIGHT  GET    /api/v1/masterdata/vendors/{id}
-RIGHT  PUT    /api/v1/masterdata/vendors/{id}
-RIGHT  DELETE /api/v1/masterdata/vendors/{id}
+RIGHT  GET    /api/v1/catalog/vendors?q=abc&page=0&size=50
+RIGHT  POST   /api/v1/catalog/vendors
+RIGHT  GET    /api/v1/catalog/vendors/{id}
+RIGHT  PUT    /api/v1/catalog/vendors/{id}
+RIGHT  DELETE /api/v1/catalog/vendors/{id}
 RIGHT  POST   /api/v1/reporting/transaction-summary/export
 
 WRONG  GET    /api/v1/getVendorList
@@ -101,7 +101,7 @@ Every error, without exception, returns `application/problem+json`:
   "title": "Validation failed",
   "status": 422,
   "detail": "Vendor tax ID is already registered to PT ABC",
-  "instance": "/api/v1/masterdata/vendors",
+  "instance": "/api/v1/catalog/vendors",
   "code": "VENDOR_tax ID_DUPLICATE",
   "traceId": "b7c3f1a9e2d4",
   "errors": [

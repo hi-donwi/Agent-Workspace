@@ -7,7 +7,7 @@ frontend has started consuming it.
 
 | Field | Value |
 |---|---|
-| Module | `masterdata` / `dashboard` / `inbox` / `auction` / `reporting` / … |
+| Module | `catalog` / `orders` / `billing` / `reporting` / … |
 | Path | `/api/v1/<module>/<plural-kebab-resource>` |
 | Method | GET / POST / PUT / PATCH / DELETE |
 | Ticket | PROJ-XXX |

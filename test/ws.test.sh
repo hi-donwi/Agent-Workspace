@@ -72,10 +72,10 @@ git -C "$WS" remote add origin "https://example.invalid/workspace.git"
 # ── a local skills source, so sync needs no network ──────────────────────────
 SKILLSRC="$TMP/skills-source"
 mkdir -p "$SKILLSRC/skills/alpha" "$SKILLSRC/skills/beta" "$SKILLSRC/skills/gamma"
-for n in alpha beta; do
-  printf -- '---\nname: %s\npack: core\nkeywords: %s, %s-thing, testing\ndescription: Does %s things. Use when testing %s.\n---\n# %s\n' \
-    "$n" "$n" "$n" "$n" "$n" "$n" > "$SKILLSRC/skills/$n/SKILL.md"
-done
+printf -- '---\nname: alpha\ndescription: Does alpha things. Use when testing alpha.\nmetadata:\n  pack: core\n  keywords: alpha, alpha-thing, testing\n---\n# alpha\n' \
+  > "$SKILLSRC/skills/alpha/SKILL.md"
+printf -- '---\nname: beta\npack: core\nkeywords: beta, beta-thing, testing\ndescription: Does beta things. Use when testing beta.\n---\n# beta\n' \
+  > "$SKILLSRC/skills/beta/SKILL.md"
 printf -- '---\nname: gamma\npack: extra\ndescription: Does gamma things. Use when testing gamma.\n---\n# gamma\n' \
   > "$SKILLSRC/skills/gamma/SKILL.md"
 cat > "$SKILLSRC/index.json" <<'JSON'
@@ -149,6 +149,10 @@ check "ws skills sync" ws skills sync
 exists "$WS/.agents/skills/alpha/SKILL.md" "a skill in the requested pack arrives"
 exists "$WS/.agents/skills/beta/SKILL.md"  "so does the other one"
 not_exists "$WS/.agents/skills/gamma" "a skill outside the pack does NOT arrive"
+contains "$WS/.agents/skills/index.json" '"name": "alpha", "pack": "core"' \
+  "metadata.pack is indexed as the skill pack"
+contains "$WS/.agents/skills/index.json" '"name": "beta", "pack": "core"' \
+  "top-level pack still indexes as a fallback"
 exists "$WS/.agents/skills.lock" "the resolved commit is locked"
 contains "$WS/.agents/skills.lock" "commit = " "the lock names a commit"
 
@@ -439,6 +443,11 @@ git -C "$PROD" reset -q
 cp "$WS/workspace.conf" "$TMP/conf.bak"
 sed -i.bak 's/^packs = .*/packs = core, nosuchpack/' "$WS/workspace.conf" && rm -f "$WS/workspace.conf.bak"
 check_fails "doctor fails on a standards pack that does not exist" ws doctor --ci
+cp "$TMP/conf.bak" "$WS/workspace.conf"
+
+sed -i.bak 's/^packs = .*/packs = core/' "$WS/workspace.conf" && rm -f "$WS/workspace.conf.bak"
+ws doctor >"$TMP/doctor-core-only.txt" 2>&1 || true
+contains "$TMP/doctor-core-only.txt" "Java not required" "doctor does not require Java when the java pack is off"
 cp "$TMP/conf.bak" "$WS/workspace.conf"
 
 mv "$WS/.gitignore" "$TMP/gitignore.bak"

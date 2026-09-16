@@ -797,7 +797,7 @@ cmd_route() {
     # `|| true` on the terminal read of each pipeline absorbs it: the assignment
     # still captures whatever text made it through.
     kw="$(
-      { sed -n 's/^keywords:[[:space:]]*//p' "$d/SKILL.md" | norm | tr ',' '\n' \
+      { skill_keywords "$d/SKILL.md" | norm | tr ',' '\n' \
           | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | grep -v '^$' \
           | while read -r w; do
               if [ "${q#*$w}" != "$q" ]; then echo 1; fi
@@ -829,6 +829,33 @@ cmd_route() {
 }
 
 # ─────────────────────────────────────────────────────────────── skills
+# Read a frontmatter scalar. Prefer metadata.<key> (Agent Skills spec); fall back
+# to a top-level key so older materialised copies and domain skills still index.
+skill_frontmatter() {
+  local key="$1" file="$2"
+  awk -v key="$key" '
+    NR==1 && $0=="---" { inFm=1; next }
+    inFm && $0=="---"  { exit }
+    !inFm              { exit }
+    /^metadata:[[:space:]]*$/ { inMeta=1; next }
+    inMeta && /^[^[:space:]]/ { inMeta=0 }
+    inMeta && $0 ~ "^[[:space:]]+" key ":[[:space:]]*" {
+      sub("^[[:space:]]+" key ":[[:space:]]*", "")
+      print
+      found=1
+      exit
+    }
+    $0 ~ "^" key ":[[:space:]]*" {
+      fallback=$0
+      sub("^" key ":[[:space:]]*", "", fallback)
+    }
+    END { if (!found && fallback != "") print fallback }
+  ' "$file"
+}
+
+skill_pack() { skill_frontmatter pack "$1"; }
+skill_keywords() { skill_frontmatter keywords "$1"; }
+
 # Indexes ONE skill directory. The framework index must never contain an
 # organisation's domain skills: .agents/skills/index.json is tracked in the shared
 # repository, while context skills belong to whoever owns the context repo.
@@ -849,12 +876,12 @@ build_skills_index() {
       ' "$d/SKILL.md" \
       | tr '\n' ' ' | sed 's/  */ /g; s/[[:space:]]*$//; s/"/\\"/g')"
     local kw pack path
-    kw="$(sed -n 's/^keywords:[[:space:]]*//p' "$d/SKILL.md" | head -1 | sed 's/"/\\"/g')"
-    pack="$(sed -n 's/^pack:[[:space:]]*//p' "$d/SKILL.md" | head -1)"
+    kw="$(skill_keywords "$d/SKILL.md" | sed 's/"/\\"/g')"
+    pack="$(skill_pack "$d/SKILL.md")"
     path="${d#$ROOT/}SKILL.md"
     [ "$first" = 1 ] || echo ',' >> "$out"; first=0
     printf '    {"name": "%s", "pack": "%s", "path": "%s", "keywords": "%s", "description": "%s"}' \
-      "$name" "${pack:-java}" "$path" "$kw" "$desc" >> "$out"
+      "$name" "${pack:-core}" "$path" "$kw" "$desc" >> "$out"
   done
   { echo; echo '  ]'; echo '}'; } >> "$out"
 }
@@ -1425,13 +1452,18 @@ cmd_doctor() {
 
   if [ "$ci" = 0 ]; then
     echo "-- Toolchain --"
-    if command -v java >/dev/null; then
-      local jv; jv="$(java -version 2>&1 | head -1 | sed -E 's/.*"([0-9]+).*/\1/')"
-      [ "${jv:-0}" -ge 21 ] && c_grn "ok Java $jv" || { c_red "x Java $jv - requires 21+"; fail=1; }
-    else c_red "x java not found"; fail=1; fi
+    local packs_csv; packs_csv="$(conf_get packs core | tr -d '[:space:]')"
+    if echo ",$packs_csv," | grep -q ',java,'; then
+      if command -v java >/dev/null; then
+        local jv; jv="$(java -version 2>&1 | head -1 | sed -E 's/.*"([0-9]+).*/\1/')"
+        [ "${jv:-0}" -ge 21 ] && c_grn "ok Java $jv" || { c_red "x Java $jv - requires 21+"; fail=1; }
+      else c_red "x java not found (required by the java pack)"; fail=1; fi
+      command -v docker >/dev/null && c_grn "ok docker" || c_ylw "! docker missing - Testcontainers will not run"
+      c_dim "  (maven not required: use ./mvnw inside each product repo)"
+    else
+      c_dim "  Java not required (java pack is not enabled)"
+    fi
     command -v git >/dev/null && c_grn "ok git $(git --version | awk '{print $3}')" || { c_red "x git"; fail=1; }
-    command -v docker >/dev/null && c_grn "ok docker" || c_ylw "! docker missing - Testcontainers will not run"
-    c_dim "  (maven not required: use ./mvnw inside each product repo)"
     echo
   fi
 
