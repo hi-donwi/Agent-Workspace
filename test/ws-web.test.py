@@ -1120,6 +1120,23 @@ class WebControlReadFlow(unittest.TestCase):
         self.assertIn("text/html", content_type)
         self.assertIn(b"UIDL Root", body)
 
+    def test_default_runtime_is_uidl_when_dist_exists(self):
+        dist_dir = self.root / "projects/donwi/public/UIDL-Runtime/apps/workspace-control/dist"
+        dist_dir.mkdir(parents=True, exist_ok=True)
+        (dist_dir / "index.html").write_text("<!doctype html><html><body>Preferred UIDL</body></html>")
+        default_state = build_state(self.root, token="test-token")
+        self.assertEqual(default_state.runtime, "uidl")
+        status, _content_type, body = route(default_state, "GET", "/", {})
+        self.assertEqual(status, 200)
+        self.assertIn(b"Preferred UIDL", body)
+
+    def test_uidl_falls_back_to_vanilla_without_dist(self):
+        default_state = build_state(self.root, token="test-token", runtime="uidl")
+        status, content_type, body = route(default_state, "GET", "/", {})
+        self.assertEqual(status, 200)
+        self.assertIn("text/html", content_type)
+        self.assertIn(b"command-palette", body)
+
 
 if __name__ == "__main__":
     unittest.main()

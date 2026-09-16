@@ -157,7 +157,7 @@ ws sync                                    # pull workspace, report repo state
 ws new <key> <folder> [remote]             # register a new product repo
 ws link <key>                              # pointer + commit guard in a client repo
 ws doctor                                  # health check: isolation, portability, drift
-ws web                                     # local web control (loopback, bearer token)
+ws web                                     # local web control via UIDL-Runtime (vanilla fallback)
 ```
 
 Add to `PATH` once, from inside your clone:

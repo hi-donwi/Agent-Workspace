@@ -65,14 +65,14 @@ class WorkspaceWebState:
     root: Path
     context: Path
     token: str
-    runtime: str = "vanilla"
+    runtime: str = "uidl"
 
 
 def build_state(
     root: str | Path,
     *,
     token: str | None = None,
-    runtime: str = "vanilla",
+    runtime: str = "uidl",
 ) -> WorkspaceWebState:
     base = Path(root).resolve()
     context = base / _context_dir(base)
@@ -86,11 +86,23 @@ def _locate_uidl_dist(root: Path) -> Path:
     if env_override:
         return Path(env_override).resolve()
 
-    candidate_matches = sorted(root.glob("projects/**/apps/workspace-control/dist"))
-    if candidate_matches:
-        return candidate_matches[0].resolve()
+    preferred = [
+        root / "projects/donwi/public/UIDL-Runtime/apps/workspace-control/dist",
+        root / "projects/core/UIDL-Runtime/apps/workspace-control/dist",
+    ]
+    for candidate in preferred:
+        if (candidate / "index.html").is_file():
+            return candidate.resolve()
 
-    return (root / "projects/core/UIDL-Runtime/apps/workspace-control/dist").resolve()
+    matches = sorted(p for p in root.glob("projects/**/apps/workspace-control/dist") if (p / "index.html").is_file())
+    if matches:
+        return matches[0].resolve()
+
+    return preferred[0].resolve()
+
+
+def _uidl_available(root: Path) -> bool:
+    return (_locate_uidl_dist(root) / "index.html").is_file()
 
 
 def _serve_static_uidl(state: WorkspaceWebState, subpath: str) -> tuple[int, str, bytes]:
@@ -136,11 +148,9 @@ def route(
         if path.startswith("/uidl"):
             rel = path[len("/uidl") :]
             return _serve_static_uidl(state, rel)
-        if state.runtime == "uidl":
-            if path == "/":
-                return _serve_static_uidl(state, "index.html")
-            if path.startswith("/assets/"):
-                return _serve_static_uidl(state, path)
+        uidl_ok = state.runtime == "uidl" and _uidl_available(state.root)
+        if uidl_ok and (path == "/" or path.startswith("/assets/")):
+            return _serve_static_uidl(state, "index.html" if path == "/" else path)
         if path == "/":
             return HTTPStatus.OK, "text/html; charset=utf-8", index_html().encode()
     _require_token(state, headers)
@@ -3494,7 +3504,7 @@ def serve(
     host: str,
     port: int,
     token: str | None = None,
-    runtime: str = "vanilla",
+    runtime: str = "uidl",
 ) -> None:
     state = build_state(root, token=token, runtime=runtime)
 
@@ -3548,9 +3558,13 @@ def serve(
 
     server = ThreadingHTTPServer((host, port), Handler)
     actual_host, actual_port = server.server_address
+    ui = "uidl" if state.runtime == "uidl" and _uidl_available(state.root) else "vanilla"
     print(f"Agent Workspace Control: http://{actual_host}:{actual_port}/")
     print(f"Open in browser:         http://{actual_host}:{actual_port}/?token={state.token}")
     print(f"Bearer token:            {state.token}")
+    print(f"UI runtime:              {ui} (UIDL-Runtime companion)" if ui == "uidl" else f"UI runtime:              {ui}")
+    if state.runtime == "uidl" and ui == "vanilla":
+        print("UIDL companion dist not found; serving vanilla. In UIDL-Runtime run: npm run build:workspace-control")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -3726,7 +3740,12 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=0, type=int)
     parser.add_argument("--token")
-    parser.add_argument("--runtime", choices=["vanilla", "uidl"], default="vanilla", help="Web UI runtime (default: vanilla)")
+    parser.add_argument(
+        "--runtime",
+        choices=["vanilla", "uidl"],
+        default="uidl",
+        help="Web UI runtime (default: uidl; falls back to vanilla if the companion dist is missing)",
+    )
     args = parser.parse_args(argv)
     serve(args.root, args.host, args.port, args.token, runtime=args.runtime)
     return 0
