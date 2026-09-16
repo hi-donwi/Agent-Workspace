@@ -6,8 +6,8 @@ alwaysApply: false
 
 Full guidance: `.agents/skills/bulk-reporting-export/SKILL.md`.
 
-The reporting module is 86 of 145 endpoints. It is where memory and latency failures appear,
-because it is the only place that touches whole datasets rather than one page.
+Reporting is where memory and latency failures appear first, because it is the place that
+touches whole datasets rather than one page.
 
 ## Rules
 

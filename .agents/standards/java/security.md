@@ -1,7 +1,7 @@
 # Security
 
-This system holds vendor records, reserve price values, and tender award decisions. A leak here is
-not a technical incident — it is a legal and order-integrity problem.
+This system holds customer records, contract values, and award decisions. A leak here is
+not a technical incident — it is a legal and data-integrity problem.
 
 ---
 
@@ -46,9 +46,9 @@ Declarative, not hand-written `if` statements inside services.
 
 ```java
 @GET
-@Path("/{id}/reserve-price")
+@Path("/{id}/list-price")
 @RolesAllowed({"COMMITTEE", "ADMIN"})
-public HpsResponse viewHps(@PathParam("id") Long id) { ... }
+public PriceResponse viewListPrice(@PathParam("id") Long id) { ... }
 ```
 
 - **Closed by default**: every resource method requires a role annotation. A method without

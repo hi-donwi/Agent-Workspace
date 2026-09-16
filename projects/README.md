@@ -6,7 +6,8 @@ hours — see [`docs/context-repository.md`](../docs/context-repository.md).
 Every folder here is an **independent git repository** with its own remote.
 The `workspace` repo ignores all of them via `/projects/*` in `.gitignore`.
 
-The only thing this repo tracks is `registry.tsv` — a map of key → folder → remote.
+The map of key → folder → remote lives in the context repository (`context/registry.tsv`),
+not here. This folder only ships this README.
 
 ## Why not submodules
 

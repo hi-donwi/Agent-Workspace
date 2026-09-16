@@ -7,8 +7,8 @@ app-backend/                      ← product repo (projects/<group>/<repo>)
 ├── mvnw, mvnw.cmd, .mvn/           ← wrapper, MUST be committed
 ├── pom.xml                         ← parent, packaging=pom, pins versions
 ├── app-common/                   ← shared DTOs, errors, utils, constants
-├── app-api/                      ← main REST API (7 domain modules)
-├── app-reporting/                ← reporting and export (86 endpoints)
+├── app-api/                      ← main REST API (one Maven module per bounded context)
+├── app-reporting/                ← reporting and export
 └── docs/
     ├── openapi/api-v1.yaml       ← generated spec, COMMITTED
     └── adr/
@@ -38,11 +38,11 @@ com.example.product.<module>.
 
 Example domain modules (the real list comes from the project brief):
 
-| Package | Endpoints | Owner |
-|---|---|---|
-| `masterdata` | 29 | Backend Dev 1 |
-| `dashboard` | 13 | Backend Dev 1 |
-| `reporting` | 86 | Backend Dev 2 |
+| Package | Owner |
+|---|---|
+| `catalog` | Backend Dev 1 |
+| `orders` | Backend Dev 1 |
+| `reporting` | Backend Dev 2 |
 
 One package per bounded slice of the domain, one named owner each. Record the real list in
 the project's `context/memory/projects/<key>/project.md`, not here — this table exists to
@@ -62,8 +62,8 @@ show the shape, and a module that no one owns is a module nobody maintains.
 
 This is not ceremony. Three concrete consequences:
 
-1. The same logic gets rewritten in every endpoint that needs it — with 145 endpoints,
-   that is 145 places to get it wrong.
+1. The same logic gets rewritten in every endpoint that needs it — with a large API,
+   that is many places to get it wrong.
 2. Transaction boundaries become unclear. `@Transactional` on a resource wraps JSON
    serialisation and holds a database connection longer than necessary.
 3. The logic cannot be tested without starting HTTP. Tests become slow, then get skipped.
@@ -80,7 +80,7 @@ public List<Vendor> list(@QueryParam("q") String q) {
 
 ```java
 // RIGHT
-@Path("/api/v1/masterdata/vendor")
+@Path("/api/v1/catalog/vendors")
 @Produces(MediaType.APPLICATION_JSON)
 public class VendorResource {
 

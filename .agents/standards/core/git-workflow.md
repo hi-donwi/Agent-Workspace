@@ -39,10 +39,10 @@ Refs: PROJ-142
 | `build` | Build, dependencies, CI |
 | `chore` | Everything else |
 
-Scope is the module: `masterdata`, `dashboard`, `inbox`, `auction`, `reporting`, `common`.
+Scope is the module: `catalog`, `orders`, `billing`, `reporting`, `common`.
 
 ```
-RIGHT  feat(masterdata): add vendor search by tax ID
+RIGHT  feat(catalog): add vendor search by tax ID
 RIGHT  fix(reporting): prevent OOM when exporting more than 50k rows
 
        The export loaded the full result set into a List before writing.

@@ -55,8 +55,8 @@ Without this, finding one user's request across two services' logs is a blind te
 | `INFO` | Business events: order submitted, export finished, user logged in |
 | `DEBUG` | Flow detail. Enabled per package, never globally. |
 
-**Do not log:** passwords, tokens, session IDs, bid document contents, reserve price values before
-opening, full tax ID.
+**Do not log:** passwords, tokens, session IDs, uploaded document contents, confidential
+prices, full tax ID.
 
 Business events use structured fields, not sentences:
 

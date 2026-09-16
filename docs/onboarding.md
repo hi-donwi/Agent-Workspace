@@ -38,7 +38,7 @@ stays isolated in git terms.
 |---|---|---|
 | 1 | [`../AGENTS.md`](../AGENTS.md) | How we work. The contract. |
 | 2 | [`../.agents/standards/README.md`](../.agents/standards/README.md) | Which standards packs apply here |
-| 3 | [`../.agents/standards/java/00-decisions.md`](../.agents/standards/java/00-decisions.md) | What is already settled, and why |
+| 3 | [`../.agents/standards/java/00-decisions.md`](../.agents/standards/java/00-decisions.md) | What is already settled, and why — **only if** `java` is in `packs` |
 | 4 | `../context/docs/` | What this organisation is building, and by when |
 | 5 | `../context/skills/<domain>/SKILL.md` | The business domain, if your organisation has one |
 | 6 | `../context/memory/projects/<key>/active.md` | Where your project stands today |

@@ -100,5 +100,6 @@ commit; the pre-split history is kept privately and is not pushed.
 - [x] `workspace.conf` untracked, `workspace.conf.example` shipped, `ws init` added
 - [x] Standards split into `core` and `java` packs; skills tagged with a pack
 - [x] CLI renamed to `ws`; framework scrubbed of organisation and client identifiers
-- [ ] Publish the framework from an orphan commit; keep the pre-split history private
-- [ ] Give the context repository a private remote
+- [x] Publish the framework from an orphan commit; keep the pre-split history private
+- [x] Give the context repository a private remote
+- [x] Delete merged feature branches that still carried pre-generic example paths (GitHub `main` is the only remaining branch; merged PR objects may still be reachable)

@@ -29,7 +29,7 @@ Use **the LTS, not the newest release**.
 
 Quarkus ships an LTS every six months with one year of support; non-LTS releases appear
 every 4–6 weeks and **stop being supported as soon as the next minor ships** — about a
-month in practice. For a system going live in November 2026 and then maintained, non-LTS
+month in practice. For a system that will be maintained for a year after go-live, non-LTS
 means a forced minor upgrade every month for the life of the project. 3.33 LTS carries
 security patches through March 2027.
 
@@ -54,7 +54,7 @@ com.example.product.<module>
 ```
 
 `[PENDING CLIENT]` — reverse domain of `example.com`. **Do not** carry `com.demo.tender`
-over from the demo: changing the namespace after 145 endpoints exist is a cross-repo
+over from the demo: changing the namespace after the codebase has grown is a cross-repo
 refactor touching every file, every import, and every configuration key.
 
 **This is the number one kick-off question.** Until the answer arrives, all code is written

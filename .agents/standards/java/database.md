@@ -17,8 +17,8 @@ justification good enough to turn it on.
 ```
 src/main/resources/db/migration/
 ├── V1__init_schema.sql
-├── V2__masterdata_vendor.sql
-├── V20260912_1430__order_add_reserve_price_column.sql
+├── V2__catalog_vendor.sql
+├── V20260912_1430__order_add_currency_column.sql
 └── R__view_transaction_summary.sql
 ```
 
@@ -38,12 +38,12 @@ The `order` table will hold millions of rows. What locks a table for a long time
 
 ```sql
 -- WRONG — rewrites the whole table, blocking writes
-ALTER TABLE order ADD COLUMN reserve_price NUMERIC(18,2) NOT NULL DEFAULT 0;
+ALTER TABLE order ADD COLUMN currency CHAR(3) NOT NULL DEFAULT 'USD';
 
 -- RIGHT — three steps, no long lock
-ALTER TABLE order ADD COLUMN reserve_price NUMERIC(18,2);          -- instant
-UPDATE order SET reserve_price = 0 WHERE reserve_price IS NULL;              -- batched
-ALTER TABLE order ALTER COLUMN reserve_price SET NOT NULL;         -- validate
+ALTER TABLE order ADD COLUMN currency CHAR(3);                     -- instant
+UPDATE order SET currency = 'USD' WHERE currency IS NULL;          -- batched
+ALTER TABLE order ALTER COLUMN currency SET NOT NULL;              -- validate
 ```
 
 Indexes on large tables use `CREATE INDEX CONCURRENTLY` (and disable the Flyway transaction
@@ -80,7 +80,7 @@ updated_by  VARCHAR(100)
 ```
 
 Populated automatically through a `@MappedSuperclass` with `@PrePersist`/`@PreUpdate`, not
-by hand in every service. For a order system, "who changed the reserve price value and when" is
+by hand in every service. For an order system, "who changed the list price and when" is
 an audit question that will certainly be asked.
 
 ### Soft delete
