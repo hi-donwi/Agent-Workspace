@@ -22,26 +22,6 @@ conf_get() {
   [ -n "$v" ] && printf '%s' "$v" || printf '%s' "$default"
 }
 
-conf_set() {
-  local key="$1" value="$2"
-  [ -f "$CONF" ] || die "no workspace.conf - run: ws init"
-  python3 - "$CONF" "$key" "$value" <<'PY'
-import pathlib, re, sys
-path, key, value = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-text = path.read_text() if path.exists() else ""
-pattern = re.compile(rf"^(\s*{re.escape(key)}\s*=\s*).*$", re.M)
-line = f"{key} = {value}"
-if pattern.search(text):
-    path.write_text(pattern.sub(line, text, count=1))
-else:
-    path.write_text(text.rstrip() + "\n" + line + "\n")
-PY
-}
-
-normalize_remote() {
-  printf '%s' "${1:-}" | sed -E 's#^git@([^:]+):#https://\1/#; s#^ssh://git@([^/]+)/#https://\1/#; s#\.git$##'
-}
-
 ORG_NAME="$(conf_get org_name 'this organisation')"
 ORG_KEY="$(conf_get org_key 'org')"
 CONTEXT_DIR="$ROOT/$(conf_get context_dir 'context')"
@@ -216,10 +196,13 @@ cmd_context() {
       python3 "$ROOT/.agents/bin/ws_state.py" context-pack "$ROOT" "$CONTEXT_DIR" "$@"
       ;;
     sync)
-      context_sync
-      ;;
-    switch)
-      context_switch "$@"
+      is_repo "$CONTEXT_DIR" || die "no context repository"
+      if [ -z "$(git -C "$CONTEXT_DIR" remote get-url origin 2>/dev/null || true)" ]; then
+        c_dim "context is private-local (no remote) - nothing to pull"
+        return 0
+      fi
+      [ -z "$(git -C "$CONTEXT_DIR" status --porcelain)" ] || die "context has local changes; save them before syncing"
+      git -C "$CONTEXT_DIR" pull --ff-only
       ;;
     init)
       [ -d "$CONTEXT_DIR/.git" ] && die "context already exists at ${CONTEXT_DIR#$ROOT/}"
@@ -252,69 +235,8 @@ cmd_context() {
         c_ylw "no context yet - run: ws context init"
       fi
       ;;
-    *) die "usage: ws context [status|init|clone <remote>|sync|switch <remote> [--force]]" ;;
+    *) die "usage: ws context [status|init|clone <remote>]" ;;
   esac
-}
-
-context_sync() {
-  is_repo "$CONTEXT_DIR" || die "no context repository"
-  if [ -z "$(git -C "$CONTEXT_DIR" remote get-url origin 2>/dev/null || true)" ]; then
-    c_dim "context is private-local (no remote) - nothing to pull"
-    return 0
-  fi
-  local branch
-  branch="$(git -C "$CONTEXT_DIR" rev-parse --abbrev-ref HEAD)"
-  git -C "$CONTEXT_DIR" fetch origin
-  local dirty stashed=0
-  dirty="$(git -C "$CONTEXT_DIR" status --porcelain)"
-  if [ -n "$dirty" ]; then
-    git -C "$CONTEXT_DIR" stash push -u -m "ws-context-sync"
-    stashed=1
-    c_dim "stashed local context changes"
-  fi
-  if ! git -C "$CONTEXT_DIR" pull --rebase origin "$branch"; then
-    c_red "context pull --rebase failed"
-    [ "$stashed" = 1 ] && c_dim "local changes are in: git -C context stash list"
-    die "resolve the rebase in context/, then: git stash pop"
-  fi
-  if [ "$stashed" = 1 ]; then
-    if ! git -C "$CONTEXT_DIR" stash pop; then
-      die "stash pop conflicted in context/ — resolve it, then git stash drop if needed"
-    fi
-    c_grn "-> restored local context changes"
-  fi
-  c_grn "-> context synced"
-}
-
-context_switch() {
-  local remote="${1:-}" force=0
-  [ -n "$remote" ] || die "usage: ws context switch <remote> [--force]"
-  shift || true
-  [ "${1:-}" = "--force" ] && force=1
-  if [ ! -d "$CONTEXT_DIR/.git" ]; then
-    cmd_context clone "$remote"
-    conf_set context_remote "$remote"
-    c_grn "-> context_remote set in workspace.conf"
-    return 0
-  fi
-  local current
-  current="$(git -C "$CONTEXT_DIR" remote get-url origin 2>/dev/null || true)"
-  if [ -n "$current" ]; then
-    if [ "$(normalize_remote "$current")" = "$(normalize_remote "$remote")" ]; then
-      conf_set context_remote "$remote"
-      c_grn "context already on this remote"
-      return 0
-    fi
-    die "context origin is $current; refusing $remote (different audience). Use a separate workspace clone (ADR-0010). --force will not replace a populated context/"
-  fi
-  if [ -n "$(git -C "$CONTEXT_DIR" status --porcelain)" ] && [ "$force" != 1 ]; then
-    die "local context has changes; commit them or pass --force to attach this remote"
-  fi
-  [ "$force" = 1 ] || die "attaching a remote publishes this local context's history. Confirm: ws context switch <remote> --force"
-  git -C "$CONTEXT_DIR" remote add origin "$remote"
-  conf_set context_remote "$remote"
-  c_grn "-> attached origin and set context_remote"
-  c_dim "  this history will be visible to everyone who can clone that remote"
 }
 
 cmd_web() {
@@ -363,23 +285,7 @@ cmd_list() {
 
 # ─────────────────────────────────────────────────────────────── bootstrap
 cmd_bootstrap() {
-  local n=0 only_client="" only_group="" only_project="" only=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --client) only_client="${2:?}"; shift 2 ;;
-      --group) only_group="${2:?}"; shift 2 ;;
-      --project) only_project="${2:?}"; shift 2 ;;
-      --only)
-        only="${2:?}"; shift 2
-        if [ -d "$CLIENTS_DIR/$only" ]; then only_client="$only"
-        elif [ -n "$(group_get "$only" 2>/dev/null || true)" ]; then only_group="$only"
-        elif [ -n "$(reg_get "$only")" ]; then only_project="$only"
-        else die "ws bootstrap --only $only: not a client, group, or project key"
-        fi
-        ;;
-      *) die "usage: ws bootstrap [--client k | --group k | --project k | --only k]" ;;
-    esac
-  done
+  local n=0
 
   # Skills first: they are what an agent reads before touching any of the code we
   # are about to clone. Unreachable source is a warning, not a failure - a new
@@ -396,9 +302,6 @@ cmd_bootstrap() {
   fi
 
   while IFS=$'\t' read -r key client group folder remote scope profile desc; do
-    if [ -n "$only_client" ] && [ "$client" != "$only_client" ]; then continue; fi
-    if [ -n "$only_group" ] && [ "$group" != "$only_group" ]; then continue; fi
-    if [ -n "$only_project" ] && [ "$key" != "$only_project" ]; then continue; fi
     local dst; dst="$(repo_path "$folder")"
     if is_repo "$dst"; then c_dim "- $key already present"; continue; fi
     if is_empty "$remote"; then
@@ -1443,13 +1346,6 @@ agent_start() {
     "$session" "$key" "$(human_id)" "$(agent_id)" "$wt" "$dst" "$(now_iso)" \
     > "$gdir/ws-agent-sessions/$session.lock"
 
-  if is_repo "$CONTEXT_DIR"; then
-    local cgdir; cgdir="$(agent_git_dir "$CONTEXT_DIR")"
-    mkdir -p "$cgdir/ws-agent-sessions"
-    printf 'session=%s\nproject=%s\nlayer=context\nstarted=%s\n' \
-      "$session" "$key" "$(now_iso)" > "$cgdir/ws-agent-sessions/$session.lock"
-  fi
-
   clock_in agent "$key" "${note:-worktree $session}" || true
   c_grn "-> agent start $key (session $session)"
   printf 'export WS_SESSION_ID=%s\n' "$session"
@@ -1475,10 +1371,6 @@ agent_stop() {
   done < <(reg_rows)
   if is_repo "$ROOT"; then
     gdir="$(agent_git_dir "$ROOT")"
-    [ -f "$gdir/ws-agent-sessions/$session.lock" ] && rm -f "$gdir/ws-agent-sessions/$session.lock"
-  fi
-  if is_repo "$CONTEXT_DIR"; then
-    gdir="$(agent_git_dir "$CONTEXT_DIR")"
     [ -f "$gdir/ws-agent-sessions/$session.lock" ] && rm -f "$gdir/ws-agent-sessions/$session.lock"
   fi
   c_grn "-> agent stop (session $session); worktree kept under .local/worktrees/"
@@ -1765,14 +1657,6 @@ cmd_doctor() {
     else
       c_dim "  remote: $ctxremote (privacy unverified; anonymous access not confirmed)"
     fi
-    if [ -n "$ctxremote" ] && [ -n "$(git -C "$CONTEXT_DIR" status --porcelain 2>/dev/null)" ]; then
-      c_ylw "  ! context has local changes while a remote is set - run: ws context sync"
-    fi
-    local ctxlocks=0
-    ctxlocks="$(count_files "$(agent_git_dir "$CONTEXT_DIR")/ws-agent-sessions" -name '*.lock')"
-    if [ "${ctxlocks:-0}" != "0" ]; then
-      c_dim "  $ctxlocks agent lock(s) on the context repo (shared memory; sync with: ws context sync)"
-    fi
   else
     c_ylw "! no context repo - run: ws context init (or: ws context clone <remote>)"
   fi
@@ -1991,10 +1875,6 @@ cmd_doctor() {
     if [ "$nagent" -gt 1 ]; then
       c_dim "  $nagent agent clocks open (ok only if each has its own WS_SESSION_ID)"
     fi
-    if is_primary_clone "$ROOT" && [ "$nagent" -ge 1 ]; then
-      c_ylw "  ! agent clock(s) open on the primary clone — parallel agents in $ROOT share this HEAD"
-      c_dim "    isolate: ws agent start <project-key>"
-    fi
   else
     c_dim "- no hours recorded yet (ws clock in <project-key>)"
   fi
@@ -2137,15 +2017,13 @@ cmd_help() {
 ws — engineering workspace CLI
 
   ws init [--org N --key k --group g]   re-brand a fresh clone for an organisation
-  ws context [status|init|clone <r>|sync|switch <r>]
-                                    private memory repo; switch refuses a different audience
+  ws context [status|init|clone <r>]    the organisation's private memory repo
   ws client [new <key>|list]        a client that may span several projects
   ws group [new <k> --client <c>|list]  a product group inside one client (v2)
   ws tree                          render client > group > project from the registry
   ws context [status|init|migrate-v2]   migrate the registry to v2 (group/scope/profile)
   ws list                          list projects and clone status
-  ws bootstrap [--client|--group|--project|--only k]
-                                    clone product repos (optionally one audience)
+  ws bootstrap                     clone every product repo from registry.tsv
   ws new <key> <folder> [remote] --client <c>   register a new project + memory
   ws link <key>                    write the untracked AGENTS.md pointer in a product repo
   ws unlink <key>                  remove the pointer
