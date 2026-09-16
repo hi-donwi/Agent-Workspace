@@ -440,11 +440,32 @@ that is free or expensive.
 | `memory/projects/index.md` | Shared, rare | Re-read, then add your row. Never rewrite rows you did not create |
 | `memory/projects/<key>/decisions.md` | Shared, rare | Same. A conflict here means two people changed the same fact — resolve it by reading both sides |
 | `clients/<c>/decisions.md` | Shared, rare | Same again, at client scope. Add a row only once a second project confirms it is client-wide |
-| `memory/projects/<key>/active.md` | Shared, frequent | Keep it short. It is a routing hint; the run is the authority |
+| `memory/projects/<key>/active.md` | Shared, frequent | Keep it short. It is a routing hint; the run is the authority. **Never overwrite Current focus** with another agent's task — `ws run` only appends the Active runs table |
 | `skills/index.json` | Generated | Never merge by hand. Run `ws skills` and commit the regenerated file |
+| Git working tree of the **framework** (`Agent-Workspace`) | **One writer** | `skills.lock`, `ws`, and `AGENTS.md` cannot be edited by four agents on one `HEAD`. Serialize, or use `ws agent start workspace` |
+| Git working tree of a **product** repo | **One writer per clone** | Four agents on `projects/…/UIDL-Runtime` share one `HEAD`. Isolate with `ws agent start <key>` (git worktree under `.local/worktrees/`) |
+| `.open-agent-*-default.json` | Collision | Parallel agents without `WS_SESSION_ID` share one clock. Set `export WS_SESSION_ID=<session>` (or rely on `GROK_SESSION_ID` / `CODEX_THREAD_ID` / `CURSOR_TRACE_ID`) |
 
-The merge behaviour above is enforced by `.gitattributes`, so it applies to everyone who
-clones — nobody has to configure anything.
+The merge behaviour above is enforced by `.gitattributes` for **append-only context files**. It does **not** isolate git working trees.
+
+### Parallel agents — required isolation
+
+Several agents in one workspace is supported for **runs and hours**, not for **one checkout**.
+
+```bash
+export WS_SESSION_ID=my-uidl-session   # unique per agent conversation
+ws agent start uidl-runtime "native widgets"
+# → export WS_SESSION_ID=...
+# → cd .local/worktrees/uidl-runtime/<session>
+```
+
+Rules:
+
+1. **One agent, one worktree.** Do not `git checkout` the primary clone of a product repo another agent is using.
+2. **One agent owns framework `main`.** Pinning `skills.lock` or editing `ws` is serialized.
+3. **`ws agent start` never uses the primary checkout**; it always adds a worktree under `.local/worktrees/<key>/<session>/`.
+4. **`ws doctor`** warns if the agent session id is `default`, and if a product's primary tree is dirty while worktree locks exist.
+5. Stop with `ws agent stop` (clock-out + lock removal; the worktree is kept until you `git worktree remove`).
 
 Two habits prevent most of the remaining friction:
 

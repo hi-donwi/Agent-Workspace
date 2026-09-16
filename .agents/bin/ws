@@ -98,6 +98,20 @@ slug() {
     | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-48
 }
 
+# Stable across separate `ws` invocations in one editor session. Falls back to
+# "default" so tests and bare shells keep working; doctor warns when that
+# fallback is in use because parallel agents then share one clock file.
+session_id() {
+  local raw="${WS_SESSION_ID:-}"
+  [ -z "$raw" ] && raw="${GROK_SESSION_ID:-}"
+  [ -z "$raw" ] && raw="${GROK_SESSION:-}"
+  [ -z "$raw" ] && raw="${CLAUDE_SESSION_ID:-}"
+  [ -z "$raw" ] && raw="${CODEX_THREAD_ID:-}"
+  [ -z "$raw" ] && raw="${CURSOR_TRACE_ID:-}"
+  if [ -n "$raw" ]; then slug "$raw"; return; fi
+  echo "default"
+}
+
 # Read the registry (skip header and blank lines), normalised to the v2 shape:
 #   key<TAB>client<TAB>group<TAB>folder<TAB>remote<TAB>context_scope<TAB>security_profile<TAB>description
 # Empty fields become "-" because `read` collapses consecutive tab delimiters,
@@ -729,6 +743,53 @@ cmd_run() {
   c_grn "-> run created"
   printf '%s\n' "${dir#$ROOT/}"
   c_dim "  owner: $(human_id) ($(agent_id)) - start with brief.md, then plan.md"
+  point_active_run "$key" "${dir#$ROOT/}" "$(human_id) ($(agent_id))"
+}
+
+# Append a row to active.md's run table. Never overwrite Current focus — that
+# field is a routing hint and is what parallel agents were stomping on.
+point_active_run() {
+  local key="$1" run_rel="$2" owner="$3"
+  local f="$MEM/$key/active.md"
+  [ -f "$f" ] || return 0
+  local run_name today
+  run_name="$(basename "$run_rel")"
+  today="$(date +%F)"
+  grep -qF "$run_name" "$f" 2>/dev/null && return 0
+  python3 - "$f" "$today" "$run_name" "$owner" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+today, run_name, owner = sys.argv[2], sys.argv[3], sys.argv[4]
+text = path.read_text()
+lines = text.splitlines(True)
+out = []
+i = 0
+updated = False
+inserted = False
+while i < len(lines):
+    line = lines[i]
+    if line.startswith("- **Updated:**"):
+        out.append(f"- **Updated:** {today}\n")
+        updated = True
+        i += 1
+        continue
+    out.append(line)
+    if (not inserted) and line.startswith("| Run |"):
+        i += 1
+        if i < len(lines):
+            out.append(lines[i])  # separator
+            i += 1
+        out.append(f"| `{run_name}` | {owner} | open |\n")
+        inserted = True
+        continue
+    i += 1
+if not updated:
+    out.insert(0, f"- **Updated:** {today}\n")
+if not inserted:
+    out.append("\n## Active runs\n\n| Run | Owner | State |\n|---|---|---|\n")
+    out.append(f"| `{run_name}` | {owner} | open |\n")
+path.write_text("".join(out))
+PY
 }
 
 # ─────────────────────────────────────────────────────────────── log
@@ -1083,8 +1144,8 @@ works_file() { printf '%s/%s/%s/%s.jsonl' "$WORKS" "$1" "$2" "$(date +%Y-%m)"; }
 open_file() {
   local suffix="$(human_id)"
   if [ "$1" = agent ]; then
-    local session="${WS_SESSION_ID:-${CODEX_THREAD_ID:-default}}"
-    session="$(slug "$session")"; validate_key "$session"
+    local session; session="$(session_id)"
+    validate_key "$session"
     suffix="$suffix-$(agent_id)-$session"
   fi
   printf '%s/.open-%s-%s.json' "$WORKS" "$1" "$suffix"
@@ -1193,8 +1254,15 @@ clock_status() {
     local of; of="$(open_file "$kind")"
     if [ -f "$of" ]; then
       any=1
-      c_grn "$kind: open on $(sed -n 's/.*"project":"\([^"]*\)".*/\1/p' "$of") since $(sed -n 's/.*"start":"\([^"]*\)".*/\1/p' "$of")"
+      c_grn "$kind: open on $(sed -n 's/.*"project":"\([^"]*\)".*/\1/p' "$of") since $(sed -n 's/.*"start":"\([^"]*\)".*/\1/p' "$of") (session $(session_id))"
     fi
+  done
+  local f
+  for f in "$WORKS"/.open-agent-*.json; do
+    [ -f "$f" ] || continue
+    [ "$f" = "$(open_file agent)" ] && continue
+    any=1
+    c_ylw "agent (other): $(basename "$f") on $(sed -n 's/.*"project":"\([^"]*\)".*/\1/p' "$f") since $(sed -n 's/.*"start":"\([^"]*\)".*/\1/p' "$f")"
   done
   [ "$any" = 1 ] || c_dim "no open session"
   return 0
@@ -1213,10 +1281,85 @@ cmd_agent() {
   case "${1:-status}" in
     in)  shift; clock_in agent "$@" ;;
     out) shift; clock_out agent "$@" ;;
+    start) shift; agent_start "$@" ;;
+    stop) shift; agent_stop "$@" ;;
     status) clock_status ;;
     auto) shift; agent_auto "${1:-}" ;;
-    *) die "usage: ws agent [in <key> [note] | out [note] | status | auto in|out]" ;;
+    *) die "usage: ws agent [in <key> [note] | start <key> [note] | stop [note] | out [note] | status | auto in|out]" ;;
   esac
+}
+
+agent_git_dir() {
+  git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null
+}
+
+agent_start() {
+  local key="${1:-}"; shift || true
+  local note="${*:-}"
+  [ -n "$key" ] || die "usage: ws agent start <project-key> [note]"
+  [ -d "$MEM/$key" ] || die "project '$key' has no memory yet - run ws new first"
+  local session; session="$(session_id)"
+  if [ "$session" = "default" ]; then
+    c_ylw "! session id is 'default' - export WS_SESSION_ID so parallel agents do not share a clock"
+  fi
+  local folder dst
+  folder="$(reg_get "$key" | cut -f4)"
+  if [ -n "$folder" ] && [ "$folder" != "-" ]; then
+    dst="$(repo_path "$folder")"
+  else
+    dst="$ROOT"
+  fi
+  is_repo "$dst" || die "not a git repository: $dst"
+
+  local wt="$ROOT/.local/worktrees/$key/$session"
+  mkdir -p "$(dirname "$wt")"
+  if [ -e "$wt/.git" ] || [ -f "$wt/.git" ]; then
+    c_dim "reusing worktree $wt"
+  else
+    local br; br="$(slug "agent-$session-$key")"
+    if git -C "$dst" show-ref --verify --quiet "refs/heads/$br"; then
+      git -C "$dst" worktree add "$wt" "$br"
+    else
+      git -C "$dst" worktree add -b "$br" "$wt"
+    fi
+  fi
+
+  local gdir; gdir="$(agent_git_dir "$dst")"
+  [ -n "$gdir" ] || die "cannot resolve git dir for $dst"
+  mkdir -p "$gdir/ws-agent-sessions"
+  printf 'session=%s\nproject=%s\nactor=%s\ntool=%s\nworktree=%s\nprimary=%s\nstarted=%s\n' \
+    "$session" "$key" "$(human_id)" "$(agent_id)" "$wt" "$dst" "$(now_iso)" \
+    > "$gdir/ws-agent-sessions/$session.lock"
+
+  clock_in agent "$key" "${note:-worktree $session}" || true
+  c_grn "-> agent start $key (session $session)"
+  printf 'export WS_SESSION_ID=%s\n' "$session"
+  printf 'cd %s\n' "$wt"
+  c_dim "  do not git checkout the primary clone at $dst — other agents share it"
+}
+
+agent_stop() {
+  local note="${*:-stop}"
+  local session; session="$(session_id)"
+  if [ -f "$(open_file agent)" ]; then
+    clock_out agent "$note" || true
+  else
+    c_dim "no open agent clock for session $session"
+  fi
+  local folder dst gdir
+  while IFS=$'\t' read -r key _ _ folder _ _ _ _; do
+    [ -n "$folder" ] && [ "$folder" != "-" ] || continue
+    dst="$(repo_path "$folder")"
+    is_repo "$dst" || continue
+    gdir="$(agent_git_dir "$dst")"
+    [ -f "$gdir/ws-agent-sessions/$session.lock" ] && rm -f "$gdir/ws-agent-sessions/$session.lock"
+  done < <(reg_rows)
+  if is_repo "$ROOT"; then
+    gdir="$(agent_git_dir "$ROOT")"
+    [ -f "$gdir/ws-agent-sessions/$session.lock" ] && rm -f "$gdir/ws-agent-sessions/$session.lock"
+  fi
+  c_grn "-> agent stop (session $session); worktree kept under .local/worktrees/"
+  c_dim "  remove it later with: git worktree remove <path>"
 }
 
 # Called from an editor hook, where three things are true that are not on a
@@ -1592,6 +1735,17 @@ cmd_doctor() {
     [ -n "$(git -C "$dst" remote 2>/dev/null)" ] \
       || c_dim "  no git remote (local-only)"
 
+    local gdir nlocks dirty
+    gdir="$(agent_git_dir "$dst")"
+    nlocks="$(count_files "$gdir/ws-agent-sessions" -name '*.lock' 2>/dev/null || echo 0)"
+    dirty="$(git -C "$dst" status --porcelain 2>/dev/null)"
+    if [ "${nlocks:-0}" != "0" ] && [ -n "$dirty" ]; then
+      c_ylw "  ! $key primary checkout is dirty while $nlocks agent worktree lock(s) exist"
+      c_dim "    do not git checkout this clone; use: ws agent start $key"
+    elif [ "${nlocks:-0}" != "0" ]; then
+      c_dim "  $nlocks agent worktree lock(s) on $key"
+    fi
+
     if [ ! -f "$dst/AGENTS.md" ] || [ ! -f "$dst/.workspace" ]; then
       c_ylw "  ! pointer missing - run: ws link $key"
     else
@@ -1683,7 +1837,22 @@ cmd_doctor() {
     am="$(count_files "$WORKS/agent" -name '*.jsonl')"
     c_grn "ok human and agent hours recorded separately ($hm / $am month files)"
     local open; open="$(count_files "$WORKS" -maxdepth 1 -name '.open-*.json')"
-    [ "$open" = 0 ] || c_ylw "  ! $open session still clocked in - close it with: ws clock out"
+    [ "$open" = 0 ] || c_ylw "  ! $open session still clocked in - close it with: ws clock out / ws agent stop"
+    local def=0
+    local f
+    for f in "$WORKS"/.open-agent-*-default.json; do
+      [ -f "$f" ] && def=1
+    done
+    if [ "$def" = 1 ]; then
+      c_ylw "  ! agent session id is 'default' - export WS_SESSION_ID so parallel agents do not share a clock"
+    fi
+    local nagent=0
+    for f in "$WORKS"/.open-agent-*.json; do
+      [ -f "$f" ] && nagent=$((nagent+1))
+    done
+    if [ "$nagent" -gt 1 ]; then
+      c_dim "  $nagent agent clocks open (ok only if each has its own WS_SESSION_ID)"
+    fi
   else
     c_dim "- no hours recorded yet (ws clock in <project-key>)"
   fi
@@ -1844,6 +2013,8 @@ ws — engineering workspace CLI
                                     skills pulled from the skills repository
   ws clock in|out|status            HUMAN working hours
   ws agent in|out|status            AGENT working hours - never summed with human
+  ws agent start <key> [note]       worktree + clock-in for one parallel agent
+  ws agent stop [note]              clock-out and drop this session's lock
   ws hours [--month M] [--project k|--client c] [--rollup]   report both, side by side
   ws usage [--month M] [--project k|--client c]  token usage, from a separate optional tool
   ws web [--host 127.0.0.1] [--port 0] [--runtime uidl|vanilla]
