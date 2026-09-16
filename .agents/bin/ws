@@ -1774,7 +1774,8 @@ ws — engineering workspace CLI
   ws agent in|out|status            AGENT working hours - never summed with human
   ws hours [--month M] [--project k|--client c] [--rollup]   report both, side by side
   ws usage [--month M] [--project k|--client c]  token usage, from a separate optional tool
-  ws web [--host 127.0.0.1] [--port 0]  local web control (board, runs, hours, health)
+  ws web [--host 127.0.0.1] [--port 0] [--runtime uidl|vanilla]
+                                    local web control (UIDL-Runtime by default)
   ws ide                           copy the shared VS Code defaults into this clone
   ws hooks [status|install|remove]  clock agent time automatically in Claude Code
   ws where                         print the workspace root from anywhere
