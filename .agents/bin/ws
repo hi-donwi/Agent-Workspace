@@ -183,6 +183,10 @@ cmd_context() {
       ;;
     sync)
       is_repo "$CONTEXT_DIR" || die "no context repository"
+      if [ -z "$(git -C "$CONTEXT_DIR" remote get-url origin 2>/dev/null || true)" ]; then
+        c_dim "context is private-local (no remote) - nothing to pull"
+        return 0
+      fi
       [ -z "$(git -C "$CONTEXT_DIR" status --porcelain)" ] || die "context has local changes; save them before syncing"
       git -C "$CONTEXT_DIR" pull --ff-only
       ;;
@@ -1477,7 +1481,7 @@ cmd_doctor() {
     c_grn "ok context repo at ${CONTEXT_DIR#$ROOT/}"
     local ctxremote; ctxremote="$(git -C "$CONTEXT_DIR" remote get-url origin 2>/dev/null || true)"
     if [ -z "$ctxremote" ]; then
-      c_ylw "  ! context has no remote - treating it as private-local/personal, not team-shared"
+      c_grn "ok context is private-local (no remote)"
     elif [ "$ci" = 0 ] && repo_is_public "$ctxremote"; then
       # The context repo holds client names, contract scope, domain glossaries and
       # hours. Published, that is a disclosure, not an untidy repository.
@@ -1572,8 +1576,7 @@ cmd_doctor() {
   while IFS=$'\t' read -r key client group folder remote scope profile desc; do
     local dst; dst="$(repo_path "$folder")"
     if is_empty "$remote"; then
-      c_ylw "! $key has no remote in registry.tsv - teammates cannot clone it"
-      c_dim "    add it as the remote column of context/registry.tsv"
+      c_dim "  $key has no remote (local-only)"
     fi
     if is_empty "$client"; then
       c_red "x $key has no client in registry.tsv - every project must belong to one"
@@ -1587,7 +1590,7 @@ cmd_doctor() {
     c_grn "ok $key is a separate repo"
 
     [ -n "$(git -C "$dst" remote 2>/dev/null)" ] \
-      || c_ylw "  ! no remote configured - local commits exist nowhere else"
+      || c_dim "  no git remote (local-only)"
 
     if [ ! -f "$dst/AGENTS.md" ] || [ ! -f "$dst/.workspace" ]; then
       c_ylw "  ! pointer missing - run: ws link $key"
@@ -1622,7 +1625,7 @@ cmd_doctor() {
       c_ylw "  ! pre-commit guard missing - run: ws link $key"
     fi
 
-    [ -d "$MEM/$key" ] || c_ylw "  ! no memory at .agents/memory/projects/$key/"
+    [ -d "$MEM/$key" ] || c_ylw "  ! no memory at context/memory/projects/$key/"
   done < <(reg_rows)
   echo
 
