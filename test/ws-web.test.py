@@ -302,6 +302,9 @@ class WebControlReadFlow(unittest.TestCase):
         self.assertIn(b"data-tab=\"plans\"", body)
         self.assertIn(b"data-tab=\"settings\"", body)
         self.assertIn(b"renderMarkdown", body)
+        self.assertIn(b"command-palette", body)
+        self.assertIn(b"openPalette", body)
+        self.assertIn(b"<table>", body)
         self.assertIn(b"modal-create", body)
         self.assertIn(b"modal-detail", body)
 
