@@ -564,6 +564,17 @@ cmd_new() {
 # ─────────────────────────────────────────────────────────────── where
 # Print the workspace root. Works from inside a product repo by walking up to a
 # .workspace breadcrumb, so it answers even when this script is not on PATH.
+# True when $1 is the primary working tree (not a linked git worktree).
+# Parallel agents in a primary clone share one HEAD — that is the collision.
+is_primary_clone() {
+  local dir="${1:-$ROOT}"
+  is_repo "$dir" || return 1
+  local git_dir common
+  git_dir="$(git -C "$dir" rev-parse --path-format=absolute --git-dir 2>/dev/null)" || return 1
+  common="$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  [ "$git_dir" = "$common" ]
+}
+
 cmd_where() {
   local d
 
@@ -574,7 +585,11 @@ cmd_where() {
   d="$PWD"
   while [ "$d" != "/" ]; do
     if [ -f "$d/AGENTS.md" ] && [ -d "$d/.agents/standards" ]; then
-      printf '%s\n' "$d"; return 0
+      printf '%s\n' "$d"
+      if is_primary_clone "$d"; then
+        c_dim "primary clone — every agent with this cwd shares one HEAD (ws agent start <key>)" >&2
+      fi
+      return 0
     fi
     d="$(dirname "$d")"
   done
@@ -1615,6 +1630,13 @@ cmd_doctor() {
   fi
 
   echo "-- Identity --"
+  if is_repo "$ROOT" && is_primary_clone "$ROOT"; then
+    local br; br="$(git -C "$ROOT" branch --show-current 2>/dev/null || echo '?')"
+    c_ylw "! primary clone on $br — parallel agents in $ROOT share this HEAD"
+    c_dim "    isolate: export WS_SESSION_ID=<unique>; ws agent start <project-key>"
+  elif is_repo "$ROOT"; then
+    c_grn "ok linked git worktree (this session has its own HEAD)"
+  fi
   if [ -f "$CONF" ]; then
     c_grn "ok workspace.conf: $ORG_NAME ($ORG_KEY)"
   else

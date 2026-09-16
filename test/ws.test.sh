@@ -127,6 +127,13 @@ OUT="$(ws doctor --ci 2>&1 || true)"
 printf '%s' "$OUT" | grep -q "private-local" \
   && ok "doctor reports a context with no remote as private-local" \
   || bad "doctor reports a context with no remote as private-local" "$OUT"
+printf '%s' "$OUT" | grep -q "primary clone" \
+  && ok "doctor warns that the primary clone is a shared HEAD" \
+  || bad "doctor warns that the primary clone is a shared HEAD" "$OUT"
+WHERE_ERR="$(ws where 2>&1 >/dev/null)"
+printf '%s' "$WHERE_ERR" | grep -q "primary clone" \
+  && ok "ws where notes a primary clone on stderr" \
+  || bad "ws where notes a primary clone on stderr" "$WHERE_ERR"
 
 section "clients: a client may span several projects"
 contains "$WS/context/registry.tsv" "client" "the registry header has a client column"

@@ -461,7 +461,7 @@ ws agent start uidl-runtime "native widgets"
 
 Rules:
 
-1. **One agent, one worktree.** Do not `git checkout` the primary clone of a product repo another agent is using.
+1. **One agent, one worktree.** Do not `git checkout` the primary clone of a product repo another agent is using. A TUI label like `feat/ws-agent-isolation ~/Agent-Workspace` on several agents means they share **one directory and one HEAD** — not four isolated checkouts. `ws where` prints `primary clone` in that case.
 2. **One agent owns framework `main`.** Pinning `skills.lock` or editing `ws` is serialized.
 3. **`ws agent start` never uses the primary checkout**; it always adds a worktree under `.local/worktrees/<key>/<session>/`.
 4. **`ws doctor`** warns if the agent session id is `default`, and if a product's primary tree is dirty while worktree locks exist.
