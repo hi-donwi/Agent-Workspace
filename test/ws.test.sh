@@ -209,6 +209,51 @@ exists "$PROD/.git/hooks/pre-commit" "the guard hook is installed"
 equals "$(git -C "$PROD" status --porcelain | wc -l | tr -d ' ')" "0" \
   "the pointers are invisible to git status"
 
+section "ws scan: operator-owned policy, never the product repo"
+FAKEBIN="$TMP/bin"; mkdir -p "$FAKEBIN"
+printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "%s/scan.args"\necho pass\nexit 0\n' "$TMP" > "$FAKEBIN/agent-secure"
+chmod +x "$FAKEBIN/agent-secure"
+export PATH="$FAKEBIN:$PATH"
+export WS_SECURE_BIN="$FAKEBIN/agent-secure"
+
+check_fails "ws scan unknown key refuses" ws scan nosuch
+check_fails "ws scan without a policy file refuses" ws scan api
+
+mkdir -p "$WS/.local/secure/policies"
+printf '{"version":1}\n' > "$WS/.local/secure/policies/default.json"
+check "ws scan uses .local/secure/policies/default.json when profile is unset" ws scan api
+contains "$TMP/scan.args" "default.json" "it selected default.json"
+contains "$TMP/scan.args" "scan" "it invoked scan"
+
+printf '{"version":1}\n' > "$PROD/sneaky-policy.json"
+check_fails "ws scan refuses a policy that lives inside the product repo" \
+  ws scan api --policy "$PROD/sneaky-policy.json"
+
+OUTSIDE="$TMP/operator-policy.json"
+printf '{"version":1}\n' > "$OUTSIDE"
+check "ws scan --policy uses an explicit operator file" ws scan api --policy "$OUTSIDE"
+contains "$TMP/scan.args" "operator-policy.json" "the explicit policy path was forwarded"
+
+mkdir -p "$WS/projects/acme/strict" && git -C "$WS/projects/acme/strict" init -q
+git -C "$WS/projects/acme/strict" commit --allow-empty -qm init
+check "ws new --profile strict records the label" \
+  ws new locked projects/acme/strict --client acme --profile strict
+contains "$WS/context/registry.tsv" "$(printf '\tstrict\t')" "the registry stores security_profile"
+
+printf '{"version":1}\n' > "$WS/.local/secure/policies/strict.json"
+check "ws scan selects the profile-named policy" ws scan locked
+contains "$TMP/scan.args" "strict.json" "strict profile mapped to strict.json"
+
+check "ws scan --doctor calls doctor not scan" ws scan api --doctor
+contains "$TMP/scan.args" "doctor" "doctor subcommand was used"
+lacks "$TMP/scan.args" "scan" "scan was not the subcommand"
+
+unset WS_SECURE_BIN
+mv "$FAKEBIN/agent-secure" "$FAKEBIN/agent-secure.bak"
+check_fails "ws scan fails when agent-secure is not installed" ws scan api
+mv "$FAKEBIN/agent-secure.bak" "$FAKEBIN/agent-secure"
+export WS_SECURE_BIN="$FAKEBIN/agent-secure"
+
 # The hook is the second line of defence: exclude keeps them out of sight,
 # the hook stops `git add -f`.
 git -C "$PROD" add -f AGENTS.md .workspace >/dev/null 2>&1

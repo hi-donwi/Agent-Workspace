@@ -225,7 +225,9 @@ client-wide material.
 material, `client` adds the client's own wide docs, `org` adds org-wide ones. It is an
 audience boundary for packs, not a permission system — real access control stays
 server-side on the context repo and remote. `security_profile` is a free-form label (e.g.
-`strict`) that Agent-Secure policy selection keys on; the CLI does not interpret it yet.
+`strict`) that `ws scan` keys on: it loads
+`.local/secure/policies/<profile>.json` (or `default.json` when the column is
+`-`). That file is operator-owned and must not live inside the product repo.
 
 **Every project belongs to a client.** `ws new` refuses to register one without
 `--client`, and `ws doctor` fails on any existing project with no client, or one naming a
