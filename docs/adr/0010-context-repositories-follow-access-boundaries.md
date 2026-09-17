@@ -81,7 +81,8 @@ access is controlled by which context repository is cloned and which remote gran
 - Cross-client or personal-vs-client reporting is done outside shared context repos or by a
   trusted operator with access to each source, not by granting everyone one combined repo.
 - `context_scope` remains an audience selector for `ws context pack`; it does not relax or
-  enforce repository access.
+  enforce repository access. What an agent session may *load* from a mixed clone is
+  [ADR-0011](0011-attention-isolation-is-not-access-isolation.md), not this decision.
 - Migration from a mixed context repo is split by copying allowed rows and directories into
   new private context repos, then pruning each repo's history or treating the old mixed repo as
   restricted to the broadest previous audience.

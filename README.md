@@ -145,7 +145,8 @@ whoever owns the clone and live in the context repository — `context/registry.
 ## Common commands
 
 ```bash
-ws route "add an order summary endpoint"   # which skill applies to this task
+ws session bind <project-key>              # bind this conversation to one project
+ws route --project <key> "add an order summary endpoint"   # skills for that project
 ws skills available                        # what the skills repository offers
 ws skills add code-review                  # take one, pinned to a commit
 ws run <project-key> "task title"          # start a run (multi-session work)
