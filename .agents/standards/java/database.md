@@ -58,7 +58,7 @@ Every migration is tested against a **populated dump**, not an empty database.
 | Item | Rule |
 |---|---|
 | Table | `snake_case`, **singular**: `vendor`, `order`, `contract_type` |
-| Column | `snake_case`: `hps_amount`, `announcement_date` |
+| Column | `snake_case`: `unit_price`, `announcement_date` |
 | Primary key | `id BIGINT GENERATED ALWAYS AS IDENTITY` |
 | Foreign key | `<table>_id`: `vendor_id`, `order_id` |
 | Boolean | Clear prefix: `is_active`, `is_deleted` |

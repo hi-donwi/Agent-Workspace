@@ -127,7 +127,7 @@ public interface ExportConfig {
 quarkus.datasource.password=${DB_PASSWORD}
 
 # WRONG
-quarkus.datasource.password=tender
+quarkus.datasource.password=changeme
 ```
 
 ## File naming
