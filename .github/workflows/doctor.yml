@@ -57,3 +57,10 @@ jobs:
 
       - name: ws doctor --ci
         run: bash .agents/bin/ws doctor --ci
+
+      - name: Public tree has no client identifiers
+        run: |
+          if git grep -nieE 'eproc-pln|iconpln' -- '*.md' '*.example' ':!.agents/' ':!test/'; then
+            echo "::error::client-shaped identifiers reached the public framework"
+            exit 1
+          fi

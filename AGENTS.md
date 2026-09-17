@@ -166,7 +166,8 @@ falls back to the breadcrumb for a product repo cloned outside the workspace.
 Because `projects/` is ignored, it is a target for `git clean -x`. Plain `git clean -xdf`
 refuses to delete a nested repository, but **`git clean -ffxd` deletes the product repo
 outright** — working tree, `.git`, and any commit not yet pushed. Never use `-ff` at the
-workspace root. Push product work the same day; nothing in a workspace clone backs it up.
+workspace root. Put `.agents/bin` on PATH: the `git` wrapper there refuses `-ff` at this
+root. Push product work the same day; nothing in a workspace clone backs it up.
 
 ---
 
@@ -195,6 +196,7 @@ cross-project memory are not theirs to read.
 ```bash
 ws context init             # scaffold a new one, then give it a PRIVATE remote
 ws context clone <remote>   # join an organisation that already has one
+ws context split --personal <client>   # ADR-0010: mixed personal+client → two copies
 ws context status
 ```
 
