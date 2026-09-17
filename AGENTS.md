@@ -283,18 +283,57 @@ organisation: [`docs/context-repository.md`](docs/context-repository.md).
 
 ## 4. Context loading order
 
-Most durable to most task-specific. Stop when you have enough; do not read everything.
+### Resolve the project first (attention isolation)
+
+This clone holds many clients. Git isolation does not isolate agent attention.
+Editor/tool memory and a workspace-root search will surface the last client you
+worked on. That is a leak, not a hint.
+
+Before reading project memory, skills beyond routing, or product code:
+
+1. Resolve `project-key` from the user request against `context/registry.tsv`.
+   If the user named a project, do not search other clients to confirm it.
+   If it is ambiguous, ask.
+2. Bind the session: `ws session bind <project-key>` (optional `--run <id>`).
+   Then read `.local/sessions/<session>/CONTEXT.md` and only the files it lists.
+   `ws context pack <key>` is the same allowlist without binding.
+   `ws agent start <key>` binds as well as creating a worktree.
+3. Ignore injected tool/workspace memory whose client or project is not the
+   active key. Recency is not relevance.
+4. Search with an explicit root: the product folder and
+   `context/memory/projects/<key>/` (and that client's `context/clients/<c>/`
+   when the pack includes it). Do not grep `context/` or `projects/` from the
+   workspace root.
+5. Route with `ws route --project <key> "..."`. Bare `ws route` searches every
+   client's domain skills.
+6. Write continuity to `context/memory/projects/<key>/` and the run. Do not
+   write client facts to editor/tool workspace memory (Grok `topics/`, Cursor
+   memories, and similar). Those stores are workspace-scoped and will leak
+   into the next client's session.
+
+`ws session bind` writes under `.local/sessions/<session-id>/`, one directory
+per agent conversation. Do not put an "active project" in a workspace-level
+rules file: concurrent sessions would overwrite each other.
+
+Access control is still [ADR-0010](docs/adr/0010-context-repositories-follow-access-boundaries.md)
+(who may read the context repo). This section is attention isolation (what the
+model loads): [ADR-0011](docs/adr/0011-attention-isolation-is-not-access-isolation.md).
+
+### Then load, most durable to most task-specific
+
+Stop when you have enough; do not read everything.
 
 | # | Source | When |
 |---|--------|------|
 | 1 | `AGENTS.md` (this file) | Always |
 | 2 | `.agents/standards/` | Before writing or reviewing code |
 | 3 | `.agents/skills/<name>/SKILL.md` | When the task matches that skill |
-| 4 | `context/memory/projects/<key>/` | Before substantial work on a project |
+| 4 | Session pack (`ws session bind` / `ws context pack <key>`) | Before substantial work on a project |
 | 5 | `AGENTS.md` inside the product repo | Project specifics (modules, ports, env) |
 | 6 | Spec / PRD / OpenAPI contract | Source of truth for feature behaviour |
 
-Open a skill's `references/` only when `SKILL.md` is not enough.
+Open a skill's `references/` only when `SKILL.md` is not enough. Do not open
+another project's memory because it is adjacent on disk.
 
 ---
 
@@ -303,8 +342,9 @@ Open a skill's `references/` only when `SKILL.md` is not enough.
 **Before starting a task, check whether a skill applies. If one does, read its `SKILL.md`
 first and follow it.**
 
-The table below is the Java/Quarkus pack. Other stacks use `ws route "<task>"` against
-their own pack; do not apply these skills to TypeScript, Flutter, or Go work.
+The table below is the Java/Quarkus pack. Other stacks use
+`ws route --project <key> "<task>"` against their own pack; do not apply these
+skills to TypeScript, Flutter, or Go work.
 
 | Task | Skill |
 |---|---|
@@ -348,7 +388,9 @@ copies are git-ignored, and `ws doctor` fails if they ever become tracked.
 An organisation's own domain skills are different: they live in `context/skills/`, are
 committed to the context repo, and are never published. `ws route` searches both.
 
-Automatic routing: `ws route "<task description>"`.
+Automatic routing: `ws route --project <key> "<task description>"`. Bare
+`ws route` searches every client's domain skills; pass `--project` once the
+session is bound.
 
 ---
 
@@ -447,6 +489,7 @@ that is free or expensive.
 | Git working tree of the **framework** (`Agent-Workspace`) | **One writer** | `skills.lock`, `ws`, and `AGENTS.md` cannot be edited by four agents on one `HEAD`. Serialize, or use `ws agent start workspace` |
 | Git working tree of a **product** repo | **One writer per clone** | Four agents on `projects/…/UIDL-Runtime` share one `HEAD`. Isolate with `ws agent start <key>` (git worktree under `.local/worktrees/`) |
 | `.open-agent-*-default.json` | Collision | Parallel agents without `WS_SESSION_ID` share one clock. Set `export WS_SESSION_ID=<session>` (or rely on `GROK_SESSION_ID` / `CODEX_THREAD_ID` / `CURSOR_TRACE_ID`) |
+| `.local/sessions/<session>/*` | One per session id | Bind, pack, and `CONTEXT.md` for this conversation only. Never a workspace-level "active project" file |
 
 The merge behaviour above is enforced by `.gitattributes` for **append-only context files**. It does **not** isolate git working trees.
 
@@ -457,18 +500,29 @@ Several agents in one workspace is supported for **runs and hours**, not for **o
 ```bash
 export WS_SESSION_ID=my-uidl-session   # unique per agent conversation
 ws agent start uidl-runtime "native widgets"
+# → worktree + clock-in + session bind (CONTEXT.md allowlist)
 # → export WS_SESSION_ID=...
+# → export WS_PROJECT_KEY=uidl-runtime
 # → cd .local/worktrees/uidl-runtime/<session>
+```
+
+A session that is not using a worktree still binds:
+
+```bash
+ws session bind <project-key>          # writes .local/sessions/<id>/{bind,pack.json,CONTEXT.md}
+ws session status
+ws session clear                       # does not clock out
 ```
 
 Rules:
 
 1. **One agent, one worktree.** Do not `git checkout` the primary clone of a product repo another agent is using. A TUI label like `feat/ws-agent-isolation ~/Agent-Workspace` on several agents means they share **one directory and one HEAD** — not four isolated checkouts. `ws where` prints `primary clone` in that case.
 2. **One agent owns framework `main`.** Pinning `skills.lock` or editing `ws` is serialized.
-3. **`ws agent start` never uses the primary checkout**; it always adds a worktree under `.local/worktrees/<key>/<session>/`.
-4. **`ws doctor`** warns if the agent session id is `default`, if a product's primary tree is dirty while worktree locks exist, if context is dirty with a remote, and if agent clocks are open on the primary clone.
-5. Stop with `ws agent stop` (clock-out + lock removal; the worktree is kept until you `git worktree remove`).
+3. **`ws agent start` never uses the primary checkout**; it always adds a worktree under `.local/worktrees/<key>/<session>/`. It also binds the session to that project.
+4. **`ws doctor`** warns if the agent session id is `default`, if a named session has no project bind, if a product's primary tree is dirty while worktree locks exist, if context is dirty with a remote, and if agent clocks are open on the primary clone.
+5. Stop with `ws agent stop` (clock-out + lock removal; the worktree and the session bind are kept until you `git worktree remove` / `ws session clear`).
 6. **Shared context:** `ws context sync` stashes, rebases, and restores local work (no longer `pull --ff-only` that dies on a dirty tree). `ws context switch <remote>` refuses a different origin — use another workspace clone (ADR-0010). `ws bootstrap --only <client|group|project>` clones one audience, not every row in the registry.
+7. **One agent, one context pack.** Do not load another client's memory because it is in the same `context/` repo or the same editor-memory workspace. ADR-0010 is who may read; ADR-0011 is what this session loads.
 
 Two habits prevent most of the remaining friction:
 

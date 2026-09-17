@@ -59,7 +59,7 @@ Items 4–6 live in the [context repository](context-repository.md), which is sp
 your organisation. Run `ws list` to see which project keys exist.
 
 Do not read all twelve standards up front. Read the one the task needs, when the task needs
-it — `ws route "<task>"` will point you at it.
+it — `ws route --project <key> "<task>"` will point you at it.
 
 ---
 
@@ -67,14 +67,18 @@ it — `ws route "<task>"` will point you at it.
 
 1. **Pick up the ticket.** Confirm its scope against
    [`../.agents/standards/core/definition-of-done.md`](../.agents/standards/core/definition-of-done.md).
-2. **Find the skill:** `ws route "your task description"`. Read that `SKILL.md` first.
-3. **Create a run:** `ws run <project-key> "short title"`. Fill in `brief.md`.
-4. **Spec the endpoint** using `.agents/templates/endpoint-spec.md`, if it is an endpoint.
-5. **Write the failing test** before the implementation.
-6. **Implement**, in the layer order: migration → entity → repository → service → resource.
-7. **Verify:** `./mvnw verify`, regenerate the OpenAPI spec.
-8. **Commit** per [`git-workflow.md`](../.agents/standards/core/git-workflow.md).
-9. **Update `handoff.md`** before you stop, even if the work is finished.
+2. **Bind the session:** `ws session bind <project-key>`. Read
+   `.local/sessions/<session>/CONTEXT.md` and only those files. Do not load
+   another client's memory because it is in the same clone.
+3. **Find the skill:** `ws route --project <project-key> "your task description"`.
+   Read that `SKILL.md` first.
+4. **Create a run:** `ws run <project-key> "short title"`. Fill in `brief.md`.
+5. **Spec the endpoint** using `.agents/templates/endpoint-spec.md`, if it is an endpoint.
+6. **Write the failing test** before the implementation.
+7. **Implement**, in the layer order: migration → entity → repository → service → resource.
+8. **Verify:** `./mvnw verify`, regenerate the OpenAPI spec.
+9. **Commit** per [`git-workflow.md`](../.agents/standards/core/git-workflow.md).
+10. **Update `handoff.md`** before you stop, even if the work is finished.
 
 ---
 
@@ -111,7 +115,8 @@ it — `ws route "<task>"` will point you at it.
 
 | Situation | Do this |
 |---|---|
-| Not sure which skill applies | `ws route "<task>"` |
+| Not sure which skill applies | `ws route --project <key> "<task>"` |
+| Not sure which project's memory to load | `ws session bind <key>` then read `.local/sessions/<session>/CONTEXT.md` |
 | Not sure if something is allowed | Check `.agents/standards/`; if it is silent, ask the Lead Developer and write an ADR |
 | A standard seems wrong | Say so. Change it through an ADR — do not work around it silently. |
 | Picking up someone else's work | Read that run's `handoff.md` first, not the diff |

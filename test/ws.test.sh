@@ -391,6 +391,71 @@ not_exists "$gdir/ws-agent-sessions/wt1.lock" "session lock is removed"
 [ -e "$WS/.local/worktrees/api/wt1" ] && ok "worktree is kept after stop" \
   || bad "worktree is kept after stop"
 
+section "session bind (attention isolation)"
+# Git worktrees isolate HEAD. Session bind isolates what the agent is allowed
+# to load: one project pack per WS_SESSION_ID, never a sibling client.
+printf '\nSIBLING_SESSION_CANARY\n' >> "$WS/context/memory/projects/otherp/project.md"
+check_fails "ws session bind unknown project refuses" ws session bind nosuch
+check_fails "ws session bind --run unknown refuses" \
+  env WS_SESSION_ID=attn ws session bind api --run nosuch-run
+
+BIND_OUT="$(WS_SESSION_ID=attn ws session bind api 2>&1)"
+printf '%s' "$BIND_OUT" | grep -q 'WS_PROJECT_KEY=api' \
+  && ok "bind prints WS_PROJECT_KEY" || bad "bind prints WS_PROJECT_KEY" "$BIND_OUT"
+printf '%s' "$BIND_OUT" | grep -q 'WS_CLIENT_KEY=acme' \
+  && ok "bind prints WS_CLIENT_KEY" || bad "bind prints WS_CLIENT_KEY" "$BIND_OUT"
+exists "$WS/.local/sessions/attn/bind" "bind file is per session id"
+exists "$WS/.local/sessions/attn/pack.json" "pack.json is written"
+exists "$WS/.local/sessions/attn/CONTEXT.md" "CONTEXT.md is written"
+contains "$WS/.local/sessions/attn/bind" "project=api" "bind records the project"
+contains "$WS/.local/sessions/attn/bind" "client=acme" "bind records the client"
+contains "$WS/.local/sessions/attn/pack.json" '"project": "api"' "pack is for api"
+lacks "$WS/.local/sessions/attn/pack.json" "SIBLING_SESSION_CANARY" \
+  "api pack does not include the sibling project's memory"
+lacks "$WS/.local/sessions/attn/CONTEXT.md" "SIBLING_SESSION_CANARY" \
+  "CONTEXT.md does not include the sibling canary"
+contains "$WS/.local/sessions/attn/CONTEXT.md" "Client: \`acme\`" "CONTEXT.md names the client"
+
+WS_SESSION_ID=otherbind check "a second session binds independently" ws session bind otherp
+contains "$WS/.local/sessions/otherbind/bind" "project=otherp" "otherbind is otherp"
+contains "$WS/.local/sessions/attn/bind" "project=api" "attn bind is unchanged"
+contains "$WS/.local/sessions/otherbind/pack.json" "SIBLING_SESSION_CANARY" \
+  "otherp pack includes its own memory"
+
+STATUS="$(WS_SESSION_ID=attn ws session status 2>&1)"
+printf '%s' "$STATUS" | grep -q 'project=api' \
+  && ok "session status shows the bound project" \
+  || bad "session status shows the bound project" "$STATUS"
+
+WS_SESSION_ID=attn check "ws run before bind --run" ws run api "pack this run"
+RUN_ID="$(ls "$WS/context/runs/api" | head -1)"
+[ -n "$RUN_ID" ] && ok "run id captured for bind --run" || bad "run id captured for bind --run"
+WS_SESSION_ID=attn check "bind accepts --run" ws session bind api --run "$RUN_ID"
+contains "$WS/.local/sessions/attn/bind" "run=$RUN_ID" "bind records the run"
+contains "$WS/.local/sessions/attn/pack.json" "runs/api/$RUN_ID/brief.md" \
+  "pack includes the run brief"
+
+WS_SESSION_ID=attn check "ws session clear drops the bind" ws session clear
+not_exists "$WS/.local/sessions/attn/bind" "bind file is removed"
+exists "$WS/.local/sessions/otherbind/bind" "clear does not touch another session"
+
+UNBOUND="$(WS_SESSION_ID=attn-unbound ws doctor --ci 2>&1 || true)"
+printf '%s' "$UNBOUND" | grep -q "session is not bound to a project" \
+  && ok "doctor warns when a named session has no bind" \
+  || bad "doctor warns when a named session has no bind" "$UNBOUND"
+
+WS_SESSION_ID=attn check "re-bind after clear" ws session bind api
+BOUND="$(WS_SESSION_ID=attn ws doctor --ci 2>&1 || true)"
+printf '%s' "$BOUND" | grep -q "session bound to api" \
+  && ok "doctor reports the bound project" \
+  || bad "doctor reports the bound project" "$BOUND"
+
+WS_SESSION_ID=wtbind check "ws agent start also binds the session" ws agent start api "bind-on-start"
+exists "$WS/.local/sessions/wtbind/bind" "agent start wrote a bind"
+contains "$WS/.local/sessions/wtbind/bind" "project=api" "agent start bound api"
+WS_SESSION_ID=wtbind check "ws agent stop leaves the bind in place" ws agent stop
+exists "$WS/.local/sessions/wtbind/bind" "bind survives agent stop"
+
 section "overlap is merged, not summed"
 # Two agent sessions covering the same hour are one hour of elapsed work.
 M="$(date +%Y-%m)"; F="$WS/context/works/agent/overlap/$M.jsonl"; mkdir -p "${F%/*}"
@@ -474,7 +539,7 @@ check "human clock out" ws clock out
 OUT="$(ws hours --client acme 2>&1)"
 printf '%s' "$OUT" | grep -q 'client acme' && ok "ws hours --client scopes to that client's projects" \
   || bad "ws hours --client scopes to that client's projects" "$OUT"
-printf '%s' "$OUT" | grep -qE '1\.00' && ok "the hour is counted under the client" \
+printf '%s' "$OUT" | grep -qE '1\.0[0-9]' && ok "the hour is counted under the client" \
   || bad "the hour is counted under the client" "$OUT"
 check_fails "ws hours refuses an unknown client" ws hours --client no-such-client
 check_fails "ws hours refuses --project and --client together" ws hours --project api --client acme

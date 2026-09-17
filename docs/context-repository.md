@@ -87,6 +87,10 @@ project-only context repo, not a folder inside a broader client repo.
 
 Full reasoning: [ADR-0010](adr/0010-context-repositories-follow-access-boundaries.md).
 
+Access is not attention. An agent opened at the workspace root can still *see*
+every client in that clone. Bind the session (`ws session bind <project-key>`)
+so it loads only that pack. [ADR-0011](adr/0011-attention-isolation-is-not-access-isolation.md).
+
 When one clone temporarily holds both personal/public work and paying-client rows, leave
 `context_remote` empty and set `personal_clients` in `workspace.conf`. Do not attach a
 remote until the tree is one audience:
