@@ -32,6 +32,7 @@
 # --- Local-only scratch (never shared, never pushed) --------------------------
 # Client PDFs, credentials, demo dumps, screenshots, throwaway experiments.
 /.local/
+/.wrangler/
 
 # --- Agent state that is personal, not team knowledge -------------------------
 .agents/ops/
