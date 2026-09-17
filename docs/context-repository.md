@@ -87,6 +87,18 @@ project-only context repo, not a folder inside a broader client repo.
 
 Full reasoning: [ADR-0010](adr/0010-context-repositories-follow-access-boundaries.md).
 
+When one clone temporarily holds both personal/public work and paying-client rows, leave
+`context_remote` empty and set `personal_clients` in `workspace.conf`. Do not attach a
+remote until the tree is one audience:
+
+```bash
+ws context split --personal donwi
+# mixed history → .local/archives/context-mixed-* (keep local, never push)
+# donwi copy     → .local/contexts/donwi
+# org copy       → .local/contexts/org
+# optional: ws context split --personal donwi --apply org
+```
+
 ## Why it is a separate repository
 
 Three kinds of material, three owners, three audiences:
@@ -94,7 +106,7 @@ Three kinds of material, three owners, three audiences:
 | | Owner | Audience | Example |
 |---|---|---|---|
 | Framework | whoever maintains the workspace | anyone, possibly public | "every collection paginates" |
-| **Context** | **one organisation** | **that organisation only** | "this client's tender module has 29 endpoints, blocked on their namespace decision" |
+| **Context** | **one organisation** | **that organisation only** | "this client's billing module is blocked on their namespace decision" |
 | Product | usually the client | whoever the client allows | the code |
 
 Context cannot live in the framework: the framework is shared and may be published, and a

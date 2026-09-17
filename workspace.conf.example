@@ -16,6 +16,12 @@ git_group = git@gitlab.com:example
 context_dir    = context
 context_remote =
 
+# Client keys that are this operator's own/public work, not a paying client.
+# When the registry also has other clients, the context is mixed (ADR-0010):
+# operator-local is OK; attaching a remote is refused until
+# `ws context split --personal <key>`.
+personal_clients =
+
 # Which project the editor hooks attribute a session to when the working directory
 # is not inside a product repo. Leave it empty and such sessions are not recorded
 # at all — an hour on the wrong project is worse than an hour on none.

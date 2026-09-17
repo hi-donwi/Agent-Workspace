@@ -209,6 +209,38 @@ CONF
 # ─────────────────────────────────────────────────────────────── context
 # The organisation's private memory, runs, registry, client ADRs, and domain
 # skills. A separate repository, mounted at context/ and ignored here.
+personal_client_list() {
+  local raw; raw="$(conf_get personal_clients '')"
+  printf '%s' "${raw//,/ }"
+}
+
+context_registry_clients() {
+  [ -f "$REGISTRY" ] || return 0
+  tail -n +2 "$REGISTRY" | cut -f2 | grep -vE '^$|^-$' | sort -u
+}
+
+context_is_mixed() {
+  local personal found_p=0 found_o=0 c p is_p
+  personal="$(personal_client_list)"
+  [ -n "$personal" ] || return 1
+  local clients
+  clients="$(context_registry_clients | tr '\n' ' ')"
+  [ -n "$clients" ] || return 1
+  for p in $personal; do
+    for c in $clients; do
+      [ "$c" = "$p" ] && found_p=1
+    done
+  done
+  for c in $clients; do
+    is_p=0
+    for p in $personal; do
+      [ "$c" = "$p" ] && is_p=1
+    done
+    [ "$is_p" = 0 ] && found_o=1
+  done
+  [ "$found_p" = 1 ] && [ "$found_o" = 1 ]
+}
+
 cmd_context() {
   local action="${1:-status}"; shift || true
   case "$action" in
@@ -217,6 +249,9 @@ cmd_context() {
       ;;
     sync)
       context_sync
+      ;;
+    split)
+      context_split "$@"
       ;;
     switch)
       context_switch "$@"
@@ -252,8 +287,71 @@ cmd_context() {
         c_ylw "no context yet - run: ws context init"
       fi
       ;;
-    *) die "usage: ws context [status|init|clone <remote>|sync|switch <remote> [--force]]" ;;
+    *) die "usage: ws context [status|init|clone <r>|sync|split --personal <c>|switch <r> [--force]]" ;;
   esac
+}
+
+context_split() {
+  local personal="" apply=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --personal)
+        [ -n "${2:-}" ] || die "usage: ws context split --personal <client> [--apply personal|org]"
+        personal="$2"; shift 2 ;;
+      --apply)
+        [ -n "${2:-}" ] || die "usage: ws context split --personal <client> [--apply personal|org]"
+        apply="$2"; shift 2 ;;
+      *) die "usage: ws context split --personal <client> [--apply personal|org]" ;;
+    esac
+  done
+  [ -n "$personal" ] || die "usage: ws context split --personal <client> [--apply personal|org]"
+  validate_key "$personal"
+  is_repo "$CONTEXT_DIR" || die "no context repository"
+  if [ -n "$(git -C "$CONTEXT_DIR" remote get-url origin 2>/dev/null || true)" ]; then
+    die "refusing to split a context that already has a remote (history may already be published)"
+  fi
+  case "$apply" in
+    ""|personal|org) ;;
+    *) die "--apply must be personal or org" ;;
+  esac
+  local stamp archive dest_p dest_o
+  stamp="$(date +%Y%m%dT%H%M%S)"
+  archive="$ROOT/.local/archives/context-mixed-$stamp"
+  dest_p="$ROOT/.local/contexts/$personal"
+  dest_o="$ROOT/.local/contexts/org"
+  mkdir -p "$ROOT/.local/archives" "$ROOT/.local/contexts"
+  git clone -q "$CONTEXT_DIR" "$archive"
+  git -C "$archive" remote remove origin 2>/dev/null || true
+  python3 "$ROOT/.agents/bin/ws_context_split.py" "$CONTEXT_DIR" "$personal" "$dest_p" "$dest_o"
+  context_git_fresh() {
+    local d="$1" msg="$2"
+    rm -rf "$d/.git"
+    git -C "$d" init -q -b main
+    git -C "$d" add -A
+    git -C "$d" commit -qm "$msg"
+  }
+  context_git_fresh "$dest_p" "chore: personal context ($personal) split from mixed operator-local tree"
+  context_git_fresh "$dest_o" "chore: organisation context split from mixed operator-local tree"
+  git -C "$CONTEXT_DIR" add -A
+  if [ -n "$(git -C "$CONTEXT_DIR" status --porcelain)" ]; then
+    git -C "$CONTEXT_DIR" commit -qm "chore: snapshot working tree before ADR-0010 split"
+  fi
+  git -C "$CONTEXT_DIR" checkout --orphan "ws-split-$stamp"
+  git -C "$CONTEXT_DIR" add -A
+  git -C "$CONTEXT_DIR" commit -qm "chore: restart context history after ADR-0010 split (operator-local, no remote)"
+  git -C "$CONTEXT_DIR" branch -M main
+  c_grn "-> archived mixed history at ${archive#$ROOT/} (no remote; keep it local)"
+  c_grn "-> publishable copies: ${dest_p#$ROOT/}  and  ${dest_o#$ROOT/}"
+  c_dim "  attach a PRIVATE remote only to one copy, never to context/ while it stays mixed"
+  if [ "$apply" = "personal" ]; then
+    rm -rf "$CONTEXT_DIR"
+    cp -R "$dest_p" "$CONTEXT_DIR"
+    c_grn "-> context/ is now the personal ($personal) copy"
+  elif [ "$apply" = "org" ]; then
+    rm -rf "$CONTEXT_DIR"
+    cp -R "$dest_o" "$CONTEXT_DIR"
+    c_grn "-> context/ is now the organisation copy"
+  fi
 }
 
 context_sync() {
@@ -309,6 +407,9 @@ context_switch() {
   fi
   if [ -n "$(git -C "$CONTEXT_DIR" status --porcelain)" ] && [ "$force" != 1 ]; then
     die "local context has changes; commit them or pass --force to attach this remote"
+  fi
+  if context_is_mixed; then
+    die "context mixes personal and paying-client rows (ADR-0010). Split first: ws context split --personal <client>. --force will not publish a mixed history"
   fi
   [ "$force" = 1 ] || die "attaching a remote publishes this local context's history. Confirm: ws context switch <remote> --force"
   git -C "$CONTEXT_DIR" remote add origin "$remote"
@@ -1773,6 +1874,16 @@ cmd_doctor() {
     if [ "${ctxlocks:-0}" != "0" ]; then
       c_dim "  $ctxlocks agent lock(s) on the context repo (shared memory; sync with: ws context sync)"
     fi
+    if context_is_mixed; then
+      if [ -n "$ctxremote" ]; then
+        c_red "x context remote is set on a mixed personal+client repository (ADR-0010)"
+        c_dim "    everyone who can clone that remote can read every client, including history"
+        fail=1
+      else
+        c_ylw "! context mixes personal_clients and paying-client rows (ADR-0010)"
+        c_dim "    operator-local is OK. Do not add a remote. Split: ws context split --personal <client>"
+      fi
+    fi
   else
     c_ylw "! no context repo - run: ws context init (or: ws context clone <remote>)"
   fi
@@ -1830,6 +1941,16 @@ cmd_doctor() {
     else
       c_grn "ok the framework names no organisation but in workspace.conf"
     fi
+  fi
+  local clientid
+  clientid="$(git -C "$ROOT" grep -lieE 'eproc-pln|iconpln' -- '*.md' '*.example' ':!.agents/' ':!test/' 2>/dev/null || true)"
+  if [ -n "$clientid" ]; then
+    c_red "x client-shaped identifiers in tracked framework files:"
+    printf '%s\n' "$clientid" | sed 's/^/    /'
+    c_dim "    public framework files must stay generic (see the 2026-09-16 scrub)"
+    fail=1
+  else
+    c_grn "ok tracked framework files name no client identifiers"
   fi
 
   # /projects/* hides product code from every gitignore-aware search tool
@@ -2137,8 +2258,9 @@ cmd_help() {
 ws — engineering workspace CLI
 
   ws init [--org N --key k --group g]   re-brand a fresh clone for an organisation
-  ws context [status|init|clone <r>|sync|switch <r>]
+  ws context [status|init|clone <r>|sync|split|switch <r>]
                                     private memory repo; switch refuses a different audience
+                                    split --personal <c>  ADR-0010 copies; never publishes mixed history
   ws client [new <key>|list]        a client that may span several projects
   ws group [new <k> --client <c>|list]  a product group inside one client (v2)
   ws tree                          render client > group > project from the registry
@@ -2172,6 +2294,7 @@ ws — engineering workspace CLI
 
 Add to PATH (run once, from inside your clone):
   echo "export PATH=\"$PWD/.agents/bin:\$PATH\"" >> ~/.zshrc && source ~/.zshrc
+  # .agents/bin/git refuses \`git clean -ff\` at the workspace root.
 H
 }
 

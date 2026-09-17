@@ -605,6 +605,54 @@ mv "$TMP/gitignore.bak" "$WS/.gitignore"
 git -C "$WS" add -A >/dev/null 2>&1
 check "doctor passes again once each fault is undone" ws doctor --ci
 
+section "git clean -ff guard and ADR-0010 context split"
+SHIM="$SRC/.agents/bin/git"
+check_fails "git shim refuses clean -ff at the workspace root" \
+  "$SHIM" -C "$WS" clean -ffxd
+check "git shim still lists status" "$SHIM" -C "$WS" status -sb
+mkdir -p "$TMP/not-a-workspace"
+git -C "$TMP/not-a-workspace" init -q
+check "git shim allows clean -ff outside a workspace root" \
+  "$SHIM" -C "$TMP/not-a-workspace" clean -ffxd
+
+echo "personal_clients = donwi" >> "$WS/workspace.conf"
+# Earlier switch tests attach a context remote. Mixed+remote is a failure;
+# detach so the operator-local warning is what we assert here.
+git -C "$WS/context" remote remove origin 2>/dev/null || true
+check "ws client new donwi" ws client new donwi
+mkdir -p "$WS/projects/donwi/pub" && git -C "$WS/projects/donwi/pub" init -q
+git -C "$WS/projects/donwi/pub" commit --allow-empty -qm init
+check "ws new registers a personal project" \
+  ws new toys projects/donwi/pub --client donwi
+if ws doctor --ci >"$TMP/doctor-mixed.txt" 2>&1; then
+  ok "mixed operator-local context still passes doctor --ci"
+else
+  bad "mixed operator-local context still passes doctor --ci" "$(head -80 "$TMP/doctor-mixed.txt")"
+fi
+contains "$TMP/doctor-mixed.txt" "mixes personal_clients" \
+  "doctor warns when personal and paying-client rows share one context"
+
+check_fails "ws context switch refuses to publish mixed history" \
+  ws context switch git@gitlab.example/mixed.git --force
+
+check "ws context split writes audience copies" \
+  ws context split --personal donwi
+exists "$WS/.local/contexts/donwi/registry.tsv" "personal copy has a registry"
+exists "$WS/.local/contexts/org/registry.tsv" "org copy has a registry"
+contains "$WS/.local/contexts/donwi/registry.tsv" "toys" "personal copy has the donwi project"
+lacks "$WS/.local/contexts/donwi/registry.tsv" "api" "personal copy has no paying-client project"
+contains "$WS/.local/contexts/org/registry.tsv" "api" "org copy keeps the paying-client project"
+lacks "$WS/.local/contexts/org/registry.tsv" "toys" "org copy has no donwi project"
+exists "$WS/.local/archives" "mixed history was archived locally"
+
+git -C "$WS/context" remote add origin "https://example.invalid/mixed-context.git"
+check_fails "doctor fails when a mixed context has a remote" ws doctor --ci
+git -C "$WS/context" remote remove origin
+
+lacks "$SRC/AGENTS.md" "eproc-pln" "public AGENTS.md no longer uses the e-Proc path"
+lacks "$SRC/docs/adr/0010-context-repositories-follow-access-boundaries.md" "eproc-pln" \
+  "ADR-0010 on disk uses generic audience examples"
+
 # ═════════════════════════════════════════════════════════════════════════════
 printf '\n'
 if [ "$FAIL" -eq 0 ]; then grn "$PASS passed, 0 failed"; exit 0

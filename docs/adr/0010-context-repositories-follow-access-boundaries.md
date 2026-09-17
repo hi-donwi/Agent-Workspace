@@ -91,6 +91,16 @@ access is controlled by which context repository is cloned and which remote gran
 - `workspace.conf` names one `context_dir` for the current clone. `context_remote` is
   optional for personal/private-local contexts and required in practice for team-shared
   contexts that other machines must clone.
+- `personal_clients` lists client keys that are this operator's own/public work. When the
+  registry also has paying-client rows, `ws doctor` treats the context as mixed: operator-local
+  (no remote) is allowed; attaching a remote is refused. `ws context split --personal <key>`
+  archives the mixed git history under `.local/archives/`, writes disjoint publishable copies
+  under `.local/contexts/`, and restarts `context/` history so redacted secrets do not stay
+  in the working repo.
 - Use separate workspace clones when switching between contexts with different audiences.
 - Keep `.local/` for machine-only or more-sensitive material that should not enter any shared
   context repo.
+- Merged GitHub pull-request heads (`refs/pull/*/head`) can still be fetched from a public
+  framework clone even after `main` is scrubbed. Those objects are documentation paths, not
+  credentials. GitHub does not delete them. Do not rewrite published `main`. A new repository
+  is the only way to drop pull refs.

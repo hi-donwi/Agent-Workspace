@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# Pass-through git wrapper.
+#
+# Intercepts `git clean -ff` when the target repository is a workspace root
+# (AGENTS.md + .agents/standards/). Nested product repos under projects/ are
+# git-ignored; `git clean -ffxd` deletes them outright. Anyone who put
+# .agents/bin on PATH gets this guard. Calling /usr/bin/git still bypasses it.
+set -euo pipefail
+
+thisdir="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
+
+real=""
+oldifs="$IFS"
+IFS=:
+# shellcheck disable=SC2086
+for p in $PATH; do
+  [ "$p" = "$thisdir" ] && continue
+  if [ -n "$p" ] && [ -x "$p/git" ]; then
+    real="$p/git"
+    break
+  fi
+done
+IFS="$oldifs"
+if [ -z "$real" ]; then
+  for c in /opt/homebrew/bin/git /usr/local/bin/git /usr/bin/git; do
+    [ -x "$c" ] && real="$c" && break
+  done
+fi
+[ -n "$real" ] || { printf 'git wrapper: no real git on PATH\n' >&2; exit 127; }
+
+is_workspace_root() {
+  local d="$1"
+  [ -f "$d/AGENTS.md" ] && [ -d "$d/.agents/standards" ]
+}
+
+target_dir=""
+args=("$@")
+i=0
+while [ "$i" -lt "${#args[@]}" ]; do
+  a="${args[$i]}"
+  case "$a" in
+    -C)
+      i=$((i + 1))
+      target_dir="${args[$i]:-}"
+      ;;
+    -C*)
+      target_dir="${a#-C}"
+      ;;
+  esac
+  i=$((i + 1))
+done
+[ -n "$target_dir" ] || target_dir="$(pwd)"
+
+if [ "${1:-}" = "clean" ] || {
+     # git -C <dir> clean ...
+     found=0
+     for a in "$@"; do
+       [ "$a" = "clean" ] && found=1
+     done
+     [ "$found" = 1 ]
+   }; then
+  force=0
+  for a in "$@"; do
+    case "$a" in
+      --) break ;;
+      -f|--force) force=$((force + 1)) ;;
+      -ff|-ffx|-ffxd|-ffdx|-xff|-xffd|-fxf|-fxxd) force=$((force + 2)) ;;
+      -*)
+        # clustered short options: -ffxd, -xffd, -fdxff, ...
+        case "$a" in
+          -*ff*) force=$((force + 2)) ;;
+        esac
+        ;;
+    esac
+  done
+  if [ "$force" -ge 2 ] && is_workspace_root "$target_dir"; then
+    printf '%s\n' \
+      "error: git clean -ff is refused at the workspace root ($target_dir)." \
+      "It deletes nested product repositories under projects/ (working tree, .git, and unpushed commits)." \
+      "Never use -ff at this root. Clean the framework only, or delete a product clone by path." \
+      "Bypass (not recommended): $real clean ..." >&2
+    exit 1
+  fi
+fi
+
+exec "$real" "$@"
