@@ -1,0 +1,65 @@
+# --- Skills: fetched, not vendored ---------------------------------------------
+# .agents/skills/ is materialised by `ws skills sync` from the repository named in
+# .agents/skills.manifest. The manifest and skills.lock are tracked; the fetched
+# copies are not, so skills have exactly one home and one history.
+/.agents/skills/
+/.agents/.cache/
+
+# --- Editor hooks: opt-in, per clone -------------------------------------------
+# .claude/settings.json runs commands automatically. The repository ships only the
+# example; `ws hooks install` writes the real file, so nobody gains a command that
+# fires on every session just by cloning.
+/.claude/settings.json
+
+# --- Organisation identity -----------------------------------------------------
+# workspace.conf names the organisation that owns this clone. It is machine- and
+# org-local; workspace.conf.example is what the repository ships.
+/workspace.conf
+
+# --- Organisation context ------------------------------------------------------
+# context/ is a SEPARATE git repository holding one organisation's memory, runs,
+# client project registry, client ADRs, and domain skills. This repo is the shared
+# framework and must stay free of any client's material.
+/context/
+
+# --- Product repositories ----------------------------------------------------
+# Every folder under projects/ is an INDEPENDENT git repository with its own
+# remote (often the client's GitLab). It must never be committed here.
+# The registry that maps them lives in context/registry.tsv.
+/projects/*
+!/projects/README.md
+
+# --- Local-only scratch (never shared, never pushed) --------------------------
+# Client PDFs, credentials, demo dumps, screenshots, throwaway experiments.
+/.local/
+/.wrangler/
+
+# --- Agent state that is personal, not team knowledge -------------------------
+.agents/ops/
+
+# --- OS / editor / runtime ---------------------------------------------------
+.DS_Store
+Thumbs.db
+__pycache__/
+node_modules/
+/apps/workspace-control/dist/
+/apps/workspace-control/test-results/
+/apps/workspace-control/playwright-report/
+*.py[cod]
+.idea/
+*.iml
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.shared.json
+
+# --- Secrets: belt and braces. Nothing matching these is ever committed. -------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.jks
+*.keystore
+secrets.*
+credentials.*

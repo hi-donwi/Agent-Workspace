@@ -1,0 +1,11 @@
+# Merge strategy for files this FRAMEWORK repository itself tracks.
+#
+# This file only governs merges inside the workspace repo. context/ and each
+# projects/<group>/<repo>/ are separate git repositories with their own
+# .gitattributes — a rule here about a path under either does nothing, because
+# git never merges across a repository boundary. context's own merge rules
+# live in context/.gitattributes, tracked by that repo.
+
+# .agents/skills/ is fetched output (see .agents/skills.manifest), never
+# tracked here, so there is nothing to merge. If skills.lock ever conflicts,
+# re-run `ws skills sync` and commit the result rather than hand-merging it.

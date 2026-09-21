@@ -1,0 +1,10 @@
+{
+  "// note": "Shared defaults. Copy to .vscode/settings.json, which is git-ignored.",
+  "files.eol": "\n",
+  "files.insertFinalNewline": true,
+  "files.trimTrailingWhitespace": true,
+  "editor.rulers": [100, 120],
+  "java.format.settings.profile": "GoogleStyle",
+  "files.exclude": { "**/target": true },
+  "search.exclude": { "**/target": true, ".local": true }
+}

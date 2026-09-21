@@ -1,0 +1,27 @@
+# Search visibility — read by ripgrep, VS Code, and agent search tools. NOT by git.
+#
+# .gitignore hides /projects/* so product repos stay independent (ADR-0001). That
+# same rule makes product code invisible to every gitignore-aware search tool, which
+# breaks the "open your editor at the workspace root" rule this workspace is built on.
+#
+# This file re-includes the product repos for SEARCH ONLY. Git isolation is untouched:
+# `git check-ignore projects/<key>` still reports it ignored and `git add -A` still
+# refuses to embed them. `ws doctor` verifies both.
+!projects/*/
+
+# Re-including a directory also lifts the default skip on everything inside it, so
+# put the noise back. Last matching rule wins, hence the order. Use ** and not *:
+# a single * does not match here once the parent has been whitelisted.
+projects/**/.git/
+projects/**/target/
+projects/**/build/
+projects/**/node_modules/
+projects/**/*.jar
+
+# context/ is ignored by git but is exactly what agents must read: memory, runs,
+# the registry, domain skills. Keep it searchable.
+!context/
+context/**/.git/
+
+# Client material is never searched, whatever a tool's defaults are.
+.local/

@@ -1,0 +1,29 @@
+---
+description: Memory-safe patterns for the reporting and export module
+globs: ["**/reporting/**/*.java", "**/export/**/*.java"]
+alwaysApply: false
+---
+
+Full guidance: `.agents/skills/bulk-reporting-export/SKILL.md`.
+
+Reporting is where memory and latency failures appear first, because it is the place that
+touches whole datasets rather than one page.
+
+## Rules
+
+- **Never hold a full result set in memory.** Stream from the database with a fetch-size
+  hint; write with `SXSSFWorkbook(100)`, and always call `wb.dispose()`.
+- **Aggregate in the database.** `GROUP BY` in SQL, never `Collectors.groupingBy` over a
+  loaded table.
+- **Over 10 seconds means an async job**: 202 + job ID, then polling or SSE. A synchronous
+  long export exhausts the worker pool and takes down unrelated endpoints.
+- **Job state goes in the database**, never a `ConcurrentHashMap` — an in-memory store loses
+  every running job on deploy and is invisible to a second instance.
+- **Exports expire** and a scheduled job purges them. Without retention, storage grows
+  without limit.
+- **Deduplicate in-flight jobs** by (user, report type, parameter hash) — users click twice.
+- **Re-check authorisation at download time**, including unit scope. A job ID is not an
+  access grant.
+
+Heap stays under 1 GB regardless of report size. If it does not, something is still being
+buffered.

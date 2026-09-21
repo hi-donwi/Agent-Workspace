@@ -1,0 +1,25 @@
+{
+  "$comment": [
+    "Opt-in hooks. Install with `ws hooks install`, remove with `ws hooks remove`.",
+    "They record AGENT working hours automatically, so the numbers do not depend on",
+    "anyone remembering. Human hours stay manual on purpose: `ws clock in/out`.",
+    "`ws agent auto` never fails and records nothing when it cannot tell which",
+    "project the session belongs to - an hour on the wrong project is worse than none."
+  ],
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": ".agents/bin/ws agent auto in || true" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": ".agents/bin/ws agent auto out || true" }
+        ]
+      }
+    ]
+  }
+}

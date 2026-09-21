@@ -1,0 +1,66 @@
+name: doctor
+
+# The framework repository holds no product code. What CI protects here is that
+# the workspace stays portable, stays free of any single organisation's material,
+# and that the ws CLI keeps its promises — it writes hooks into client repos and
+# runs rm -rf over skill directories, so a regression damages real repositories.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    uses: hi-donwi/Agent-Secure/.github/workflows/agent-secure-gate.yml@1dffc4ca7e00bb4e9aa108603fcf02cfeb1637a8
+    with:
+      root: .
+      engine_version: v0.1.5
+      engine_sha256: 491c0f4b9b4fe379b13f85be0a8956343a6731694e714763d33b3827e65649c9
+      gitleaks_version: 8.30.1
+      gitleaks_sha256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+      osv_scanner_version: 2.5.1
+      osv_scanner_sha256: f9f25499a2c8cc367b3af45df2ea7eeca7fbccceab9c35079968f4b3652194be
+
+  test:
+    name: ws test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The suite skips its search check when ripgrep is absent, and that check
+      # guards the .ignore rule that keeps product code visible to agents.
+      - name: Install ripgrep
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
+
+      - name: Run tests
+        run: ./test/ws.test.sh
+
+      - name: Run Python tests
+        run: |
+          python3 test/ws-web.test.py
+          python3 test/ws-tasks.test.py
+          python3 test/ws-security.test.py
+
+  doctor:
+    name: workspace hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # workspace.conf is untracked by design: it is the only file that names an
+      # organisation. CI uses the shipped example so `ws doctor` has an identity.
+      - name: Provide a throwaway identity
+        run: cp workspace.conf.example workspace.conf
+
+      - name: ws doctor --ci
+        run: bash .agents/bin/ws doctor --ci
+
+      # There is deliberately no client-identifier grep here. The names to look for
+      # are the ones that must never be published, so a pattern in this file would
+      # be the leak — which is what the two-name regex that used to sit here was.
+      # `ws doctor` derives them from the context repo instead, and that repo is on
+      # the machine of anyone who can push this one; CI has no copy of it and
+      # cannot have one.

@@ -1,0 +1,22 @@
+# Which skills this workspace uses.
+#
+# Skills live in their own repository so they have one version and one history
+# across every workspace that uses them. This file says what to take; `ws skills
+# sync` materialises exactly those into .agents/skills/ with a sparse checkout,
+# and writes the resolved commit to .agents/skills.lock.
+#
+# .agents/skills/ is generated and git-ignored. This file and the lock are the
+# tracked truth, so `ws skills sync` gives every teammate byte-identical skills.
+
+source = git@github.com:hi-donwi/Agent-Skills.git
+ref    = main
+
+# `pack <name>` takes every skill in that pack; `skill <name>` takes just one.
+# Available packs: core (engineering practice), agent (working with AI agents),
+# web (frontend and performance), java (Java 21 / Quarkus / PostgreSQL).
+# See what is on offer with: ws skills available
+
+pack core
+pack agent
+pack java
+pack web

@@ -1,0 +1,791 @@
+#!/usr/bin/env bash
+# Tests for the ws CLI. Zero dependencies: bash, git, and coreutils.
+#
+# ws writes hooks into client repositories, edits .git/info/exclude, and runs
+# rm -rf over skill directories. A bug here damages real repos, so the invariants
+# that protect them are the ones tested first. Everything runs in a temporary
+# directory against a local fake skills source; nothing touches the network or
+# the developer's own workspace.
+#
+#   ./test/ws.test.sh            run everything
+#   ./test/ws.test.sh -v         show command output from failing checks
+
+set -uo pipefail
+
+SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VERBOSE=0; [ "${1:-}" = "-v" ] && VERBOSE=1
+PASS=0; FAIL=0; CURRENT=""
+
+red()  { printf '\033[31m%s\033[0m\n' "$*"; }
+grn()  { printf '\033[32m%s\033[0m\n' "$*"; }
+dim()  { printf '\033[2m%s\033[0m\n' "$*"; }
+
+section() { printf '\n\033[1m%s\033[0m\n' "$*"; }
+ok()   { PASS=$((PASS+1)); printf '  \033[32mok\033[0m   %s\n' "$1"; }
+bad()  { FAIL=$((FAIL+1)); printf '  \033[31mFAIL\033[0m %s\n' "$1"
+         [ -n "${2:-}" ] && printf '       %s\n' "$2"; return 0; }
+
+# check "description" <command...>   - passes when the command succeeds
+check() { local d="$1"; shift
+  local out; if out="$("$@" 2>&1)"; then ok "$d"; else
+    bad "$d" "exit $?"; [ "$VERBOSE" = 1 ] && printf '%s\n' "$out" | sed 's/^/       | /'; fi; }
+
+# check_fails "description" <command...>  - passes when the command FAILS
+check_fails() { local d="$1"; shift
+  local out; if out="$("$@" 2>&1)"; then
+    bad "$d" "expected a non-zero exit, got 0"
+    [ "$VERBOSE" = 1 ] && printf '%s\n' "$out" | sed 's/^/       | /'
+  else ok "$d"; fi; }
+
+exists()     { [ -e "$1" ] && ok "$2" || bad "$2" "missing: $1"; }
+not_exists() { [ ! -e "$1" ] && ok "$2" || bad "$2" "should not exist: $1"; }
+contains()   { grep -qF "$2" "$1" 2>/dev/null && ok "$3" || bad "$3" "'$2' not found in $1"; }
+lacks()      { grep -qF "$2" "$1" 2>/dev/null && bad "$3" "'$2' unexpectedly in $1" || ok "$3"; }
+equals()     { [ "$1" = "$2" ] && ok "$3" || bad "$3" "expected '$2', got '$1'"; }
+
+TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+# Isolate $HOME too: ws usage falls back to ~/.agent-ops when unconfigured, and
+# a real one on the machine running this suite must never leak into a test.
+export HOME="$TMP/home"; mkdir -p "$HOME"
+export GIT_CONFIG_GLOBAL="$TMP/gitconfig" GIT_CONFIG_SYSTEM=/dev/null
+git config --global user.email "test@example.com"
+git config --global user.name  "Test Runner"
+git config --global init.defaultBranch main
+git config --global commit.gpgsign false
+export WS_USER=tester WS_AGENT=testagent
+# Runtime session ids from the host agent must not leak into the suite.
+unset WS_SESSION_ID GROK_SESSION_ID GROK_SESSION CLAUDE_SESSION_ID CODEX_THREAD_ID CURSOR_TRACE_ID
+export -n WS_SESSION_ID GROK_SESSION_ID GROK_SESSION CLAUDE_SESSION_ID CODEX_THREAD_ID CURSOR_TRACE_ID 2>/dev/null || true
+
+# ── a workspace built from this repository's framework files ──────────────────
+WS="$TMP/workspace"
+mkdir -p "$WS"
+cp -R "$SRC/.agents" "$WS/.agents"
+rm -rf "$WS/.agents/skills" "$WS/.agents/.cache" "$WS/.agents/skills.lock"
+for f in .gitignore .ignore .gitattributes AGENTS.md workspace.conf.example; do
+  cp "$SRC/$f" "$WS/$f"
+done
+mkdir -p "$WS/projects"; cp "$SRC/projects/README.md" "$WS/projects/README.md"
+mkdir -p "$WS/.claude"; cp "$SRC/.claude/settings.json.example" "$WS/.claude/"
+ws() { (cd "${RUNDIR:-$WS}" && "$WS/.agents/bin/ws" "$@"); }
+
+git -C "$WS" init -q
+git -C "$WS" remote add origin "https://example.invalid/workspace.git"
+
+# ── a local skills source, so sync needs no network ──────────────────────────
+SKILLSRC="$TMP/skills-source"
+mkdir -p "$SKILLSRC/skills/alpha" "$SKILLSRC/skills/beta" "$SKILLSRC/skills/gamma"
+printf -- '---\nname: alpha\ndescription: Does alpha things. Use when testing alpha.\nmetadata:\n  pack: core\n  keywords: alpha, alpha-thing, testing\n---\n# alpha\n' \
+  > "$SKILLSRC/skills/alpha/SKILL.md"
+printf -- '---\nname: beta\npack: core\nkeywords: beta, beta-thing, testing\ndescription: Does beta things. Use when testing beta.\n---\n# beta\n' \
+  > "$SKILLSRC/skills/beta/SKILL.md"
+printf -- '---\nname: gamma\npack: extra\ndescription: Does gamma things. Use when testing gamma.\n---\n# gamma\n' \
+  > "$SKILLSRC/skills/gamma/SKILL.md"
+cat > "$SKILLSRC/index.json" <<'JSON'
+{
+  "generated": "2026-01-01T00:00:00Z",
+  "skills": [
+    {"name": "alpha", "pack": "core", "path": "skills/alpha/SKILL.md", "references": 0, "description": "Does alpha things."},
+    {"name": "beta", "pack": "core", "path": "skills/beta/SKILL.md", "references": 0, "description": "Does beta things."},
+    {"name": "gamma", "pack": "extra", "path": "skills/gamma/SKILL.md", "references": 0, "description": "Does gamma things."}
+  ]
+}
+JSON
+git -C "$SKILLSRC" init -q && git -C "$SKILLSRC" add -A && git -C "$SKILLSRC" commit -qm init
+
+# ═════════════════════════════════════════════════════════════════════════════
+section "init and identity"
+
+check "ws init writes workspace.conf" \
+  ws init --org "Acme Ltd" --key acme --group "git@example.invalid:acme"
+exists "$WS/workspace.conf" "workspace.conf exists"
+contains "$WS/workspace.conf" "org_name  = Acme Ltd" "it records the organisation"
+check "ws init is idempotent and refuses to clobber" ws init --org Other --key other --group x
+contains "$WS/workspace.conf" "Acme Ltd" "a second init leaves the first alone"
+
+section "ws where resolves structurally"
+# The breadcrumb is a fallback, not the mechanism: a workspace is recognised by
+# containing AGENTS.md and .agents/standards. Regression guard for ADR-0005.
+equals "$(ws where)" "$WS" "from the root"
+mkdir -p "$WS/deep/nested/dir"
+equals "$(RUNDIR=$WS/deep/nested/dir ws where)" "$WS" "from a nested directory"
+
+section "context repository"
+check "ws context init scaffolds and inits git" ws context init
+exists "$WS/context/.git" "context is its own git repository"
+exists "$WS/context/registry.tsv" "it has a registry"
+exists "$WS/context/memory/projects" "it has a memory tree"
+exists "$WS/context/clients" "it has a clients tree"
+exists "$WS/context/.gitattributes" "it ships the union-merge rules where they take effect"
+
+# This fixture's clients and projects are named with words the framework itself
+# uses as examples, so doctor's published-tree check would flag its own test data.
+# A real operator declares the names of theirs that are already public the same
+# way; the check is exercised properly in the last section.
+# `locked`, `strict`, and `pub` are ordinary English words this fixture happens to
+# register as a key, a profile, and a folder. A real workspace with a key like that
+# declares it the same way — the check cannot tell a common word from a client.
+printf 'acme\nbeta\nplatform\ndonwi\ntoys\notherp\nlocked\napi2\nstrict\npub\n' \
+  > "$WS/context/public-identifiers"
+contains "$WS/context/.gitattributes" "merge=union" "the merge strategy is actually declared"
+check_fails "a second context init refuses" ws context init
+git -C "$WS" add -A >/dev/null 2>&1
+equals "$(git -C "$WS" ls-files context | wc -l | tr -d ' ')" "0" "context is never tracked by the framework"
+check "ws web help is available" ws web --help
+check "ws context sync is a no-op without a remote" ws context sync
+check_fails "ws context switch without a remote url refuses" ws context switch
+OUT="$(ws doctor --ci 2>&1 || true)"
+printf '%s' "$OUT" | grep -q "private-local" \
+  && ok "doctor reports a context with no remote as private-local" \
+  || bad "doctor reports a context with no remote as private-local" "$OUT"
+printf '%s' "$OUT" | grep -q "primary clone" \
+  && ok "doctor warns that the primary clone is a shared HEAD" \
+  || bad "doctor warns that the primary clone is a shared HEAD" "$OUT"
+WHERE_ERR="$(ws where 2>&1 >/dev/null)"
+printf '%s' "$WHERE_ERR" | grep -q "primary clone" \
+  && ok "ws where notes a primary clone on stderr" \
+  || bad "ws where notes a primary clone on stderr" "$WHERE_ERR"
+
+section "context sync, switch, and bootstrap --only"
+git -C "$WS/context" add -A && git -C "$WS/context" commit -qm init-context
+CTXBARE="$TMP/context-a.git"
+git clone -q --bare "$WS/context" "$CTXBARE"
+git -C "$WS/context" remote add origin "$CTXBARE"
+git -C "$WS/context" push -q -u origin main
+echo "local-note" >> "$WS/context/README.md"
+check "ws context sync succeeds with dirty local files" ws context sync
+contains "$WS/context/README.md" "local-note" "sync restored the stashed local edit"
+CTXBARE2="$TMP/context-b.git"
+git init -q --bare "$CTXBARE2"
+check_fails "ws context switch refuses a different remote" ws context switch "$CTXBARE2"
+contains "$WS/workspace.conf" "context_remote" "switch of same-or-missing remote is the only writer" || true
+check "ws context switch is a no-op for the current origin" ws context switch "$CTXBARE"
+contains "$WS/workspace.conf" "$CTXBARE" "context_remote is recorded"
+
+DOC="$(ws doctor --ci 2>&1 || true)"
+echo "extra" >> "$WS/context/README.md"
+DOC="$(ws doctor --ci 2>&1 || true)"
+printf '%s' "$DOC" | grep -q "local changes while a remote" \
+  && ok "doctor warns when shared context is dirty" \
+  || bad "doctor warns when shared context is dirty" "$DOC"
+# leave the extra line; later tests tolerate dirty context
+
+section "clients: a client may span several projects"
+contains "$WS/context/registry.tsv" "client" "the registry header has a client column"
+check "ws client new registers a client" ws client new acme
+exists "$WS/context/clients/acme/client.md" "client.md is scaffolded"
+exists "$WS/context/clients/acme/decisions.md" "decisions.md is scaffolded"
+check_fails "a second client with the same key refuses" ws client new acme
+check_fails "ws new refuses an unknown client" ws new orphan projects/x --client no-such-client
+not_exists "$WS/context/memory/projects/orphan" "nothing was registered for the rejected project"
+
+# Every project must belong to a client - required at creation, not just warned
+# about, and enforced again by doctor for any project registered another way.
+check_fails "ws new refuses to register a project with no client at all" \
+  ws new clientless projects/y
+not_exists "$WS/context/memory/projects/clientless" "nothing was registered without a client either"
+check "ws group new registers a product group inside a client" \
+  ws group new platform --client acme
+contains "$WS/context/groups.tsv" "$(printf 'platform\tacme\t')" "the group records its owning client"
+
+section "skills: take only what the manifest asks for"
+cat > "$WS/.agents/skills.manifest" <<EOF
+source = $SKILLSRC
+ref    = main
+
+pack core
+EOF
+check "ws skills sync" ws skills sync
+exists "$WS/.agents/skills/alpha/SKILL.md" "a skill in the requested pack arrives"
+exists "$WS/.agents/skills/beta/SKILL.md"  "so does the other one"
+not_exists "$WS/.agents/skills/gamma" "a skill outside the pack does NOT arrive"
+contains "$WS/.agents/skills/index.json" '"name": "alpha", "pack": "core"' \
+  "metadata.pack is indexed as the skill pack"
+contains "$WS/.agents/skills/index.json" '"name": "beta", "pack": "core"' \
+  "top-level pack still indexes as a fallback"
+exists "$WS/.agents/skills.lock" "the resolved commit is locked"
+contains "$WS/.agents/skills.lock" "commit = " "the lock names a commit"
+
+check "ws skills add pulls one more" ws skills add gamma
+exists "$WS/.agents/skills/gamma/SKILL.md" "the added skill arrives"
+check "ws skills remove drops it again" ws skills remove gamma
+not_exists "$WS/.agents/skills/gamma" "the removed skill is deleted from disk"
+exists "$WS/.agents/skills/alpha/SKILL.md" "removing one leaves the others alone"
+
+git -C "$WS" add -A >/dev/null 2>&1
+equals "$(git -C "$WS" ls-files .agents/skills | wc -l | tr -d ' ')" "0" \
+  "fetched skills are never tracked"
+
+section "product repo isolation and the commit guard"
+PROD="$WS/projects/acme/api"
+mkdir -p "$PROD" && git -C "$PROD" init -q
+echo 'class Order {}' > "$PROD/Order.java"
+git -C "$PROD" add -A && git -C "$PROD" commit -qm init
+check "ws new registers the project and builds its memory" \
+  ws new api projects/acme/api --client acme --group platform
+exists "$WS/context/memory/projects/api/log.md" "memory is created from templates"
+contains "$WS/context/registry.tsv" "api" "the registry gains a row"
+contains "$WS/context/registry.tsv" "$(printf 'api\tacme\t')" "the row records its client"
+contains "$WS/context/registry.tsv" "$(printf 'api\tacme\tplatform\t')" "the row records its group"
+
+OTHER="$TMP/other-src"
+mkdir -p "$OTHER" && git -C "$OTHER" init -q
+echo x > "$OTHER/x" && git -C "$OTHER" add x && git -C "$OTHER" commit -qm o
+OTHERBARE="$TMP/other.git"
+git clone -q --bare "$OTHER" "$OTHERBARE"
+check "ws client new beta" ws client new beta
+check "ws new registers beta with a remote" \
+  ws new otherp projects/beta/app "$OTHERBARE" --client beta
+rm -rf "$WS/projects/beta/app"
+check "ws bootstrap --only acme does not clone beta" ws bootstrap --only acme
+[ ! -e "$WS/projects/beta/app/.git" ] && ok "beta product stayed uncloned" \
+  || bad "beta product stayed uncloned"
+check "ws bootstrap --only beta clones that client" ws bootstrap --only beta
+exists "$WS/projects/beta/app/.git" "beta product was cloned"
+
+# A client's own skill is discoverable by ws route the same way a framework
+# skill is - it is not tied to any one of that client's projects.
+mkdir -p "$WS/context/clients/acme/skills/widgets"
+cat > "$WS/context/clients/acme/skills/widgets/SKILL.md" <<'SKILLEOF'
+---
+name: widgets
+pack: domain
+keywords: widget, gizmo
+description: Handles widget things. Use when testing widgets.
+---
+# widgets
+SKILLEOF
+ROUTE="$(ws route --project api "widget gizmo work" 2>&1)"
+printf '%s' "$ROUTE" | grep -q widgets \
+  && ok "ws route finds a client's own domain skill" \
+  || bad "ws route finds a client's own domain skill" "$ROUTE"
+
+check "ws link writes the pointer" ws link api
+exists "$PROD/AGENTS.md"  "pointer AGENTS.md written"
+exists "$PROD/.workspace" "breadcrumb written"
+contains "$PROD/.git/info/exclude" "/AGENTS.md"   "AGENTS.md is excluded"
+contains "$PROD/.git/info/exclude" "/.workspace"  "the breadcrumb is excluded too"
+exists "$PROD/.git/hooks/pre-commit" "the guard hook is installed"
+equals "$(git -C "$PROD" status --porcelain | wc -l | tr -d ' ')" "0" \
+  "the pointers are invisible to git status"
+
+section "portable product instructions stay versionable"
+cp "$PROD/AGENTS.md" "$TMP/generated-pointer.md"
+printf '# Product engineering rules\n' > "$PROD/AGENTS.md"
+check "link preserves new product-owned instructions" ws link api
+check_fails "product-owned AGENTS.md is not ignored" git -C "$PROD" check-ignore -q AGENTS.md
+contains "$PROD/AGENTS.md" "Product engineering rules" "product instructions are preserved"
+contains "$PROD/.workspace-instructions.md" "GENERATED BY: ws link" "workspace gets a separate pointer"
+check "product instructions can be staged normally" git -C "$PROD" add AGENTS.md
+check "guard allows product instructions" git -C "$PROD" commit -qm "docs: add product rules"
+check "link also preserves tracked instructions" ws link api
+check_fails "tracked product instructions have no obsolete exclusion" \
+  git -C "$PROD" check-ignore --no-index -q AGENTS.md
+# Restore the fixture expected by the generated-pointer tests below.
+git -C "$PROD" rm -q AGENTS.md
+git -C "$PROD" commit -qm "test: restore generated pointer fixture"
+cp "$TMP/generated-pointer.md" "$PROD/AGENTS.md"
+check "generated pointer remains excluded after relinking" ws link api
+check "generated AGENTS.md is ignored" git -C "$PROD" check-ignore -q AGENTS.md
+
+section "ws scan: operator-owned policy, never the product repo"
+FAKEBIN="$TMP/bin"; mkdir -p "$FAKEBIN"
+printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "%s/scan.args"\necho pass\nexit 0\n' "$TMP" > "$FAKEBIN/agent-secure"
+chmod +x "$FAKEBIN/agent-secure"
+export PATH="$FAKEBIN:$PATH"
+export WS_SECURE_BIN="$FAKEBIN/agent-secure"
+
+check_fails "ws scan unknown key refuses" ws scan nosuch
+check_fails "ws scan without a policy file refuses" ws scan api
+
+mkdir -p "$WS/.local/secure/policies"
+printf '{"version":1}\n' > "$WS/.local/secure/policies/default.json"
+check "ws scan uses .local/secure/policies/default.json when profile is unset" ws scan api
+contains "$TMP/scan.args" "default.json" "it selected default.json"
+contains "$TMP/scan.args" "scan" "it invoked scan"
+
+printf '{"version":1}\n' > "$PROD/sneaky-policy.json"
+check_fails "ws scan refuses a policy that lives inside the product repo" \
+  ws scan api --policy "$PROD/sneaky-policy.json"
+
+OUTSIDE="$TMP/operator-policy.json"
+printf '{"version":1}\n' > "$OUTSIDE"
+check "ws scan --policy uses an explicit operator file" ws scan api --policy "$OUTSIDE"
+contains "$TMP/scan.args" "operator-policy.json" "the explicit policy path was forwarded"
+
+mkdir -p "$WS/projects/acme/strict" && git -C "$WS/projects/acme/strict" init -q
+git -C "$WS/projects/acme/strict" commit --allow-empty -qm init
+check "ws new --profile strict records the label" \
+  ws new locked projects/acme/strict --client acme --profile strict
+contains "$WS/context/registry.tsv" "$(printf '\tstrict\t')" "the registry stores security_profile"
+
+printf '{"version":1}\n' > "$WS/.local/secure/policies/strict.json"
+check "ws scan selects the profile-named policy" ws scan locked
+contains "$TMP/scan.args" "strict.json" "strict profile mapped to strict.json"
+
+check "ws scan --doctor calls doctor not scan" ws scan api --doctor
+contains "$TMP/scan.args" "doctor" "doctor subcommand was used"
+lacks "$TMP/scan.args" "scan" "scan was not the subcommand"
+
+unset WS_SECURE_BIN
+mv "$FAKEBIN/agent-secure" "$FAKEBIN/agent-secure.bak"
+check_fails "ws scan fails when agent-secure is not installed" ws scan api
+mv "$FAKEBIN/agent-secure.bak" "$FAKEBIN/agent-secure"
+export WS_SECURE_BIN="$FAKEBIN/agent-secure"
+
+# The hook is the second line of defence: exclude keeps them out of sight,
+# the hook stops `git add -f`.
+git -C "$PROD" add -f AGENTS.md .workspace >/dev/null 2>&1
+check_fails "the hook refuses a commit containing the pointers" \
+  git -C "$PROD" commit -m "should be refused"
+git -C "$PROD" reset -q
+
+equals "$(RUNDIR=$PROD ws where)" "$WS" "ws where works from inside a product repo"
+git -C "$WS" add -A >/dev/null 2>&1
+equals "$(git -C "$WS" ls-files projects | grep -cv '^projects/README.md$')" "0" \
+  "no product file reaches the workspace index"
+
+section "search sees product code, git does not"
+# /projects/* hides product code from every gitignore-aware tool; .ignore puts it
+# back for search only. Regression guard for ADR-0005.
+check "git ignores the product repo" git -C "$WS" check-ignore -q projects/acme/api
+if command -v rg >/dev/null 2>&1; then
+  found="$(cd "$WS" && rg -l 'class Order' . </dev/null 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$found" -ge 1 ] && ok "ripgrep still finds product code from the root" \
+                     || bad "ripgrep still finds product code from the root" "no match"
+else
+  dim "  skip ripgrep check (rg not installed)"
+fi
+
+section "two clocks"
+check "human clock in"  ws clock in api "writing the thing"
+check "agent clock in"  ws agent in api "generating the thing"
+check_fails "a second human clock-in is refused" ws clock in api "again"
+# Rewind both starts so the durations are non-zero and overlap.
+for f in "$WS"/context/works/.open-*.json; do
+  ts=$(sed -n 's/.*"start_ts":\([0-9]*\).*/\1/p' "$f")
+  off=1800; grep -q '"kind":"human"' "$f" && off=3600
+  sed -i.bak "s/\"start_ts\":$ts/\"start_ts\":$((ts-off))/" "$f" && rm -f "$f.bak"
+done
+check "agent clock out" ws agent out
+check "human clock out" ws clock out
+exists "$WS/context/works/human/api/$(date +%Y-%m).jsonl" "human session recorded"
+exists "$WS/context/works/agent/api/$(date +%Y-%m).jsonl" "agent session recorded"
+lacks "$WS/context/works/human/api/$(date +%Y-%m).jsonl" '"kind":"agent"' \
+  "agent sessions never land in the human file"
+
+HOURS="$(ws hours 2>&1)"
+printf '%s' "$HOURS" | grep -q 'HUMAN' && printf '%s' "$HOURS" | grep -q 'AGENT' \
+  && ok "ws hours reports two columns" || bad "ws hours reports two columns"
+printf '%s' "$HOURS" | grep -qE '1\.00' && ok "human hour is counted" || bad "human hour is counted" "$HOURS"
+printf '%s' "$HOURS" | grep -qE '0\.50' && ok "agent half-hour is counted separately" || bad "agent half-hour is counted separately"
+printf '%s' "$HOURS" | grep -qiE '^\s*combined|total across' \
+  && bad "no combined total is printed" || ok "no combined total is printed"
+exists "$WS/context/works/rollup/$(date +%Y-%m).json" "clocking out writes the rollup"
+contains "$WS/context/works/rollup/$(date +%Y-%m).json" '"human_hours"' "rollup keeps the two apart"
+
+section "parallel agent sessions and worktrees"
+WS_SESSION_ID=alpha check "two agents can clock in with distinct WS_SESSION_ID" \
+  ws agent in api "alpha session"
+WS_SESSION_ID=beta check "the second session is independent" \
+  ws agent in api "beta session"
+exists "$WS/context/works/.open-agent-tester-testagent-alpha.json" "alpha clock file"
+exists "$WS/context/works/.open-agent-tester-testagent-beta.json" "beta clock file"
+WS_SESSION_ID=alpha check "alpha clocks out without closing beta" ws agent out
+exists "$WS/context/works/.open-agent-tester-testagent-beta.json" "beta still open"
+WS_SESSION_ID=beta check "beta clocks out" ws agent out
+
+DOC="$(ws doctor --ci 2>&1 || true)"
+printf '%s' "$DOC" | grep -q "session id is 'default'" \
+  && bad "doctor does not warn about default when no default clock is open" \
+  || ok "doctor does not warn about default when no default clock is open"
+
+check "default session clock-in still works" ws agent in api "legacy default"
+DOC="$(ws doctor --ci 2>&1 || true)"
+printf '%s' "$DOC" | grep -q "session id is 'default'" \
+  && ok "doctor warns when the agent session id is default" \
+  || bad "doctor warns when the agent session id is default" "$DOC"
+check "default session clock-out" ws agent out
+
+WS_SESSION_ID=wt1 check "ws agent start creates a worktree" ws agent start api "isolated"
+[ -e "$WS/.local/worktrees/api/wt1/.git" ] && ok "worktree path exists" || bad "worktree path exists" "missing .local/worktrees/api/wt1"
+gdir="$(git -C "$PROD" rev-parse --path-format=absolute --git-common-dir)"
+exists "$gdir/ws-agent-sessions/wt1.lock" "session lock is recorded"
+START_OUT="$(WS_SESSION_ID=wt1 ws agent start api "reuse" 2>&1)"
+printf '%s' "$START_OUT" | grep -q "reusing worktree" \
+  && ok "ws agent start reuses an existing worktree" \
+  || bad "ws agent start reuses an existing worktree" "$START_OUT"
+WS_SESSION_ID=wt1 check "ws agent stop drops the lock and clocks out" ws agent stop
+not_exists "$gdir/ws-agent-sessions/wt1.lock" "session lock is removed"
+[ -e "$WS/.local/worktrees/api/wt1" ] && ok "worktree is kept after stop" \
+  || bad "worktree is kept after stop"
+
+section "session bind (attention isolation)"
+# Git worktrees isolate HEAD. Session bind isolates what the agent is allowed
+# to load: one project pack per WS_SESSION_ID, never a sibling client.
+printf '\nSIBLING_SESSION_CANARY\n' >> "$WS/context/memory/projects/otherp/project.md"
+check_fails "ws session bind unknown project refuses" ws session bind nosuch
+check_fails "ws session bind --run unknown refuses" \
+  env WS_SESSION_ID=attn ws session bind api --run nosuch-run
+
+BIND_OUT="$(WS_SESSION_ID=attn ws session bind api 2>&1)"
+printf '%s' "$BIND_OUT" | grep -q 'WS_PROJECT_KEY=api' \
+  && ok "bind prints WS_PROJECT_KEY" || bad "bind prints WS_PROJECT_KEY" "$BIND_OUT"
+printf '%s' "$BIND_OUT" | grep -q 'WS_CLIENT_KEY=acme' \
+  && ok "bind prints WS_CLIENT_KEY" || bad "bind prints WS_CLIENT_KEY" "$BIND_OUT"
+exists "$WS/.local/sessions/attn/bind" "bind file is per session id"
+exists "$WS/.local/sessions/attn/pack.json" "pack.json is written"
+exists "$WS/.local/sessions/attn/CONTEXT.md" "CONTEXT.md is written"
+contains "$WS/.local/sessions/attn/bind" "project=api" "bind records the project"
+contains "$WS/.local/sessions/attn/bind" "client=acme" "bind records the client"
+contains "$WS/.local/sessions/attn/pack.json" '"project": "api"' "pack is for api"
+lacks "$WS/.local/sessions/attn/pack.json" "SIBLING_SESSION_CANARY" \
+  "api pack does not include the sibling project's memory"
+lacks "$WS/.local/sessions/attn/CONTEXT.md" "SIBLING_SESSION_CANARY" \
+  "CONTEXT.md does not include the sibling canary"
+contains "$WS/.local/sessions/attn/CONTEXT.md" "Client: \`acme\`" "CONTEXT.md names the client"
+
+WS_SESSION_ID=otherbind check "a second session binds independently" ws session bind otherp
+contains "$WS/.local/sessions/otherbind/bind" "project=otherp" "otherbind is otherp"
+contains "$WS/.local/sessions/attn/bind" "project=api" "attn bind is unchanged"
+contains "$WS/.local/sessions/otherbind/pack.json" "SIBLING_SESSION_CANARY" \
+  "otherp pack includes its own memory"
+
+STATUS="$(WS_SESSION_ID=attn ws session status 2>&1)"
+printf '%s' "$STATUS" | grep -q 'project=api' \
+  && ok "session status shows the bound project" \
+  || bad "session status shows the bound project" "$STATUS"
+
+WS_SESSION_ID=attn check "ws run before bind --run" ws run api "pack this run"
+RUN_ID="$(ls "$WS/context/runs/api" | head -1)"
+[ -n "$RUN_ID" ] && ok "run id captured for bind --run" || bad "run id captured for bind --run"
+WS_SESSION_ID=attn check "bind accepts --run" ws session bind api --run "$RUN_ID"
+contains "$WS/.local/sessions/attn/bind" "run=$RUN_ID" "bind records the run"
+contains "$WS/.local/sessions/attn/pack.json" "runs/api/$RUN_ID/brief.md" \
+  "pack includes the run brief"
+
+WS_SESSION_ID=attn check "ws session clear drops the bind" ws session clear
+not_exists "$WS/.local/sessions/attn/bind" "bind file is removed"
+exists "$WS/.local/sessions/otherbind/bind" "clear does not touch another session"
+
+UNBOUND="$(WS_SESSION_ID=attn-unbound ws doctor --ci 2>&1 || true)"
+printf '%s' "$UNBOUND" | grep -q "session is not bound to a project" \
+  && ok "doctor warns when a named session has no bind" \
+  || bad "doctor warns when a named session has no bind" "$UNBOUND"
+
+WS_SESSION_ID=attn check "re-bind after clear" ws session bind api
+BOUND="$(WS_SESSION_ID=attn ws doctor --ci 2>&1 || true)"
+printf '%s' "$BOUND" | grep -q "session bound to api" \
+  && ok "doctor reports the bound project" \
+  || bad "doctor reports the bound project" "$BOUND"
+
+WS_SESSION_ID=wtbind check "ws agent start also binds the session" ws agent start api "bind-on-start"
+exists "$WS/.local/sessions/wtbind/bind" "agent start wrote a bind"
+contains "$WS/.local/sessions/wtbind/bind" "project=api" "agent start bound api"
+WS_SESSION_ID=wtbind check "ws agent stop leaves the bind in place" ws agent stop
+exists "$WS/.local/sessions/wtbind/bind" "bind survives agent stop"
+
+section "overlap is merged, not summed"
+# Two agent sessions covering the same hour are one hour of elapsed work.
+M="$(date +%Y-%m)"; F="$WS/context/works/agent/overlap/$M.jsonl"; mkdir -p "${F%/*}"
+BASE=$(( $(date +%s) - 86400 )); DAY=$(date -u -r $BASE +%Y-%m-%d 2>/dev/null || date -u -d @$BASE +%Y-%m-%d)
+for pair in "0 3600" "1800 5400"; do
+  set -- $pair
+  printf '{"kind":"agent","project":"overlap","actor":"t","tool":"t","start":"%sT00:00:00+00:00","end":"x","start_ts":%s,"end_ts":%s,"minutes":60,"note":"overlap"}\n' \
+    "$DAY" "$((BASE+$1))" "$((BASE+$2))" >> "$F"
+done
+OUT="$(ws hours --project overlap 2>&1)"
+printf '%s' "$OUT" | grep -q "$DAY" && \
+  { printf '%s' "$OUT" | grep "$DAY" | grep -qE '1\.50' \
+      && ok "two overlapping 1h sessions count as 1.5h, not 2h" \
+      || bad "two overlapping 1h sessions count as 1.5h, not 2h" "$(printf '%s' "$OUT" | grep "$DAY")"; } \
+  || bad "the overlapping day appears in the report"
+
+section "hooks and automatic agent clocking"
+# A hook runs unattended inside someone's editor session: it must never fail, and
+# it must never guess which project an hour belongs to.
+check "ws hooks status works before installing" ws hooks status
+check "ws hooks install"                        ws hooks install
+exists "$WS/.claude/settings.json" "settings.json is written"
+contains "$WS/.claude/settings.json" "ws agent auto" "it wires the auto clock"
+
+check "auto out is a no-op when nothing is running" ws agent auto out
+check "auto in from the root records nothing without a default" ws agent auto in
+STATUS="$(ws agent status 2>&1)"
+printf '%s' "$STATUS" | grep -q 'no open session' \
+  && ok "no session was invented for an unknown project" \
+  || bad "no session was invented for an unknown project" "$STATUS"
+
+check "auto in from inside a product repo" env -u RUNDIR sh -c 'cd "$1" && "$2" agent auto in' _ "$PROD" "$WS/.agents/bin/ws"
+STATUS="$(ws agent status 2>&1)"
+printf '%s' "$STATUS" | grep -q 'api' \
+  && ok "the project is resolved from the working directory" \
+  || bad "the project is resolved from the working directory" "$STATUS"
+check "auto out closes it" ws agent auto out
+
+# Everyone is told to open the editor at the workspace root, where the directory
+# walk resolves nothing. A session that has said which project it is on is the
+# only signal left, so the hook has to use it or record nothing all day.
+WS_SESSION_ID=clockbind check "a session binds from the root" ws session bind api
+WS_SESSION_ID=clockbind check "auto in from the root uses the bind" ws agent auto in
+STATUS="$(WS_SESSION_ID=clockbind ws agent status 2>&1)"
+printf '%s' "$STATUS" | grep -q 'api' \
+  && ok "the bound project is clocked, not nothing" \
+  || bad "the bound project is clocked, not nothing" "$STATUS"
+WS_SESSION_ID=clockbind check "auto out closes the bound session" ws agent auto out
+WS_SESSION_ID=clockbind check "session clear" ws session clear
+
+check "ws hooks remove" ws hooks remove
+not_exists "$WS/.claude/settings.json" "the hooks are removed again"
+
+section "log and route"
+# Preserve an existing Current focus so parallel agents cannot stomp it.
+sed -i.bak 's/^- \*\*Current focus:\*\*.*/- **Current focus:** keep this line/' \
+  "$WS/context/memory/projects/api/active.md" && rm -f "$WS/context/memory/projects/api/active.md.bak"
+check "ws run creates a run directory" ws run api "do the isolated thing"
+contains "$WS/context/memory/projects/api/active.md" "keep this line" \
+  "ws run does not overwrite Current focus"
+contains "$WS/context/memory/projects/api/active.md" "do-the-isolated-thing" \
+  "ws run appends the new run to the Active runs table"
+
+check "ws log appends a milestone" ws log api "did a thing"
+ws log api "check reported destination" > "$TMP/log-output"
+contains "$TMP/log-output" "context/memory/projects/api/log.md" "log reports the real context destination"
+lacks "$TMP/log-output" ".agents/memory" "log does not report a forbidden framework path"
+contains "$WS/context/memory/projects/api/log.md" "did a thing" "the milestone is in the log"
+contains "$WS/context/memory/projects/api/log.md" "tester" "it is attributed to a person"
+ROUTE="$(ws route "testing alpha things" 2>&1)"
+printf '%s' "$ROUTE" | grep -q 'alpha' && ok "ws route finds a matching skill" \
+  || bad "ws route finds a matching skill" "$ROUTE"
+
+# Regression: any skill lacking a `keywords:` line makes the scoring pipeline's
+# `grep -v` exit 1 on empty input. Under pipefail + errexit that used to kill
+# `ws route` outright the moment it reached such a skill - which was every call,
+# since the very first framework skill alphabetically has no keywords line.
+mkdir -p "$WS/.agents/skills/no-keywords"
+cat > "$WS/.agents/skills/no-keywords/SKILL.md" <<'SKILLEOF'
+---
+name: no-keywords
+pack: core
+description: Has no keywords line at all.
+---
+# no-keywords
+SKILLEOF
+check "ws route survives a skill with no keywords: line" ws route "testing alpha things"
+rm -rf "$WS/.agents/skills/no-keywords"
+
+section "hours by client"
+check "human clock in on the api project" ws clock in api "billable acme work"
+for f in "$WS"/context/works/.open-*.json; do
+  ts=$(sed -n 's/.*"start_ts":\([0-9]*\).*/\1/p' "$f")
+  sed -i.bak "s/\"start_ts\":$ts/\"start_ts\":$((ts-3600))/" "$f" && rm -f "$f.bak"
+done
+check "human clock out" ws clock out
+OUT="$(ws hours --client acme 2>&1)"
+printf '%s' "$OUT" | grep -q 'client acme' && ok "ws hours --client scopes to that client's projects" \
+  || bad "ws hours --client scopes to that client's projects" "$OUT"
+printf '%s' "$OUT" | grep -qE '1\.0[0-9]' && ok "the hour is counted under the client" \
+  || bad "the hour is counted under the client" "$OUT"
+check_fails "ws hours refuses an unknown client" ws hours --client no-such-client
+check_fails "ws hours refuses --project and --client together" ws hours --project api --client acme
+check "ws hours --rollup" ws hours --rollup
+contains "$WS/context/works/rollup/$(date +%Y-%m).json" '"by_client"' "the rollup breaks hours down by client"
+contains "$WS/context/works/rollup/$(date +%Y-%m).json" '"acme"' "acme appears in the client breakdown"
+
+# Regression: `cat` exits nonzero the moment ANY argument file is missing. A
+# client with two projects, only one of which has hours this month, hits this
+# on every call - one of "api"'s siblings below has never been clocked into.
+# Under pipefail + errexit that used to kill ws hours outright from inside the
+# a=$(...) / h=$(...) assignment in hours_net.
+check "ws new registers a second acme project with no hours yet" \
+  ws new api2 projects/acme/api2 --client acme
+check "ws hours --client survives a sibling project with no session file" \
+  ws hours --client acme
+
+section "ws usage: reading a separate, optional tool's data - never merging it in"
+check_fails "ws usage fails cleanly with no source configured" ws usage
+USRC="$TMP/fake-agent-ops"
+mkdir -p "$USRC/ops/usage"
+M="$(date +%Y-%m)"
+cat > "$USRC/ops/usage/$M.jsonl" <<EOF
+{"id":"a","tool":"claude-code","projectRoot":"$PROD","start":"$(date +%Y-%m-%d)T01:00:00Z","end":"$(date +%Y-%m-%d)T02:00:00Z","tokens":{"input":100,"output":200}}
+{"id":"b","tool":"cursor","projectRoot":"$WS/projects/acme/api2","start":"$(date +%Y-%m-%d)T01:00:00Z","end":"$(date +%Y-%m-%d)T02:00:00Z","tokens":{"input":10,"output":20}}
+{"id":"c","tool":"opencode","projectRoot":"/somewhere/unrelated","start":"$(date +%Y-%m-%d)T01:00:00Z","end":"$(date +%Y-%m-%d)T02:00:00Z","tokens":{"input":999,"output":999}}
+{"id":"d","tool":"cursor","projectRoot":null,"start":"$(date +%Y-%m-%d)T01:00:00Z","end":"$(date +%Y-%m-%d)T02:00:00Z","tokens":{"input":999,"output":999}}
+EOF
+echo "usage_source = $USRC" >> "$WS/workspace.conf"
+
+check "ws usage with no filter reads the configured source" ws usage
+OUT="$(ws usage --project api 2>&1)"
+printf '%s' "$OUT" | grep -q '\b100\b' && ok "ws usage --project matches only that project's records" \
+  || bad "ws usage --project matches only that project's records" "$OUT"
+printf '%s' "$OUT" | grep -q '\b999\b' && bad "unrelated projectRoot leaked into the filtered total" "$OUT" \
+  || ok "a record with an unrelated projectRoot is excluded"
+
+OUT="$(ws usage --client acme 2>&1)"
+printf '%s' "$OUT" | grep -qE '^TOTAL +2 ' && ok "ws usage --client sums across every one of that client's projects" \
+  || bad "ws usage --client sums across every one of that client's projects" "$OUT"
+
+check "a record with projectRoot: null never crashes the filter" ws usage --project api
+check_fails "ws usage refuses --project and --client together" ws usage --project api --client acme
+
+section "doctor on a bare clone"
+# Three bugs have now shipped that only appear before anything has been created:
+# check-ignore not matching a directory that does not exist, and `find` on a
+# missing directory returning 1 into pipefail. A bare checkout — no skills
+# materialised, no context, no product repos — is the state every new machine and
+# every CI run starts in, so it gets its own case.
+BARE="$TMP/bare"
+mkdir -p "$BARE"
+cp -R "$SRC/.agents" "$BARE/.agents"
+rm -rf "$BARE/.agents/skills" "$BARE/.agents/.cache"
+for f in .gitignore .ignore .gitattributes AGENTS.md workspace.conf.example; do
+  cp "$SRC/$f" "$BARE/$f"
+done
+mkdir -p "$BARE/projects"; cp "$SRC/projects/README.md" "$BARE/projects/README.md"
+cp "$SRC/test/ws.test.sh" "$BARE/ws.test.sh" 2>/dev/null || true
+cp "$BARE/workspace.conf.example" "$BARE/workspace.conf"
+git -C "$BARE" init -q
+git -C "$BARE" remote add origin "https://example.invalid/bare.git"
+git -C "$BARE" add -A >/dev/null 2>&1
+git -C "$BARE" commit -qm bare >/dev/null 2>&1
+not_exists "$BARE/.agents/skills" "no skills are materialised yet"
+not_exists "$BARE/context" "no context repo yet"
+check "doctor survives a bare clone" sh -c 'cd "$1" && "$1/.agents/bin/ws" doctor --ci' _ "$BARE"
+
+section "doctor: healthy, then each failure it must catch"
+git -C "$WS" add -A >/dev/null 2>&1
+git -C "$WS" commit -qm "test workspace" >/dev/null 2>&1
+check "doctor passes on a healthy workspace" ws doctor --ci
+
+# Every one of these has damaged something real, or would have.
+cp "$WS/context/registry.tsv" "$TMP/reg.bak"
+printf 'api\tprojects/other\t-\tduplicate key\n' >> "$WS/context/registry.tsv"
+check_fails "doctor fails on a duplicate registry key" ws doctor --ci
+cp "$TMP/reg.bak" "$WS/context/registry.tsv"
+
+cp "$WS/context/registry.tsv" "$TMP/reg2.bak"
+printf 'orphan\tno-such-client\tprojects/orphan\t-\tno client dir\n' >> "$WS/context/registry.tsv"
+check_fails "doctor fails when a project's client does not exist" ws doctor --ci
+cp "$TMP/reg2.bak" "$WS/context/registry.tsv"
+
+cp "$WS/context/registry.tsv" "$TMP/reg3.bak"
+printf 'clientless\t-\tprojects/clientless\t-\tno client at all\n' >> "$WS/context/registry.tsv"
+check_fails "doctor fails when a project names no client at all" ws doctor --ci
+cp "$TMP/reg3.bak" "$WS/context/registry.tsv"
+
+cp "$WS/context/registry.tsv" "$TMP/reg4.bak"
+mkdir -p "$WS/context/clients/other"
+printf 'badgroup\tother\tplatform\tprojects/other/badgroup\t-\tclient\t-\tgroup owned by acme\n' >> "$WS/context/registry.tsv"
+check_fails "doctor fails when a project uses another client's group" ws doctor --ci
+cp "$TMP/reg4.bak" "$WS/context/registry.tsv"
+rm -rf "$WS/context/clients/other"
+
+# Assembled from pieces on purpose: a literal machine path here would trip the
+# very check this case exists to test, and fail doctor on this file in CI.
+BADPATH="/$(printf 'Users')/someone/workspace"
+echo "- root: $BADPATH" >> "$WS/AGENTS.md"
+git -C "$WS" add AGENTS.md >/dev/null 2>&1
+check_fails "doctor fails on a machine path in a tracked file" ws doctor --ci
+# the bad line was staged, so the index holds it too - restore from the commit
+git -C "$WS" reset -q HEAD AGENTS.md 2>/dev/null || true
+git -C "$WS" checkout -- AGENTS.md 2>/dev/null || true
+
+git -C "$PROD" add -f AGENTS.md >/dev/null 2>&1
+check_fails "doctor fails when a pointer is tracked in a client repo" ws doctor --ci
+git -C "$PROD" reset -q
+
+cp "$WS/workspace.conf" "$TMP/conf.bak"
+awk 'BEGIN{d=0} /^[[:space:]]*packs[[:space:]]*=/{print "packs = core, nosuchpack"; d=1; next} {print} END{if(!d) print "packs = core, nosuchpack"}' \
+  "$TMP/conf.bak" > "$WS/workspace.conf"
+check_fails "doctor fails on a standards pack that does not exist" ws doctor --ci
+cp "$TMP/conf.bak" "$WS/workspace.conf"
+
+awk 'BEGIN{d=0} /^[[:space:]]*packs[[:space:]]*=/{print "packs = core"; d=1; next} {print} END{if(!d) print "packs = core"}' \
+  "$TMP/conf.bak" > "$WS/workspace.conf"
+ws doctor >"$TMP/doctor-core-only.txt" 2>&1 || true
+contains "$TMP/doctor-core-only.txt" "Java not required" "doctor does not require Java when the java pack is off"
+cp "$TMP/conf.bak" "$WS/workspace.conf"
+
+mv "$WS/.gitignore" "$TMP/gitignore.bak"
+printf '/projects/*\n!/projects/README.md\n' > "$WS/.gitignore"
+check_fails "doctor fails when context is no longer ignored" ws doctor --ci
+mv "$TMP/gitignore.bak" "$WS/.gitignore"
+
+git -C "$WS" add -A >/dev/null 2>&1
+check "doctor passes again once each fault is undone" ws doctor --ci
+
+section "git clean -ff guard and ADR-0010 context split"
+SHIM="$SRC/.agents/bin/git"
+check_fails "git shim refuses clean -ff at the workspace root" \
+  "$SHIM" -C "$WS" clean -ffxd
+check "git shim still lists status" "$SHIM" -C "$WS" status -sb
+mkdir -p "$TMP/not-a-workspace"
+git -C "$TMP/not-a-workspace" init -q
+check "git shim allows clean -ff outside a workspace root" \
+  "$SHIM" -C "$TMP/not-a-workspace" clean -ffxd
+
+echo "personal_clients = donwi" >> "$WS/workspace.conf"
+# Earlier switch tests attach a context remote. Mixed+remote is a failure;
+# detach so the operator-local warning is what we assert here.
+git -C "$WS/context" remote remove origin 2>/dev/null || true
+check "ws client new donwi" ws client new donwi
+mkdir -p "$WS/projects/donwi/pub" && git -C "$WS/projects/donwi/pub" init -q
+git -C "$WS/projects/donwi/pub" commit --allow-empty -qm init
+check "ws new registers a personal project" \
+  ws new toys projects/donwi/pub --client donwi
+if ws doctor --ci >"$TMP/doctor-mixed.txt" 2>&1; then
+  ok "mixed operator-local context still passes doctor --ci"
+else
+  bad "mixed operator-local context still passes doctor --ci" "$(head -80 "$TMP/doctor-mixed.txt")"
+fi
+contains "$TMP/doctor-mixed.txt" "mixes personal_clients" \
+  "doctor warns when personal and paying-client rows share one context"
+
+check_fails "ws context switch refuses to publish mixed history" \
+  ws context switch git@gitlab.example/mixed.git --force
+
+check "ws context split writes audience copies" \
+  ws context split --personal donwi
+exists "$WS/.local/contexts/donwi/registry.tsv" "personal copy has a registry"
+exists "$WS/.local/contexts/org/registry.tsv" "org copy has a registry"
+contains "$WS/.local/contexts/donwi/registry.tsv" "toys" "personal copy has the donwi project"
+lacks "$WS/.local/contexts/donwi/registry.tsv" "api" "personal copy has no paying-client project"
+contains "$WS/.local/contexts/org/registry.tsv" "api" "org copy keeps the paying-client project"
+lacks "$WS/.local/contexts/org/registry.tsv" "toys" "org copy has no donwi project"
+exists "$WS/.local/archives" "mixed history was archived locally"
+
+git -C "$WS/context" remote add origin "https://example.invalid/mixed-context.git"
+check_fails "doctor fails when a mixed context has a remote" ws doctor --ci
+git -C "$WS/context" remote remove origin
+
+section "no private identifier reaches the published tree"
+# The framework repo is public. The previous guard was a two-name regex living in
+# three tracked files, so it published the very client name it was scrubbing and
+# knew nothing about the other seven clients. The list now comes from the context
+# repo, which only someone able to push this repo has.
+ALLOW='acme\nbeta\nplatform\ndonwi\ntoys\notherp\nlocked\napi2\nstrict\npub\n'
+printf "$ALLOW" > "$WS/context/public-identifiers"
+check "doctor passes when every derived name is declared public" ws doctor --ci
+
+printf "$ALLOW" | grep -v '^acme$' > "$WS/context/public-identifiers"
+check_fails "an undeclared client key in a tracked file fails doctor" ws doctor --ci
+OUT="$(ws doctor --ci 2>&1 || true)"
+printf '%s' "$OUT" | grep -q 'public-identifiers' \
+  && ok "doctor names the allowlist as the fix" \
+  || bad "doctor names the allowlist as the fix" "$OUT"
+
+# `.agents/` and `test/` were excluded from the old scan, which is where two of
+# the three real leaks were sitting.
+printf "$ALLOW" > "$WS/context/public-identifiers"
+printf '# acme2 belongs to a client\n' >> "$WS/.agents/standards/core/git-workflow.md"
+git -C "$WS" add .agents/standards/core/git-workflow.md >/dev/null 2>&1
+ws client new acme2 >/dev/null 2>&1
+check_fails "a client name inside .agents/ is caught too" ws doctor --ci
+git -C "$WS" checkout -- .agents/standards/core/git-workflow.md 2>/dev/null || true
+rm -f "$WS/context/public-identifiers"
+
+# ═════════════════════════════════════════════════════════════════════════════
+printf '\n'
+if [ "$FAIL" -eq 0 ]; then grn "$PASS passed, 0 failed"; exit 0
+else red "$PASS passed, $FAIL FAILED"; exit 1; fi

@@ -1,0 +1,82 @@
+# agent-secure gate for GitLab CI.
+#
+# GitHub cannot be included from GitLab CI, so this template is COPIED into
+# the client repository (or a GitLab template project) rather than included
+# remotely. Keep it in sync with
+# hi-donwi/Agent-Secure/.github/workflows/agent-secure-gate.yml.
+#
+# Usage in the client repo's .gitlab-ci.yml:
+#
+#   include:
+#     - local: 'ci/agent-secure.gitlab-ci.yml'
+#
+# The job downloads the pinned agent-secure release binary and both scanners,
+# digest-verifies everything, generates the policy at runtime, and fails on
+# any verdict other than "pass".
+#
+# allow_json (optional) carries operator-scoped allow entries (scanner, id,
+# file, reason, expires) - reviewable right here in this file. The engine
+# rejects entries without a reason or with a malformed expiry.
+
+.agent-secure:
+  image: alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+  stage: test
+  variables:
+    ENGINE_VERSION: "v0.1.5"
+    # SHA-256 of agent-secure-linux-amd64 from that release's checksums.txt
+    ENGINE_SHA256: "491c0f4b9b4fe379b13f85be0a8956343a6731694e714763d33b3827e65649c9"
+    GITLEAKS_VERSION: "8.30.1"
+    # SHA-256 of gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz from
+    # https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_checksums.txt
+    GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+    OSV_SCANNER_VERSION: "2.5.1"
+    # SHA-256 of osv-scanner_linux_amd64 from
+    # https://github.com/google/osv-scanner/releases/download/v2.5.1/osv-scanner_SHA256SUMS
+    OSV_SCANNER_SHA256: "f9f25499a2c8cc367b3af45df2ea7eeca7fbccceab9c35079968f4b3652194be"
+    ALLOW_JSON: "[]"
+  before_script:
+    - apk add --no-cache curl tar jq python3
+    - mkdir -p /tmp/as/bin /tmp/as/tools && cd /tmp/as/tools
+    - "curl -fsSL --retry 3 -o /tmp/as/bin/agent-secure https://github.com/hi-donwi/Agent-Secure/releases/download/${ENGINE_VERSION}/agent-secure-linux-amd64"
+    - echo "${ENGINE_SHA256}  /tmp/as/bin/agent-secure" | sha256sum -c -
+    - "curl -fsSL --retry 3 -o gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+    - echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
+    - tar -xzf gitleaks.tar.gz gitleaks && rm gitleaks.tar.gz
+    - "curl -fsSL --retry 3 -o osv-scanner https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+    - echo "${OSV_SCANNER_SHA256}  osv-scanner" | sha256sum -c -
+    - chmod +x gitleaks osv-scanner /tmp/as/bin/agent-secure
+    - |
+      printf '%s' "${ALLOW_JSON}" | jq -e '
+        type == "array" and all(.[]; (
+          (.scanner == "gitleaks" or .scanner == "osv-scanner") and
+          (.id | type == "string" and length > 0) and
+          (.reason | type == "string" and test("\\S")) and
+          (.expires | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) and
+          ((.file // "") | type == "string" and (startswith("/") | not) and (contains("../") | not) and . != "..")
+        ))
+      ' > /dev/null
+    # Policy pins the verified scanner binaries.
+    - |
+      jq -n \
+        --arg gp "/tmp/as/tools/gitleaks" \
+        --arg gd "$(sha256sum gitleaks | cut -d' ' -f1)" \
+        --arg op "/tmp/as/tools/osv-scanner" \
+        --arg od "$(sha256sum osv-scanner | cut -d' ' -f1)" \
+        --argjson allow "${ALLOW_JSON}" \
+        '{version: 1, allow_network: true, scanners: ["gitleaks", "osv-scanner"],
+          tools: {gitleaks: {path: $gp, sha256: $gd},
+                  "osv-scanner": {path: $op, sha256: $od}},
+          allow: $allow}' > /tmp/as/policy.json
+  script:
+    - cd "$CI_PROJECT_DIR"
+    - /tmp/as/bin/agent-secure doctor --root . --policy /tmp/as/policy.json > /tmp/as/doctor.json
+    - |
+      rc=0
+      /tmp/as/bin/agent-secure scan --root . --policy /tmp/as/policy.json > /tmp/as/report.json || rc=$?
+    - |
+      if [ "${rc}" -eq 2 ]; then
+        echo "agent-secure could not complete the scan (status incomplete)"
+        exit 1
+      fi
+    - "python3 -c 'import json; d=json.load(open(\"/tmp/as/report.json\")); print(\"agent-secure verdict:\", d.get(\"status\", \"incomplete\")); [print(\"finding:\", f.get(\"scanner\",\"\"), f.get(\"id\",\"\"), f.get(\"file\",\"\"), f.get(\"line\",\"\")) for f in d.get(\"findings\", [])]'"
+    - "test \"$(python3 -c 'import json; print(json.load(open(\"/tmp/as/report.json\")).get(\"status\"))')\" = pass"
