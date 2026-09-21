@@ -2315,6 +2315,37 @@ PY
     else
       c_grn "ok $have skills at $(sed -n 's/^commit[[:space:]]*=[[:space:]]*//p' "$LOCK" | cut -c1-8)"
     fi
+    # A pin can name a commit the source no longer has - after an upstream
+    # history rewrite, or a force-push over the branch. `ws skills sync` does not
+    # notice: it materialises from the local cache and reports success, so the
+    # workspace that did the syncing looks healthy while every fresh clone fails
+    # at `ws bootstrap` with nothing pointing at the cause.
+    #
+    # Absence is only reported when it can be established. An unreachable source
+    # - offline, or CI with no key for an SSH remote - looks exactly like a
+    # missing commit, so connectivity is proven first and the check is skipped
+    # when it cannot be.
+    local pinned; pinned="$(sed -n 's/^commit[[:space:]]*=[[:space:]]*//p' "$LOCK" 2>/dev/null | head -1)"
+    local msrc; msrc="$(sed -n 's/^source[[:space:]]*=[[:space:]]*//p' "$MANIFEST" 2>/dev/null | head -1)"
+    if [ -n "$pinned" ] && [ -n "$msrc" ]; then
+      if ! git ls-remote "$msrc" HEAD >/dev/null 2>&1; then
+        c_dim "  pinned commit unverified - the skills source is not reachable from here"
+      else
+        local probe; probe="$(mktemp -d)"
+        git -C "$probe" init -q 2>/dev/null || true
+        if git -C "$probe" fetch --quiet --depth=1 "$msrc" "$pinned" 2>/dev/null; then
+          c_grn "ok the pinned skills commit still exists at the source"
+        else
+          c_red "x skills.lock pins $(printf '%s' "$pinned" | cut -c1-8), which the source no longer has"
+          c_dim "    the source history was rewritten or force-pushed"
+          c_dim "    'ws skills sync' will not catch this - it materialises from the local cache"
+          c_dim "    re-pin with: ws skills update"
+          fail=1
+        fi
+        rm -rf "$probe"
+      fi
+    fi
+
     # Fetched skills are generated output. If they are tracked here, the source
     # repository has quietly stopped being the single source.
     if [ -n "$(git -C "$ROOT" ls-files .agents/skills 2>/dev/null)" ]; then

@@ -53,9 +53,15 @@ git config --global user.name  "Test Runner"
 git config --global init.defaultBranch main
 git config --global commit.gpgsign false
 export WS_USER=tester WS_AGENT=testagent
-# Runtime session ids from the host agent must not leak into the suite.
-unset WS_SESSION_ID GROK_SESSION_ID GROK_SESSION CLAUDE_SESSION_ID CODEX_THREAD_ID CURSOR_TRACE_ID
-export -n WS_SESSION_ID GROK_SESSION_ID GROK_SESSION CLAUDE_SESSION_ID CODEX_THREAD_ID CURSOR_TRACE_ID 2>/dev/null || true
+# Runtime session ids from the host agent must not leak into the suite. Neither
+# may the variables `agent_id` detects the tool by: with CLAUDECODE or
+# CODEX_SANDBOX set, WS_AGENT is ignored and every clock file is named after the
+# agent running the suite, so three cases here failed on a developer's machine
+# and passed in CI — the worst way round for a regression test to behave.
+HOST_ENV="WS_SESSION_ID GROK_SESSION_ID GROK_SESSION CLAUDE_SESSION_ID CODEX_THREAD_ID
+          CURSOR_TRACE_ID CLAUDECODE CODEX_SANDBOX"
+unset $HOST_ENV
+export -n $HOST_ENV 2>/dev/null || true
 
 # ── a workspace built from this repository's framework files ──────────────────
 WS="$TMP/workspace"
@@ -211,6 +217,7 @@ exists "$WS/.agents/skills/gamma/SKILL.md" "the added skill arrives"
 check "ws skills remove drops it again" ws skills remove gamma
 not_exists "$WS/.agents/skills/gamma" "the removed skill is deleted from disk"
 exists "$WS/.agents/skills/alpha/SKILL.md" "removing one leaves the others alone"
+
 
 git -C "$WS" add -A >/dev/null 2>&1
 equals "$(git -C "$WS" ls-files .agents/skills | wc -l | tr -d ' ')" "0" \
@@ -657,6 +664,25 @@ section "doctor: healthy, then each failure it must catch"
 git -C "$WS" add -A >/dev/null 2>&1
 git -C "$WS" commit -qm "test workspace" >/dev/null 2>&1
 check "doctor passes on a healthy workspace" ws doctor --ci
+
+# A pin can name a commit the source no longer has, after an upstream history
+# rewrite. `ws skills sync` reports success anyway - it materialises from the
+# local cache - so the workspace that synced looks healthy while every fresh
+# clone fails at bootstrap. Doctor is what has to notice.
+# The lock is edited in place rather than re-synced: sync is silent about this
+# only when the cache still holds the lost commit, which is true on the machine
+# that synced before the rewrite and false in a fixture.
+LOCKED="$(sed -n 's/^commit[[:space:]]*=[[:space:]]*//p' "$WS/.agents/skills.lock")"
+sed -i.bak 's/^commit[[:space:]]*=.*/commit = 0000000000000000000000000000000000000000/' \
+  "$WS/.agents/skills.lock" && rm -f "$WS/.agents/skills.lock.bak"
+check_fails "doctor fails on a pin the source no longer has" ws doctor --ci
+DOC="$(ws doctor --ci 2>&1 || true)"
+printf '%s' "$DOC" | grep -q 'ws skills update' \
+  && ok "doctor names the re-pin as the fix" \
+  || bad "doctor names the re-pin as the fix" "$DOC"
+sed -i.bak "s|^commit[[:space:]]*=.*|commit = $LOCKED|" "$WS/.agents/skills.lock" \
+  && rm -f "$WS/.agents/skills.lock.bak"
+check "doctor passes once the pin is real again" ws doctor --ci
 
 # Every one of these has damaged something real, or would have.
 cp "$WS/context/registry.tsv" "$TMP/reg.bak"
