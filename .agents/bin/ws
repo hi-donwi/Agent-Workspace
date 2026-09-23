@@ -2153,6 +2153,21 @@ cmd_doctor() {
   elif is_repo "$ROOT"; then
     c_grn "ok linked git worktree (this session has its own HEAD)"
   fi
+  if is_repo "$ROOT"; then
+    local upstream counts ahead behind
+    upstream="$(git -C "$ROOT" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || true)"
+    if [ -n "$upstream" ]; then
+      counts=($(git -C "$ROOT" rev-list --left-right --count "$upstream...HEAD" 2>/dev/null || printf '0 0'))
+      behind="${counts[0]:-0}"; ahead="${counts[1]:-0}"
+      if [ "$ahead" != "0" ]; then
+        c_ylw "! framework branch has $ahead unpublished commit(s) - inspect before push"
+        c_dim "    upstream: $upstream; local history may contain private material"
+      fi
+      [ "$behind" = "0" ] || c_dim "    framework branch is also $behind commit(s) behind its upstream"
+    elif [ -n "$(git -C "$ROOT" branch --show-current 2>/dev/null)" ]; then
+      c_ylw "! framework branch has no upstream — inspect before publishing"
+    fi
+  fi
   if [ -f "$CONF" ]; then
     c_grn "ok workspace.conf: $ORG_NAME ($ORG_KEY)"
   else
