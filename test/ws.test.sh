@@ -1081,6 +1081,17 @@ check_fails "a client name inside .agents/ is caught too" ws doctor --ci
 git -C "$WS" checkout -- .agents/standards/core/git-workflow.md 2>/dev/null || true
 rm -f "$WS/context/public-identifiers"
 
+section "public CI governance stays deterministic"
+GOVERNANCE="$SRC/.github/workflows/agentic-governance.yml"
+exists "$GOVERNANCE" "agentic governance workflow exists"
+contains "$GOVERNANCE" 'permissions:' "governance workflow declares permissions"
+contains "$GOVERNANCE" 'contents: read' "governance workflow is read-only"
+contains "$GOVERNANCE" 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' \
+  "governance checkout is pinned"
+contains "$GOVERNANCE" 'ws_eval.py validate' "governance validates evaluation template"
+contains "$GOVERNANCE" 'ws_compat.py validate' "governance validates compatibility template"
+lacks "$GOVERNANCE" 'git clone' "governance does not clone private repositories"
+
 # ═════════════════════════════════════════════════════════════════════════════
 printf '\n'
 if [ "$FAIL" -eq 0 ]; then grn "$PASS passed, 0 failed"; exit 0

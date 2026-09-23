@@ -195,3 +195,9 @@ Verification contracts belong under the operator-owned `.local/agent/contracts/`
 or another path outside the product repository. `ws verify` records command IDs, status, and
 durations but never captures command output, so secrets and client data do not become evidence
 artifacts. Use `--run <run-id>` to write the sanitized report to the private context run.
+
+The `agentic governance` workflow validates the public templates and helper syntax without
+checking out `context/` or any product repository. Configure these workflow jobs as required
+status checks in the public repository: `ws test suite`, `workspace hygiene`, `agentic
+contracts`, and the pinned security gate. Branch protection and deployment environments are
+administrator settings; they are not inferred from agent output or product-controlled files.

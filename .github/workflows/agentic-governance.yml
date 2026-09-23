@@ -1,0 +1,31 @@
+name: agentic governance
+
+# This workflow deliberately checks only public framework material. It never clones
+# context/ or projects/ and never invokes a model or provider.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    name: agentic contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check shell and Python helpers
+        run: |
+          bash -n .agents/bin/ws
+          python3 -m py_compile .agents/bin/ws_eval.py .agents/bin/ws_compat.py
+
+      - name: Validate public templates
+        run: |
+          python3 .agents/bin/ws_eval.py validate .agents/templates/evaluation-scenarios.json
+          python3 .agents/bin/ws_compat.py validate .agents/templates/compatibility-manifest.json
+
+      - name: Check diff whitespace
+        run: git diff --check
