@@ -276,6 +276,7 @@ class WebControlReadFlow(unittest.TestCase):
         payload = json.loads(body)
         self.assertEqual(status, 200)
         self.assertEqual(payload["identity"]["context_dir"], "context")
+        self.assertNotIn("org_name", payload["identity"])
         self.assertTrue(payload["context_local"])
         self.assertTrue(payload["loopback"])
         self.assertNotIn("test-token", json.dumps(payload))

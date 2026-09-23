@@ -304,6 +304,10 @@ Before reading project memory, skills beyond routing, or product code:
    If the user named a project, do not search other clients to confirm it.
    If it is ambiguous, ask.
 2. Bind the session: `ws session bind <project-key>` (optional `--run <id>`).
+   Export `WS_SESSION_ID` first. Without it every agent shares the session id
+   `default`, and a bind there redirects whatever other agent is using it. Binding
+   the shared `default` session to a *different* project is refused for that
+   reason; `--force` takes it over deliberately.
    Then read `.local/sessions/<session>/CONTEXT.md` and only the files it lists.
    `ws context pack <key>` is the same allowlist without binding.
    `ws agent start <key>` binds as well as creating a worktree.
@@ -521,6 +525,11 @@ A session that is not using a worktree still binds:
 ws session bind <project-key>          # writes .local/sessions/<id>/{bind,pack.json,CONTEXT.md}
 ws session status
 ws session clear                       # does not clock out
+
+`ws session bind` refuses to move the shared `default` session to another project.
+That is the one case where one agent's bind silently becomes another's, so the
+refusal names the fix (`export WS_SESSION_ID=...`) and `--force` is the escape
+hatch for when nothing else is running.
 ```
 
 Rules:
@@ -636,6 +645,19 @@ this tool installed at all.
   `ws doctor` derives the list from the context repo and refuses all of them. A name that
   is public anyway (your own open repos, the account they live under) is declared once in
   `context/public-identifiers`, which is not in this repository.
+
+  A repository published from here cannot derive that list — CI has neither the
+  context repo nor `workspace.conf` — so it reads the same names from a secret.
+  A secret maintained by hand goes stale every time a project is registered, and
+  stale in the dangerous direction means a *new* client name passes the check.
+  `ws identifiers` prints the current list, and `ws identifiers --regex` prints it
+  in the form the secret takes:
+
+  ```bash
+  ws identifiers --regex | gh secret set PRIVATE_IDENTIFIERS --repo <owner>/<repo>
+  ```
+
+  Re-run it whenever `registry.tsv` gains a row.
 - If a secret is committed by accident: rotate the secret first, then clean history.
   Deleting the file is not enough.
 

@@ -26,7 +26,7 @@ class RegistryGroups(unittest.TestCase):
         self.env = dict(os.environ, WS_USER="fixture", WS_AGENT="test",
                         GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null")
         self.git(self.root, "init", "-qb", "main")
-        self.ws("init", "--org", "Example", "--key", "example", "--group", "git@example.invalid:example")
+        self.ws("init")
         self.ws("context", "init")
         self.ws("client", "new", "alpha")
         self.ws("client", "new", "beta")
@@ -171,7 +171,7 @@ class WorkspaceSecurity(unittest.TestCase):
         self.env = dict(os.environ, WS_USER="fixture", WS_AGENT="test",
                         GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null")
         self.git(self.root, "init", "-qb", "main")
-        self.ws("init", "--org", "Example", "--key", "example", "--group", "git@example.invalid:example")
+        self.ws("init")
         self.ws("context", "init")
         self.ws("client", "new", "alpha")
         self.ws("new", "api", "projects/alpha/public/api", "--client", "alpha")

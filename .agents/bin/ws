@@ -2,9 +2,8 @@
 # ws — engineering workspace CLI
 # One entry point for the project registry, runs, skill routing, and health checks.
 #
-# This tool carries no organisation's name. Who owns a given clone is declared in
-# workspace.conf at the root; everything else here is the same for every company,
-# team, and stack that uses this workspace.
+# This tool carries no organisation identity. The same framework code is used by every
+# team and stack; client and project ownership lives in the private context registry.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -12,8 +11,8 @@ CONF="$ROOT/workspace.conf"
 SKILLS="$ROOT/.agents/skills"
 TPL="$ROOT/.agents/templates"
 
-# Organisation identity and the context location come from workspace.conf, so a
-# fresh clone is re-branded by editing one file (or running `ws init`).
+# The context location comes from workspace.conf. A fresh clone can create the local
+# context boundary with `ws init` without storing an organisation name in the framework.
 conf_get() {
   local key="$1" default="${2:-}"
   [ -f "$CONF" ] || { printf '%s' "$default"; return; }
@@ -42,8 +41,6 @@ normalize_remote() {
   printf '%s' "${1:-}" | sed -E 's#^git@([^:]+):#https://\1/#; s#^ssh://git@([^/]+)/#https://\1/#; s#\.git$##'
 }
 
-ORG_NAME="$(conf_get org_name 'this organisation')"
-ORG_KEY="$(conf_get org_key 'org')"
 CONTEXT_DIR="$ROOT/$(conf_get context_dir 'context')"
 REGISTRY="$CONTEXT_DIR/registry.tsv"
 GROUPS_FILE="$CONTEXT_DIR/groups.tsv"
@@ -169,43 +166,35 @@ skill_dirs() {
 }
 
 # ─────────────────────────────────────────────────────────────── init
-# Re-brands a fresh clone for a new organisation and empties the previous owner's
-# context. This is what makes the workspace reusable rather than one company's repo.
+# Creates the local workspace configuration without storing a company or organisation
+# name. Client ownership belongs in the private context registry.
 cmd_init() {
-  local name="" key="" group="" force=0
+  local key="org" force=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      --org)   name="${2:-}"; shift 2 ;;
-      --key)   key="${2:-}"; shift 2 ;;
-      --group) group="${2:-}"; shift 2 ;;
+      --org|--group) die "$1 is no longer supported; workspace identity is deliberately not stored" ;;
+      --key) key="${2:-}"; [ -n "$key" ] || die "--key requires a value"; shift 2 ;;
       --force) force=1; shift ;;
-      *) die "usage: ws init [--org \"Name\"] [--key abc] [--group git@host:group] [--force]" ;;
+      *) die "usage: ws init [--key abc] [--force]" ;;
     esac
   done
 
   if [ -f "$CONF" ] && [ "$force" = 0 ]; then
-    c_ylw "workspace.conf already exists - this clone belongs to: $ORG_NAME"
+    c_ylw "workspace.conf already exists - refusing to overwrite it"
     c_dim "  edit it by hand, or re-run with --force to overwrite"
     return 0
   fi
 
-  [ -n "$name" ]  || { printf 'Organisation name: '; read -r name; }
-  [ -n "$key" ]   || { printf 'Short key (lowercase, e.g. acme): '; read -r key; }
-  [ -n "$group" ] || { printf 'Git group (e.g. git@gitlab.com:acme): '; read -r group; }
   key="$(slug "$key")"
-
   cat > "$CONF" <<CONF
-# Who owns this clone of the workspace. See .agents/standards/README.md for packs.
-org_name  = $name
-org_key   = $key
-git_group = $group
-
+# Local workspace settings. Client ownership belongs in the private context registry.
+org_key        = $key
 context_dir    = context
 context_remote =
 
 packs = core, java, web
 CONF
-  c_grn "-> workspace.conf written for $name"
+  c_grn "-> workspace.conf written"
   c_dim "   next: ws context init   (or: ws context clone <remote>)"
 }
 
@@ -264,8 +253,7 @@ cmd_context() {
       mkdir -p "$CONTEXT_DIR"/{memory/projects,runs,docs/adr,skills,clients}
       printf 'key\tclient\tgroup\tfolder\tremote\tcontext_scope\tsecurity_profile\tdescription\n' > "$CONTEXT_DIR/registry.tsv"
       printf 'key\tclient\tdescription\n' > "$CONTEXT_DIR/groups.tsv"
-      [ -f "$TPL/context-readme.md" ] \
-        && sed "s|{{ORG}}|$ORG_NAME|g" "$TPL/context-readme.md" > "$CONTEXT_DIR/README.md"
+      [ -f "$TPL/context-readme.md" ] && cp "$TPL/context-readme.md" "$CONTEXT_DIR/README.md"
       [ -f "$TPL/context-gitattributes" ] && cp "$TPL/context-gitattributes" "$CONTEXT_DIR/.gitattributes"
       touch "$CONTEXT_DIR/runs/.gitkeep"
       git -C "$CONTEXT_DIR" init -q -b main
@@ -838,7 +826,7 @@ cmd_link() {
 # AGENTS.md - pointer
 
 This is a **product repo**. Engineering standards, agent skills, and team memory are NOT
-stored here; they all live in the $ORG_NAME engineering workspace.
+stored here; they all live in the engineering workspace that contains this checkout.
 
 **Read first:** \`$ROOT/AGENTS.md\`
 
@@ -1711,13 +1699,14 @@ cmd_session() {
 
 session_bind() {
   local key="${1:-}"; shift || true
-  local run=""
+  local run="" force=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --run)
-        [ -n "${2:-}" ] || die "usage: ws session bind <project-key> [--run <run-id>]"
+        [ -n "${2:-}" ] || die "usage: ws session bind <project-key> [--run <run-id>] [--force]"
         run="$2"; shift 2 ;;
-      *) die "usage: ws session bind <project-key> [--run <run-id>]" ;;
+      --force) force=1; shift ;;
+      *) die "usage: ws session bind <project-key> [--run <run-id>] [--force]" ;;
     esac
   done
   [ -n "$key" ] || die "usage: ws session bind <project-key> [--run <run-id>]"
@@ -1733,6 +1722,22 @@ session_bind() {
   local session; session="$(session_id)"
   if [ "$session" = "default" ]; then
     c_ylw "! session id is 'default' - export WS_SESSION_ID so parallel agents do not share a bind"
+    # Every agent that exports nothing lands in the same directory, so a bind here
+    # silently redirects whatever other agent is using it: ADR-0011 isolation,
+    # defeated by two processes and no environment variable. Refuse rather than
+    # overwrite. Rebinding the same project is a refresh and stays allowed.
+    local prev_dir prev
+    prev_dir="$(session_dir)"
+    # No bind file yet is the normal first case, and sed exits nonzero on it.
+    prev="$(sed -n 's/^project=//p' "$prev_dir/bind" 2>/dev/null || true)"
+    if [ -n "$prev" ] && [ "$prev" != "$key" ] && [ "$force" = 0 ]; then
+      c_red "x the shared 'default' session is already bound to '$prev'"
+      c_dim "  Rebinding it to '$key' would redirect whatever agent is using that bind,"
+      c_dim "  and it would not be told. Give this session its own id instead:"
+      c_dim "    export WS_SESSION_ID=<something-unique>; ws session bind $key"
+      c_dim "  If no other agent is running, take it over with: ws session bind $key --force"
+      return 1
+    fi
   fi
   if [ -n "$run" ]; then
     validate_key "$run"
@@ -2105,7 +2110,6 @@ private_identifiers() {
     [ -f "$CONTEXT_DIR/groups.tsv" ] && awk -F'\t' 'NR > 1 && $0 !~ /^#/ { print $1 }' "$CONTEXT_DIR/groups.tsv"
     [ -d "$CONTEXT_DIR/clients" ] && find "$CONTEXT_DIR/clients" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;
     conf_get org_key
-    conf_get org_name
   } 2>/dev/null \
     | tr '[:upper:]' '[:lower:]' \
     | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
@@ -2121,6 +2125,37 @@ private_identifiers() {
     sort -u "$tmp"
   fi
   rm -f "$tmp"
+}
+
+# The same list doctor checks tracked files against, printed. A published repo's
+# CI cannot derive it — CI has neither the context repo nor workspace.conf — so it
+# reads a secret instead, and a secret maintained by hand goes stale every time a
+# project is registered. Stale in one direction fails a build, which is noisy and
+# harmless; stale in the other misses a new client name, which is the leak the
+# check exists to catch. This makes regenerating it one command.
+cmd_identifiers() {
+  local regex=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --regex) regex=1; shift ;;
+      *) die "usage: ws identifiers [--regex]" ;;
+    esac
+  done
+  [ -d "$CONTEXT_DIR" ] || die "no context repo - nothing to derive identifiers from"
+  local ids; ids="$(private_identifiers "$CONTEXT_DIR/public-identifiers")"
+  if [ -z "$ids" ]; then
+    c_dim "no private identifiers (everything derived is declared public)"
+    return 0
+  fi
+  if [ "$regex" = 1 ]; then
+    printf '%s' "$ids" | paste -sd '|' -
+    return 0
+  fi
+  printf '%s\n' "$ids"
+  echo >&2
+  c_dim "  $(printf '%s\n' "$ids" | wc -l | tr -d ' ') names. Declared-public ones are excluded (${CONTEXT_DIR#$ROOT/}/public-identifiers)." >&2
+  c_dim "  To refresh a published repo's CI secret:" >&2
+  c_dim "    ws identifiers --regex | gh secret set PRIVATE_IDENTIFIERS --repo <owner>/<repo>" >&2
 }
 
 cmd_doctor() {
@@ -2169,7 +2204,7 @@ cmd_doctor() {
     fi
   fi
   if [ -f "$CONF" ]; then
-    c_grn "ok workspace.conf: $ORG_NAME ($ORG_KEY)"
+    c_grn "ok workspace.conf"
   else
     c_red "x no workspace.conf - this clone belongs to nobody yet; run: ws init"; fail=1
   fi
@@ -2905,7 +2940,7 @@ cmd_help() {
   cat <<'H'
 ws — engineering workspace CLI
 
-  ws init [--org N --key k --group g]   re-brand a fresh clone for an organisation
+  ws init [--key abc] [--force]         create local settings without organisation name
   ws context [status|init|clone <r>|sync|split|switch <r>|pack <key>]
                                     private memory repo; switch refuses a different audience
                                     split --personal <c>  ADR-0010 copies; never publishes mixed history
@@ -2972,6 +3007,7 @@ esac
 
 case "${1:-help}" in
   init) shift; cmd_init "$@" ;;
+  identifiers) shift; cmd_identifiers "$@" ;;
   context) shift; cmd_context "$@" ;;
   client) shift; cmd_client "$@" ;;
   group) shift; cmd_group "$@" ;;

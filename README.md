@@ -42,7 +42,7 @@ Nothing here names an organisation. Clone it, run `ws init`, and it is yours.
 
 ```bash
 git clone <workspace-remote> workspace && cd workspace
-cp workspace.conf.example workspace.conf        # set org_name; leave context_remote empty for local-only
+cp workspace.conf.example workspace.conf        # leave context_remote empty for local-only
 .agents/bin/ws bootstrap                        # skills, and product repos that have remotes
 .agents/bin/ws context init                     # only if context/ is not already present
 .agents/bin/ws ide                              # copy the shared editor defaults
@@ -56,13 +56,13 @@ context repository is shared. `ws doctor` reports a context with no remote as pr
 
 ```bash
 git clone <workspace-remote> workspace && cd workspace
-.agents/bin/ws init            # name the organisation; writes workspace.conf
+.agents/bin/ws init            # writes local settings without an organisation name
 .agents/bin/ws context init    # create an empty context repository for it
 .agents/bin/ws doctor
 ```
 
-Nothing but `workspace.conf` names a company, so the second form starts clean — no other
-organisation's projects, memory, or clients come with it.
+The framework stores no company name. Private client names, projects, memory, and access
+boundaries live in the separate context repository.
 
 Clone it wherever you like — nothing tracked here assumes a path, and `ws where` resolves
 the root from anywhere.
@@ -83,7 +83,7 @@ Three repositories share one directory. Full explanation in [AGENTS.md §1](AGEN
 | Path | Contents |
 |---|---|
 | [`AGENTS.md`](AGENTS.md) | Working contract for agents + developers. **Read this first.** |
-| [`workspace.conf`](workspace.conf) | The only file that names an organisation |
+| [`workspace.conf`](workspace.conf) | Local settings that point to the private context |
 | [`.agents/standards/`](.agents/standards/) | Binding standards, in packs (`core`, `java`, `web`) |
 | [`test/ws.test.sh`](test/ws.test.sh) | The CLI's test suite — zero dependencies, runs in CI |
 | `.agents/skills.manifest` | Which skills to pull, and from where |
