@@ -1351,7 +1351,7 @@ def list_plans(state: WorkspaceWebState, project: str | None = None) -> dict[str
 
 def workspace_settings(state: WorkspaceWebState) -> dict[str, object]:
     conf = _parse_conf(state.root / "workspace.conf")
-    allowed = ("org_name", "org_key", "packs", "context_dir", "context_remote", "default_project")
+    allowed = ("packs", "context_dir", "context_remote", "default_project")
     identity = {key: conf.get(key, "") for key in allowed}
     return {
         "identity": identity,
@@ -3490,8 +3490,6 @@ def index_html() -> str:
       const id = res.data.identity || {};
       const rows = [
         ["Root", res.data.root_name || ""],
-        ["Organisation", id.org_name || ""],
-        ["Org key", id.org_key || ""],
         ["Packs", id.packs || ""],
         ["Context dir", id.context_dir || ""],
         ["Context remote", id.context_remote || "(local-only)"],

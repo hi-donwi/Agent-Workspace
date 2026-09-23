@@ -1,12 +1,9 @@
-# Who owns this clone of the workspace. Copy to workspace.conf, or run `ws init`.
+# Local workspace settings. Copy to workspace.conf, or run `ws init`.
 #
-# workspace.conf itself is NOT tracked. This file is the only place an organisation
-# is ever named, and keeping it untracked is what lets the same framework repository
-# be shared publicly and reused by anyone.
+# workspace.conf itself is NOT tracked. Client ownership and private names belong in
+# the separate context repository, never in the shared framework configuration.
 
-org_name  = Example Organisation
-org_key   = example
-git_group = git@gitlab.com:example
+org_key        = example
 
 # This access boundary's private context: memory, runs, the product registry,
 # client ADRs, and domain skills. A SEPARATE git repository cloned into context/,

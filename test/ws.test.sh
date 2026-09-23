@@ -102,12 +102,11 @@ git -C "$SKILLSRC" init -q && git -C "$SKILLSRC" add -A && git -C "$SKILLSRC" co
 # ═════════════════════════════════════════════════════════════════════════════
 section "init and identity"
 
-check "ws init writes workspace.conf" \
-  ws init --org "Acme Ltd" --key acme --group "git@example.invalid:acme"
+check "ws init writes workspace.conf" ws init --key acme
 exists "$WS/workspace.conf" "workspace.conf exists"
-contains "$WS/workspace.conf" "org_name  = Acme Ltd" "it records the organisation"
-check "ws init is idempotent and refuses to clobber" ws init --org Other --key other --group x
-contains "$WS/workspace.conf" "Acme Ltd" "a second init leaves the first alone"
+lacks "$WS/workspace.conf" "org_name" "workspace.conf does not record an organisation name"
+check "ws init is idempotent and refuses to clobber" ws init
+contains "$WS/workspace.conf" "org_key        = acme" "workspace.conf keeps only a technical workspace key"
 
 section "ws where resolves structurally"
 # The breadcrumb is a fallback, not the mechanism: a workspace is recognised by
@@ -273,6 +272,8 @@ exists "$PROD/.workspace" "breadcrumb written"
 contains "$PROD/.git/info/exclude" "/AGENTS.md"   "AGENTS.md is excluded"
 contains "$PROD/.git/info/exclude" "/.workspace"  "the breadcrumb is excluded too"
 exists "$PROD/.git/hooks/pre-commit" "the guard hook is installed"
+contains "$PROD/AGENTS.md" "live in the engineering workspace" "pointer uses generic workspace wording"
+lacks "$PROD/AGENTS.md" "Acme Ltd" "pointer does not expose the organisation identity"
 equals "$(git -C "$PROD" status --porcelain | wc -l | tr -d ' ')" "0" \
   "the pointers are invisible to git status"
 
@@ -616,6 +617,33 @@ contains "$WS/.local/sessions/otherbind/bind" "project=otherp" "otherbind is oth
 contains "$WS/.local/sessions/attn/bind" "project=api" "attn bind is unchanged"
 contains "$WS/.local/sessions/otherbind/pack.json" "SIBLING_SESSION_CANARY" \
   "otherp pack includes its own memory"
+
+# Every agent that exports no session id shares one directory, so a bind there
+# redirects whatever other agent is using it — without telling either of them.
+# This is ADR-0011 isolation defeated by two processes and no env var.
+# The suite unsets every session variable, so a bare `ws` is the default session.
+check "the default session can take a first bind" ws session bind api
+contains "$WS/.local/sessions/default/bind" "project=api" "default bound to api"
+check "rebinding the default session to the SAME project is a refresh" \
+  ws session bind api
+check_fails "rebinding the default session to a DIFFERENT project is refused" \
+  ws session bind otherp
+contains "$WS/.local/sessions/default/bind" "project=api" \
+  "the refused rebind left the other agent's bind alone"
+REFUSE="$(ws session bind otherp 2>&1 || true)"
+printf '%s' "$REFUSE" | grep -q 'WS_SESSION_ID' \
+  && ok "the refusal names the real fix" \
+  || bad "the refusal names the real fix" "$REFUSE"
+check "--force takes the default session over deliberately" \
+  ws session bind otherp --force
+contains "$WS/.local/sessions/default/bind" "project=otherp" "--force rebound it"
+# A named session was never the problem and must not acquire the restriction.
+WS_SESSION_ID=attn check "a named session still rebinds freely" ws session bind otherp
+WS_SESSION_ID=attn check "and back again" ws session bind api
+# Leave the shared session unbound: the hook section below asserts what happens
+# when there is no bind to resolve, and a leftover one silently answers for it.
+check "the default session clears" ws session clear
+not_exists "$WS/.local/sessions/default/bind" "default session left unbound"
 
 STATUS="$(WS_SESSION_ID=attn ws session status 2>&1)"
 printf '%s' "$STATUS" | grep -q 'project=api' \
@@ -1064,12 +1092,18 @@ ALLOW='acme\nbeta\nplatform\ndonwi\ntoys\notherp\nlocked\napi2\nstrict\npub\n'
 printf "$ALLOW" > "$WS/context/public-identifiers"
 check "doctor passes when every derived name is declared public" ws doctor --ci
 
+# Put the undeclared client key in a tracked framework file explicitly. This keeps
+# the assertion independent of local workspace identity settings.
+printf '# acme belongs to a client\n' >> "$WS/AGENTS.md"
+git -C "$WS" add AGENTS.md >/dev/null 2>&1
 printf "$ALLOW" | grep -v '^acme$' > "$WS/context/public-identifiers"
 check_fails "an undeclared client key in a tracked file fails doctor" ws doctor --ci
 OUT="$(ws doctor --ci 2>&1 || true)"
 printf '%s' "$OUT" | grep -q 'public-identifiers' \
   && ok "doctor names the allowlist as the fix" \
   || bad "doctor names the allowlist as the fix" "$OUT"
+git -C "$WS" reset -q HEAD AGENTS.md 2>/dev/null || true
+git -C "$WS" checkout -- AGENTS.md 2>/dev/null || true
 
 # `.agents/` and `test/` were excluded from the old scan, which is where two of
 # the three real leaks were sitting.

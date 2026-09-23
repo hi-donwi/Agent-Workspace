@@ -1,4 +1,4 @@
-# {{ORG}} — workspace context
+# Workspace context
 
 This repository is one organisation's **context**: what it is building, for whom, and
 where each piece stands. It is mounted at `context/` inside the engineering workspace and
