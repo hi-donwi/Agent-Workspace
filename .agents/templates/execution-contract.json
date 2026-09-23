@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "project verification",
+  "commands": [
+    {
+      "id": "unit-tests",
+      "command": "./test-command",
+      "required": true,
+      "timeout_seconds": 300
+    }
+  ]
+}

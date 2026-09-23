@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "name": "project autonomy policy",
+  "default": "approval-required",
+  "actions": {
+    "inspect": "read",
+    "edit": "change",
+    "merge": "approval-required",
+    "deploy": "approval-required"
+  }
+}

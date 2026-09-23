@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "release_channel": "stable",
+  "required_checks": ["tests", "security", "compatibility"],
+  "components": [
+    {
+      "id": "example-runtime",
+      "source": "https://example.invalid/example-runtime.git",
+      "version": "v1.2.3",
+      "commit": "0123456789abcdef0123456789abcdef01234567",
+      "interface": "contract-v1"
+    }
+  ]
+}

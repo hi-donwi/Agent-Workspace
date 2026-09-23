@@ -340,6 +340,165 @@ check_fails "ws scan fails when agent-secure is not installed" ws scan api
 mv "$FAKEBIN/agent-secure.bak" "$FAKEBIN/agent-secure"
 export WS_SECURE_BIN="$FAKEBIN/agent-secure"
 
+section "ws verify: operator-owned execution contract"
+mkdir -p "$WS/.local/agent/contracts"
+cat > "$WS/.local/agent/contracts/api.json" <<'JSON'
+{
+  "schema_version": 1,
+  "name": "synthetic verification",
+  "commands": [
+    {"id": "repository-readable", "command": "git status --porcelain", "timeout_seconds": 10},
+    {"id": "optional-check", "command": "exit 9", "required": false, "timeout_seconds": 10}
+  ]
+}
+JSON
+check "ws verify passes required commands" ws verify api --json
+OUT="$(ws verify api --json)"
+printf '%s' "$OUT" | grep -q '"status": "pass"' \
+  && ok "verification report has a pass status" \
+  || bad "verification report has a pass status" "$OUT"
+printf '%s' "$OUT" | grep -q 'repository-readable' \
+  && ok "verification report names command ids" \
+  || bad "verification report names command ids" "$OUT"
+RUN_OUT="$(ws run api "synthetic verification evidence")"
+RUN_ID="$(printf '%s\n' "$RUN_OUT" | grep '^context/runs/api/' | cut -d/ -f4)"
+check "ws verify writes evidence into the private run" ws verify api --run "$RUN_ID"
+exists "$WS/context/runs/api/$RUN_ID/evidence.json" "private evidence file exists"
+contains "$WS/context/runs/api/$RUN_ID/evidence.json" '"status": "pass"' "evidence records the result"
+cat > "$WS/.local/agent/contracts/failing.json" <<'JSON'
+{
+  "schema_version": 1,
+  "name": "synthetic failing verification",
+  "commands": [{"id": "expected-failure", "command": "exit 7"}]
+}
+JSON
+check_fails "ws verify returns non-zero for required findings" \
+  ws verify api --contract "$WS/.local/agent/contracts/failing.json"
+printf '{"schema_version":1,"commands":[]}' > "$PROD/inside-contract.json"
+check_fails "ws verify rejects a product-owned contract" \
+  ws verify api --contract "$PROD/inside-contract.json"
+rm -f "$PROD/inside-contract.json"
+
+section "ws policy: risk-based autonomy"
+mkdir -p "$WS/.local/agent/policies"
+cat > "$WS/.local/agent/policies/api.json" <<'JSON'
+{
+  "schema_version": 1,
+  "name": "synthetic autonomy policy",
+  "default": "approval-required",
+  "actions": {
+    "inspect": "read",
+    "edit": "change",
+    "deploy": "approval-required"
+  }
+}
+JSON
+check "ws policy allows read actions" ws policy check api --action inspect --json
+check "ws policy allows change actions" ws policy check api --action edit
+check_fails "ws policy blocks approval-required actions" ws policy check api --action deploy
+POLICY_OUT="$(ws policy check api --action deploy 2>&1 || true)"
+printf '%s' "$POLICY_OUT" | grep -q '"decision": "approval-required"' \
+  && ok "policy reports approval-required explicitly" \
+  || bad "policy reports approval-required explicitly" "$POLICY_OUT"
+check_fails "ws policy defaults unknown actions to approval" ws policy check api --action unknown
+printf '{"schema_version":1,"default":"read","actions":{"deploy":"read"}}' > "$PROD/inside-policy.json"
+check_fails "ws policy rejects a product-owned policy" \
+  ws policy check api --action deploy --policy "$PROD/inside-policy.json"
+rm -f "$PROD/inside-policy.json"
+
+section "ws eval: synthetic scenario comparison"
+cat > "$WS/.local/eval-scenarios.json" <<'JSON'
+{
+  "schema_version": 1,
+  "name": "synthetic evaluation",
+  "scenarios": [
+    {
+      "id": "routing",
+      "request": "Explain the entry points of a small synthetic application.",
+      "fixture": {"files": ["README.md", "src/main.py"]},
+      "expected": {
+        "skills": ["codebase-onboarding"],
+        "actions": ["inspect"],
+        "artifacts": ["onboarding-map"]
+      }
+    }
+  ]
+}
+JSON
+check "ws eval validates synthetic scenarios" ws eval validate "$WS/.local/eval-scenarios.json"
+cat > "$WS/.local/eval-observed.json" <<'JSON'
+{
+  "routing": {
+    "skills": ["codebase-onboarding"],
+    "actions": ["inspect"],
+    "artifacts": ["onboarding-map"]
+  }
+}
+JSON
+check "ws eval compares recorded outcomes" ws eval compare "$WS/.local/eval-scenarios.json" --observed "$WS/.local/eval-observed.json"
+cat > "$WS/.local/eval-incomplete.json" <<'JSON'
+{}
+JSON
+check_fails "ws eval reports missing observations" \
+  ws eval compare "$WS/.local/eval-scenarios.json" --observed "$WS/.local/eval-incomplete.json"
+cat > "$WS/.local/eval-findings.json" <<'JSON'
+{"routing":{"skills":[],"actions":["inspect"],"artifacts":[]}}
+JSON
+check_fails "ws eval reports missing expected outcomes" \
+  ws eval compare "$WS/.local/eval-scenarios.json" --observed "$WS/.local/eval-findings.json"
+check_fails "ws eval rejects product-owned scenario input" \
+  ws eval validate "$PROD/inside-scenarios.json"
+
+section "ws compat: pinned release metadata"
+cat > "$WS/.local/compatibility.json" <<'JSON'
+{
+  "schema_version": 1,
+  "release_channel": "stable",
+  "required_checks": ["tests", "security", "compatibility"],
+  "components": [
+    {
+      "id": "synthetic-runtime",
+      "source": "https://example.invalid/synthetic-runtime.git",
+      "version": "v1.2.3",
+      "commit": "0123456789abcdef0123456789abcdef01234567",
+      "interface": "contract-v1"
+    }
+  ]
+}
+JSON
+check "ws compat validates pinned metadata" ws compat validate "$WS/.local/compatibility.json"
+cat > "$WS/.local/compat-observed.json" <<'JSON'
+{
+  "synthetic-runtime": {
+    "version": "v1.2.3",
+    "commit": "0123456789abcdef0123456789abcdef01234567",
+    "interface": "contract-v1"
+  }
+}
+JSON
+check "ws compat compares matching observations" \
+  ws compat compare "$WS/.local/compatibility.json" --observed "$WS/.local/compat-observed.json"
+cat > "$WS/.local/compat-drift.json" <<'JSON'
+{
+  "synthetic-runtime": {
+    "version": "v1.2.4",
+    "commit": "0123456789abcdef0123456789abcdef01234567",
+    "interface": "contract-v1"
+  }
+}
+JSON
+check_fails "ws compat reports version drift" \
+  ws compat compare "$WS/.local/compatibility.json" --observed "$WS/.local/compat-drift.json"
+cat > "$WS/.local/compat-floating.json" <<'JSON'
+{
+  "schema_version": 1,
+  "components": [{"id":"floating","source":"https://example.invalid/repo.git","version":"main","commit":"short","interface":"v1"}]
+}
+JSON
+check_fails "ws compat rejects floating or short pins" ws compat validate "$WS/.local/compat-floating.json"
+check_fails "ws compat rejects product-owned manifests" \
+  ws compat validate "$PROD/inside-compatibility.json"
+
 # The hook is the second line of defence: exclude keeps them out of sight,
 # the hook stops `git add -f`.
 git -C "$PROD" add -f AGENTS.md .workspace >/dev/null 2>&1
@@ -507,6 +666,117 @@ printf '%s' "$OUT" | grep -q "$DAY" && \
       && ok "two overlapping 1h sessions count as 1.5h, not 2h" \
       || bad "two overlapping 1h sessions count as 1.5h, not 2h" "$(printf '%s' "$OUT" | grep "$DAY")"; } \
   || bad "the overlapping day appears in the report"
+
+section "abandoned clocks"
+# A session killed by a quota limit, a crash, or a closed terminal never clocks
+# out. Closing that clock with `now` would bill every hour since - and because
+# hours merges overlaps within a column, one such interval swallows every real
+# session that month. So recovery is evidence-bound, and says that it is.
+OPEN="$WS/context/works/.open-agent-tester-testagent-default.json"
+
+# Backdate an open clock by N seconds. The mtime moves with the start unless a
+# second argument says otherwise, because sed rewrites the file and would
+# otherwise leave a fresh mtime - i.e. evidence of activity that never happened.
+backdate_open() {
+  local f="$1" back="$2" beat="${3:-start}"
+  local ts; ts=$(sed -n 's/.*"start_ts":\([0-9]*\).*/\1/p' "$f")
+  sed -i.bak "s/\"start_ts\":$ts/\"start_ts\":$((ts-back))/" "$f" && rm -f "$f.bak"
+  [ "$beat" = start ] && python3 -c "import os,sys; t=int(sys.argv[2]); os.utime(sys.argv[1],(t,t))" \
+    "$f" "$((ts-back))"
+  return 0
+}
+
+check "agent clock in for the abandon case" ws agent in api "will be abandoned"
+exists "$OPEN" "the open clock file exists"
+# Backdate the start well past the 8h cap, with no later evidence of activity.
+backdate_open "$OPEN" 500000
+
+OUT="$(ws doctor 2>&1)"
+printf '%s' "$OUT" | grep -q 'abandoned clock' \
+  && ok "doctor names an abandoned clock instead of counting it as open" \
+  || bad "doctor names an abandoned clock instead of counting it as open" "$OUT"
+
+OUT="$(ws agent recover --dry-run 2>&1)"
+printf '%s' "$OUT" | grep -q 'would recover' && ok "recover --dry-run reports the clock" \
+  || bad "recover --dry-run reports the clock" "$OUT"
+exists "$OPEN" "recover --dry-run writes nothing"
+
+OUT="$(ws agent recover 2>&1)"
+not_exists "$OPEN" "recover closes the clock"
+M="$(date +%Y-%m)"
+contains "$WS/context/works/agent/api/$M.jsonl" '"recovered":true' \
+  "the recovered session is marked as an estimate"
+# The start is 139h back and nothing touched the file, so the only honest end is
+# the start itself - never `now`, and never the 8h cap either.
+contains "$WS/context/works/agent/api/$M.jsonl" '"recovered_basis":"start"' \
+  "with no later evidence the end falls back to the start"
+RECOVERED="$(grep -c '"recovered":true' "$WS/context/works/agent/api/$M.jsonl")"
+[ "$RECOVERED" = 1 ] && ok "a 139h abandoned clock with no evidence writes one record" \
+  || bad "a 139h abandoned clock with no evidence writes one record" "got $RECOVERED"
+MINUTES="$(grep '"recovered":true' "$WS/context/works/agent/api/$M.jsonl" | sed -n 's/.*"minutes":\([0-9]*\).*/\1/p')"
+[ "$MINUTES" = 0 ] && ok "no evidence means no hours invented" \
+  || bad "no evidence means no hours invented" "got $MINUTES minutes"
+
+# The other path: the session did keep touching the workspace, but for far longer
+# than the cap. The cap is what stops a clock left from Monday billing to Friday.
+check "clock in for the cap case" ws agent in api "ran long, died late"
+backdate_open "$OPEN" 500000 now
+check "recover closes the long-running clock" ws agent recover
+contains "$WS/context/works/agent/api/$M.jsonl" '"recovered_basis":"cap"' \
+  "a late heartbeat past the cap is recorded as capped"
+CAPPED="$(grep '"recovered_basis":"cap"' "$WS/context/works/agent/api/$M.jsonl" \
+          | sed -n 's/.*"minutes":\([0-9]*\).*/\1/p' | awk '{s+=$1} END{print s}')"
+# 478-480, not exactly 480: minutes are floored per day segment, so a window
+# that crosses midnight loses up to a minute to rounding.
+[ "$CAPPED" -ge 478 ] && [ "$CAPPED" -le 480 ] \
+  && ok "139h of wall clock is recorded as the 8h cap, not 139h" \
+  || bad "139h of wall clock is recorded as the 8h cap, not 139h" "got $CAPPED minutes"
+
+check "recover is a no-op when nothing is open" ws agent recover
+OUT="$(ws agent recover 2>&1)"; printf '%s' "$OUT" | grep -q 'no open agent clock' \
+  && ok "recover says so plainly when there is nothing to do" \
+  || bad "recover says so plainly when there is nothing to do" "$OUT"
+
+# A clock inside the cap is a session that may still be running. Recovery must
+# leave it alone unless asked, and a second clock-in must still be refused.
+check "agent clock in, still fresh" ws agent in api "running now"
+check_fails "a second clock-in is still refused while the clock is fresh" ws agent in api "again"
+OUT="$(ws agent recover 2>&1)"
+printf '%s' "$OUT" | grep -q 'under the' && ok "recover skips a clock inside the cap" \
+  || bad "recover skips a clock inside the cap" "$OUT"
+exists "$OPEN" "a fresh clock survives recover"
+check "--all recovers a fresh clock when explicitly asked" ws agent recover --all
+not_exists "$OPEN" "--all closed it"
+
+# The failure that started all this: an agent could not clock in at all, because
+# a clock its dead predecessor left behind refused every new session.
+check "clock in, to be abandoned again" ws agent in api "abandoned again"
+backdate_open "$OPEN" 500000
+OUT="$(ws agent in api "the next session" 2>&1)"
+printf '%s' "$OUT" | grep -q 'treating it as abandoned' \
+  && ok "clock-in recovers an abandoned clock instead of refusing" \
+  || bad "clock-in recovers an abandoned clock instead of refusing" "$OUT"
+contains "$OPEN" '"note":"the next session"' "the new session is the one now open"
+
+OUT="$(ws hours --project api 2>&1)"
+printf '%s' "$OUT" | grep -q 'Estimated, not measured' \
+  && ok "ws hours flags that recovered time is an estimate" \
+  || bad "ws hours flags that recovered time is an estimate" "$OUT"
+check "clock out after the recovery" ws agent out
+
+# --end states a real end the person knows; it must still be bounded by the start
+# and by now, or recovery becomes a way to write any number into the record.
+check "clock in for the --end case" ws agent in api "ended at a known time"
+TS=$(sed -n 's/.*"start_ts":\([0-9]*\).*/\1/p' "$OPEN")
+backdate_open "$OPEN" 500000
+check_fails "--end in the future is refused" ws agent recover --end "2999-01-01T00:00:00+00:00"
+check_fails "--end before the session start is refused" ws agent recover --end "1999-01-01T00:00:00+00:00"
+check_fails "--end cannot be combined with --all" ws agent recover --all --end "2020-01-01T00:00:00+00:00"
+exists "$OPEN" "a refused --end leaves the clock open"
+END=$(date -u -r $((TS-400000)) +%Y-%m-%dT%H:%M:%S+00:00 2>/dev/null \
+      || date -u -d @$((TS-400000)) +%Y-%m-%dT%H:%M:%S+00:00)
+check "recover accepts a stated end inside the session" ws agent recover --end "$END"
+not_exists "$OPEN" "the stated end closed the clock"
 
 section "hooks and automatic agent clocking"
 # A hook runs unattended inside someone's editor session: it must never fail, and
@@ -810,6 +1080,17 @@ ws client new acme2 >/dev/null 2>&1
 check_fails "a client name inside .agents/ is caught too" ws doctor --ci
 git -C "$WS" checkout -- .agents/standards/core/git-workflow.md 2>/dev/null || true
 rm -f "$WS/context/public-identifiers"
+
+section "public CI governance stays deterministic"
+GOVERNANCE="$SRC/.github/workflows/agentic-governance.yml"
+exists "$GOVERNANCE" "agentic governance workflow exists"
+contains "$GOVERNANCE" 'permissions:' "governance workflow declares permissions"
+contains "$GOVERNANCE" 'contents: read' "governance workflow is read-only"
+contains "$GOVERNANCE" 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' \
+  "governance checkout is pinned"
+contains "$GOVERNANCE" 'ws_eval.py validate' "governance validates evaluation template"
+contains "$GOVERNANCE" 'ws_compat.py validate' "governance validates compatibility template"
+lacks "$GOVERNANCE" 'git clone' "governance does not clone private repositories"
 
 # ═════════════════════════════════════════════════════════════════════════════
 printf '\n'

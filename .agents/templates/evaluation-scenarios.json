@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "name": "synthetic agent evaluation",
+  "scenarios": [
+    {
+      "id": "example-routing",
+      "request": "Explain the entry points of a small synthetic application.",
+      "fixture": {"files": ["README.md", "src/main.py"]},
+      "expected": {
+        "skills": ["codebase-onboarding"],
+        "actions": ["inspect"],
+        "artifacts": ["onboarding-map"]
+      }
+    }
+  ]
+}

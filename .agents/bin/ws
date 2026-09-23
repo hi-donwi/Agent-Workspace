@@ -52,6 +52,9 @@ RUNS="$CONTEXT_DIR/runs"
 CONTEXT_SKILLS="$CONTEXT_DIR/skills"
 CLIENTS_DIR="$CONTEXT_DIR/clients"
 WORKS="$CONTEXT_DIR/works"
+# An agent clock open longer than this is abandoned, not running: the session
+# ended without `ws agent out`. See clock_recover_one.
+MAX_AGENT_HOURS="$(conf_get max_agent_session_hours 8)"
 MANIFEST="$ROOT/.agents/skills.manifest"
 LOCK="$ROOT/.agents/skills.lock"
 SKILL_CACHE="$ROOT/.agents/.cache/skills"
@@ -1373,6 +1376,48 @@ open_file() {
   printf '%s/.open-%s-%s.json' "$WORKS" "$1" "$suffix"
 }
 
+# The only evidence of when an abandoned session actually stopped. Every ws
+# invocation touches the open clock for its own tuple, so the mtime tracks the
+# session's last sign of life. A touch, not a rewrite: no lock, no contention
+# with the other agents sharing this works directory.
+clock_heartbeat() {
+  [ -d "$WORKS" ] || return 0
+  local kind of
+  for kind in human agent; do
+    of="$(open_file "$kind" 2>/dev/null)" || continue
+    [ -f "$of" ] && touch "$of" 2>/dev/null
+  done
+  return 0
+}
+
+open_age_hours() {
+  local start; start="$(sed -n 's/.*"start_ts":\([0-9]*\).*/\1/p' "$1")"
+  [ -n "$start" ] || { printf '0'; return 0; }
+  awk -v s="$start" -v n="$(now_ts)" 'BEGIN{printf "%.2f", (n-s)/3600}'
+}
+
+open_is_stale() {
+  awk -v a="$(open_age_hours "$1")" -v m="$MAX_AGENT_HOURS" 'BEGIN{exit !(a>m)}'
+}
+
+# Closes one abandoned clock. The end time is evidence-bound, never `now` - see
+# the docstring on clock_recover in ws_state.py for why that distinction matters.
+clock_recover_one() {
+  local of="$1" end="${2:-}" note="${3:-recovered: session ended without clocking out}"
+  # One invocation, two streams: months on stdout to drive the rollup, the
+  # "<project> <basis> <minutes>" detail on stderr for the caller to report.
+  local tmp; tmp="$(mktemp)"
+  local months month
+  if months="$(python3 "$ROOT/.agents/bin/ws_state.py" clock-recover \
+                 "$of" "$MAX_AGENT_HOURS" "$end" "$note" 2>"$tmp")"; then
+    for month in $months; do works_rollup "$month"; done
+    cat "$tmp"; rm -f "$tmp"
+    return 0
+  fi
+  cat "$tmp" >&2; rm -f "$tmp"
+  return 1
+}
+
 # kind = human | agent
 clock_in() {
   local kind="$1" key="${2:-}"; shift 2 || true
@@ -1382,9 +1427,18 @@ clock_in() {
   mkdir -p "$WORKS"
   local of; of="$(open_file "$kind")"
   if [ -f "$of" ]; then
-    c_ylw "! already clocked in on $(sed -n 's/.*"project":"\([^"]*\)".*/\1/p' "$of") since $(sed -n 's/.*"start":"\([^"]*\)".*/\1/p' "$of")"
-    c_dim "  close it first: ws ${kind/human/clock} out"
-    return 1
+    # A clock older than the cap is not a session running in parallel - it is one
+    # that died without clocking out, and refusing here is how a quota-killed
+    # agent ends up recording nothing at all for days. Close it and carry on.
+    if open_is_stale "$of"; then
+      c_ylw "! a clock has been open on $(sed -n 's/.*"project":"\([^"]*\)".*/\1/p' "$of") for $(open_age_hours "$of")h - treating it as abandoned"
+      clock_recover_one "$of" "" "recovered: no clock-out before ws $kind in" \
+        | while read -r p b m; do c_dim "  recovered $p: ${m}min, end from $b"; done
+    else
+      c_ylw "! already clocked in on $(sed -n 's/.*"project":"\([^"]*\)".*/\1/p' "$of") since $(sed -n 's/.*"start":"\([^"]*\)".*/\1/p' "$of")"
+      c_dim "  close it first: ws ${kind/human/clock} out"
+      return 1
+    fi
   fi
   validate_key "$key"
   python3 "$ROOT/.agents/bin/ws_state.py" clock-in "$of" "$key" "$(human_id)" "$(agent_id)" "$note"
@@ -1490,12 +1544,53 @@ clock_status() {
   return 0
 }
 
+# Lists or closes every clock left open past the cap, across all sessions - not
+# just this one's tuple, because the sessions that need this are the ones that
+# are gone.
+clock_recover() {
+  local kind="$1"; shift || true
+  local dry=0 all=0 end="" note=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run) dry=1; shift ;;
+      --all) all=1; shift ;;
+      --end) end="${2:?--end needs an ISO timestamp}"; shift 2 ;;
+      --note) note="${2:?--note needs a value}"; shift 2 ;;
+      *) die "usage: ws ${kind/human/clock} recover [--all] [--dry-run] [--end <iso>] [--note <text>]" ;;
+    esac
+  done
+  [ -d "$WORKS" ] && [ -n "$(ls -A "$WORKS"/.open-"$kind"-*.json 2>/dev/null)" ] \
+    || { c_dim "no open $kind clock"; return 0; }
+  [ -n "$end" ] && [ "$all" = 1 ] && die "--end states one session's true end; it cannot apply to --all"
+
+  local f n=0
+  for f in "$WORKS"/.open-"$kind"-*.json; do
+    [ -f "$f" ] || continue
+    local age; age="$(open_age_hours "$f")"
+    if [ "$all" = 0 ] && ! open_is_stale "$f"; then
+      c_dim "  skip $(basename "$f") - open ${age}h, under the ${MAX_AGENT_HOURS}h cap"
+      continue
+    fi
+    n=$((n+1))
+    if [ "$dry" = 1 ]; then
+      c_ylw "  would recover $(basename "$f") - open ${age}h on $(sed -n 's/.*"project":"\([^"]*\)".*/\1/p' "$f")"
+      continue
+    fi
+    clock_recover_one "$f" "$end" "${note:-recovered: session ended without clocking out}" \
+      | while read -r proj basis mins; do c_grn "-> recovered $proj: ${mins}min, end from $basis"; done
+  done
+  [ "$n" = 0 ] && c_dim "nothing past the ${MAX_AGENT_HOURS}h cap"
+  [ "$dry" = 1 ] && c_dim "dry run - nothing was written"
+  return 0
+}
+
 cmd_clock() {
   case "${1:-status}" in
     in)  shift; clock_in human "$@" ;;
     out) shift; clock_out human "$@" ;;
+    recover) shift; clock_recover human "$@" ;;
     status) clock_status ;;
-    *) die "usage: ws clock [in <project-key> [note] | out [note] | status]" ;;
+    *) die "usage: ws clock [in <project-key> [note] | out [note] | recover [--all] [--dry-run] [--end <iso>] | status]" ;;
   esac
 }
 
@@ -1503,11 +1598,12 @@ cmd_agent() {
   case "${1:-status}" in
     in)  shift; clock_in agent "$@" ;;
     out) shift; clock_out agent "$@" ;;
+    recover) shift; clock_recover agent "$@" ;;
     start) shift; agent_start "$@" ;;
     stop) shift; agent_stop "$@" ;;
     status) clock_status ;;
     auto) shift; agent_auto "${1:-}" ;;
-    *) die "usage: ws agent [in <key> [note] | start <key> [note] | stop [note] | out [note] | status | auto in|out]" ;;
+    *) die "usage: ws agent [in <key> [note] | start <key> [note] | stop [note] | out [note] | recover [--all] [--dry-run] [--end <iso>] | status | auto in|out]" ;;
   esac
 }
 
@@ -1861,6 +1957,13 @@ cmd_hours() {
     "$(printf '%s\n' "$h" | awk '$1=="TOTAL"{print $2; f=1} END{if(!f)print "0.00"}')" \
     "$(printf '%s\n' "$a" | awk '$1=="TOTAL"{print $2; f=1} END{if(!f)print "0.00"}')"
   echo
+  local hr ar
+  hr="$(printf '%s\n' "$h" | awk '$1=="TOTAL"{print $3; f=1} END{if(!f)print "0.00"}')"
+  ar="$(printf '%s\n' "$a" | awk '$1=="TOTAL"{print $3; f=1} END{if(!f)print "0.00"}')"
+  if [ "$hr" != "0.00" ] || [ "$ar" != "0.00" ]; then
+    c_ylw "Estimated, not measured: ${hr}h human / ${ar}h agent came from recovered clocks."
+    echo
+  fi
   c_dim "Net hours: overlapping sessions merged within each column."
   c_dim "The two columns are deliberately not summed - see 'Two clocks' in AGENTS.md."
 }
@@ -2381,7 +2484,20 @@ PY
     am="$(count_files "$WORKS/agent" -name '*.jsonl')"
     c_grn "ok human and agent hours recorded separately ($hm / $am month files)"
     local open; open="$(count_files "$WORKS" -maxdepth 1 -name '.open-*.json')"
-    [ "$open" = 0 ] || c_ylw "  ! $open session still clocked in - close it with: ws clock out / ws agent stop"
+    [ "$open" = 0 ] || c_dim "  $open session currently clocked in"
+    local stale=0 f
+    for f in "$WORKS"/.open-*.json; do
+      [ -f "$f" ] || continue
+      if open_is_stale "$f"; then
+        stale=$((stale+1))
+        c_ylw "  ! open ${MAX_AGENT_HOURS}h+ on $(sed -n 's/.*"project":"\([^"]*\)".*/\1/p' "$f") ($(open_age_hours "$f")h) - $(basename "$f")"
+      fi
+    done
+    if [ "$stale" -gt 0 ]; then
+      c_ylw "  ! $stale abandoned clock(s): a session ended without clocking out"
+      c_dim "    closing these with a plain clock-out would bill every hour since;"
+      c_dim "    recover them instead: ws agent recover --dry-run, then ws agent recover"
+    fi
     local def=0
     local f
     for f in "$WORKS"/.open-agent-*-default.json; do
@@ -2538,6 +2654,238 @@ cmd_scan() {
   "$bin" "$sub" --root "$abs_root" --policy "$abs_policy"
 }
 
+# Execute the operator-owned verification contract for one product repository.
+# Contracts live outside product checkouts because a checkout must not be able to
+# weaken its own gate. Command output is deliberately discarded: evidence records
+# status and metadata, never arbitrary tool output that might contain secrets.
+cmd_verify() {
+  local key="" contract="" run="" json=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --contract)
+        [ -n "${2:-}" ] || die "usage: ws verify <project-key> [--contract <file>] [--run <run-id>] [--json]"
+        contract="$2"; shift 2 ;;
+      --run)
+        [ -n "${2:-}" ] || die "usage: ws verify <project-key> [--contract <file>] [--run <run-id>] [--json]"
+        run="$2"; shift 2 ;;
+      --json) json=1; shift ;;
+      --help|-h) die "usage: ws verify <project-key> [--contract <file>] [--run <run-id>] [--json]" ;;
+      --*) die "usage: ws verify <project-key> [--contract <file>] [--run <run-id>] [--json]" ;;
+      *)
+        [ -z "$key" ] || die "usage: ws verify <project-key> [--contract <file>] [--run <run-id>] [--json]"
+        key="$1"; shift ;;
+    esac
+  done
+  [ -n "$key" ] || die "usage: ws verify <project-key> [--contract <file>] [--run <run-id>] [--json]"
+  validate_key "$key"
+  local row; row="$(reg_get "$key")"
+  [ -n "$row" ] || die "unknown project: $key"
+  local folder; folder="$(printf '%s' "$row" | cut -f4)"
+  local dst; dst="$(repo_path "$folder")"
+  is_repo "$dst" || die "not a product repository: $folder"
+
+  if [ -z "$contract" ]; then
+    contract="$ROOT/.local/agent/contracts/$key.json"
+  fi
+  [ -f "$contract" ] || die "no operator contract at $contract"
+  local abs_contract abs_root
+  abs_contract="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$contract")"
+  abs_root="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$dst")"
+  case "$abs_contract" in
+    "$abs_root"|"$abs_root"/*) die "contract must not live inside the product repository" ;;
+  esac
+
+  local evidence=""
+  if [ -n "$run" ]; then
+    validate_key "$run"
+    [ -d "$RUNS/$key/$run" ] || die "run does not exist in project"
+    evidence="$RUNS/$key/$run/evidence.json"
+  fi
+  local output; output="$(mktemp)"
+  set +e
+  python3 - "$abs_root" "$abs_contract" "$key" "$output" >"$output" <<'PY'
+import json
+import pathlib
+import subprocess
+import sys
+import time
+
+root = pathlib.Path(sys.argv[1])
+contract_path = pathlib.Path(sys.argv[2])
+project = sys.argv[3]
+_output_path = pathlib.Path(sys.argv[4])
+try:
+    contract = json.loads(contract_path.read_text())
+except (OSError, json.JSONDecodeError) as exc:
+    print(json.dumps({"version": 1, "project": project, "status": "incomplete",
+                      "error": "invalid contract"}, sort_keys=True))
+    sys.exit(2)
+
+commands = contract.get("commands") if isinstance(contract, dict) else None
+if not isinstance(contract, dict) or contract.get("schema_version") != 1 \
+        or not isinstance(commands, list) or not commands:
+    print(json.dumps({"version": 1, "project": project, "status": "incomplete",
+                      "error": "contract requires schema_version 1 and commands"}, sort_keys=True))
+    sys.exit(2)
+
+results = []
+incomplete = False
+failed = False
+for index, item in enumerate(commands):
+    if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not item.get("id") \
+            or not isinstance(item.get("command"), str) or not item.get("command"):
+        incomplete = True
+        results.append({"id": f"command-{index + 1}", "status": "invalid"})
+        continue
+    command_id = item["id"]
+    timeout = item.get("timeout_seconds", 300)
+    if not isinstance(timeout, int) or timeout < 1 or timeout > 900:
+        incomplete = True
+        results.append({"id": command_id, "status": "invalid-timeout"})
+        continue
+    required = item.get("required", True) is not False
+    started = time.monotonic()
+    status = "pass"
+    try:
+        completed = subprocess.run(item["command"], cwd=root, shell=True,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   timeout=timeout, check=False)
+        if completed.returncode != 0:
+            status = "failed"
+    except subprocess.TimeoutExpired:
+        status = "timeout"
+    except OSError:
+        status = "unavailable"
+    duration_ms = round((time.monotonic() - started) * 1000)
+    results.append({"id": command_id, "required": required, "status": status,
+                    "duration_ms": duration_ms})
+    if status not in ("pass",) and required:
+        failed = True
+
+report = {"version": 1, "project": project,
+          "contract": contract.get("name", "unnamed"),
+          "status": "incomplete" if incomplete else ("findings" if failed else "pass"),
+          "commands": results}
+print(json.dumps(report, indent=2, sort_keys=True))
+sys.exit(2 if incomplete else (1 if failed else 0))
+PY
+  local status=$?
+  set -e
+  if [ -n "$evidence" ]; then cp "$output" "$evidence"; fi
+  cat "$output"
+  rm -f "$output"
+  return "$status"
+}
+
+# Classify an intended agent action using an operator-owned policy. This is a
+# decision gate, not an approval mechanism: approval-required actions remain
+# blocked until the caller's orchestrator records a separate human approval.
+cmd_policy() {
+  local sub="${1:-}"; [ -n "$sub" ] && shift || true
+  [ "$sub" = "check" ] || die "usage: ws policy check <project-key> --action <action> [--policy <file>] [--json]"
+  local key="" action="" policy=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --action)
+        [ -n "${2:-}" ] || die "usage: ws policy check <project-key> --action <action> [--policy <file>] [--json]"
+        action="$2"; shift 2 ;;
+      --policy)
+        [ -n "${2:-}" ] || die "usage: ws policy check <project-key> --action <action> [--policy <file>] [--json]"
+        policy="$2"; shift 2 ;;
+      --json) shift ;;
+      --help|-h) die "usage: ws policy check <project-key> --action <action> [--policy <file>] [--json]" ;;
+      --*) die "usage: ws policy check <project-key> --action <action> [--policy <file>] [--json]" ;;
+      *)
+        [ -z "$key" ] || die "usage: ws policy check <project-key> --action <action> [--policy <file>] [--json]"
+        key="$1"; shift ;;
+    esac
+  done
+  [ -n "$key" ] && [ -n "$action" ] || die "usage: ws policy check <project-key> --action <action> [--policy <file>] [--json]"
+  validate_key "$key"
+  [[ "$action" =~ ^[a-z0-9][a-z0-9._:-]*$ ]] || die "invalid action: $action"
+  local row; row="$(reg_get "$key")"
+  [ -n "$row" ] || die "unknown project: $key"
+  local folder; folder="$(printf '%s' "$row" | cut -f4)"
+  local dst; dst="$(repo_path "$folder")"
+  is_repo "$dst" || die "not a product repository: $folder"
+  [ -n "$policy" ] || policy="$ROOT/.local/agent/policies/$key.json"
+  [ -f "$policy" ] || die "no operator policy at $policy"
+  local abs_policy abs_root
+  abs_policy="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$policy")"
+  abs_root="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$dst")"
+  case "$abs_policy" in
+    "$abs_root"|"$abs_root"/*) die "policy must not live inside the product repository" ;;
+  esac
+  python3 - "$abs_policy" "$key" "$action" <<'PY'
+import json
+import pathlib
+import sys
+
+path, project, action = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+try:
+    policy = json.loads(path.read_text())
+except (OSError, json.JSONDecodeError):
+    print(json.dumps({"version": 1, "project": project, "action": action,
+                      "decision": "incomplete", "reason": "invalid policy"}, sort_keys=True))
+    sys.exit(2)
+
+levels = {"read", "change", "approval-required"}
+if not isinstance(policy, dict) or policy.get("schema_version") != 1:
+    print(json.dumps({"version": 1, "project": project, "action": action,
+                      "decision": "incomplete", "reason": "unsupported policy schema"}, sort_keys=True))
+    sys.exit(2)
+default = policy.get("default", "approval-required")
+actions = policy.get("actions", {})
+if default not in levels or not isinstance(actions, dict) \
+        or any(not isinstance(value, str) or value not in levels for value in actions.values()):
+    print(json.dumps({"version": 1, "project": project, "action": action,
+                      "decision": "incomplete", "reason": "invalid action levels"}, sort_keys=True))
+    sys.exit(2)
+level = actions.get(action, default)
+decision = "approval-required" if level == "approval-required" else "allow"
+report = {"version": 1, "project": project, "action": action,
+          "level": level, "decision": decision}
+print(json.dumps(report, indent=2, sort_keys=True))
+sys.exit(3 if decision == "approval-required" else 0)
+PY
+}
+
+cmd_eval() {
+  local sub="${1:-}"; shift || true
+  [ "$sub" = "validate" ] || [ "$sub" = "compare" ] \
+    || die "usage: ws eval validate <scenarios.json> | ws eval compare <scenarios.json> --observed <results.json>"
+  local file="${1:-}"; [ -n "$file" ] || die "usage: ws eval $sub <scenarios.json>"
+  local abs; abs="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$file")"
+  case "$abs" in "$ROOT/projects"|"$ROOT/projects"/*) die "evaluation input must not live inside a product repository" ;; esac
+  if [ "$sub" = "validate" ]; then
+    python3 "$ROOT/.agents/bin/ws_eval.py" validate "$abs"
+    return
+  fi
+  [ "${2:-}" = "--observed" ] && [ -n "${3:-}" ] \
+    || die "usage: ws eval compare <scenarios.json> --observed <results.json>"
+  local observed; observed="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$3")"
+  case "$observed" in "$ROOT/projects"|"$ROOT/projects"/*) die "evaluation input must not live inside a product repository" ;; esac
+  python3 "$ROOT/.agents/bin/ws_eval.py" compare "$abs" --observed "$observed"
+}
+
+cmd_compat() {
+  local sub="${1:-}"; shift || true
+  [ "$sub" = "validate" ] || [ "$sub" = "compare" ] \
+    || die "usage: ws compat validate <manifest.json> | ws compat compare <manifest.json> --observed <results.json>"
+  local file="${1:-}"; [ -n "$file" ] || die "usage: ws compat $sub <manifest.json>"
+  local abs; abs="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$file")"
+  case "$abs" in "$ROOT/projects"|"$ROOT/projects"/*) die "compatibility input must not live inside a product repository" ;; esac
+  if [ "$sub" = "validate" ]; then
+    python3 "$ROOT/.agents/bin/ws_compat.py" validate "$abs"
+    return
+  fi
+  [ "${2:-}" = "--observed" ] && [ -n "${3:-}" ] \
+    || die "usage: ws compat compare <manifest.json> --observed <results.json>"
+  local observed; observed="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$3")"
+  case "$observed" in "$ROOT/projects"|"$ROOT/projects"/*) die "compatibility input must not live inside a product repository" ;; esac
+  python3 "$ROOT/.agents/bin/ws_compat.py" compare "$abs" --observed "$observed"
+}
+
 cmd_help() {
   cat <<'H'
 ws — engineering workspace CLI
@@ -2579,6 +2927,14 @@ ws — engineering workspace CLI
   ws where                         print the workspace root from anywhere
   ws doctor [--ci]                 check repo isolation, ignores, toolchain
   ws scan <key> [--doctor] [--policy f]  Agent-Secure gate; policy is operator-owned
+  ws verify <key> [--contract f] [--run id] [--json]
+                                     execute an operator-owned verification contract; output is sanitized
+  ws policy check <key> --action a [--policy f] [--json]
+                                     classify an action; approval-required never auto-allows
+  ws eval validate <file>             validate synthetic scenarios
+  ws eval compare <file> --observed f compare recorded outcomes without invoking a model
+  ws compat validate <file>           validate pinned cross-repository compatibility
+  ws compat compare <file> --observed f compare recorded component versions and commits
   ws help                          this help
 
 Add to PATH (run once, from inside your clone):
@@ -2589,6 +2945,15 @@ H
 
 command -v python3 >/dev/null || die "Python 3 is required (see ADR-0010)"
 CONTEXT_DIR="$(safe_path "$ROOT" "$(conf_get context_dir context)")" || die "unsafe context directory"
+
+# Every command is a sign of life for an open clock, so the mtime tracks the
+# session's last activity and a recovery has something better than the start
+# time to go on. Excluded: the commands that READ that evidence - touching an
+# open file here would overwrite the very mtime `ws agent recover` needs.
+case "${1:-help}" in
+  clock|agent|doctor|hours) ;;
+  *) clock_heartbeat ;;
+esac
 
 case "${1:-help}" in
   init) shift; cmd_init "$@" ;;
@@ -2617,6 +2982,10 @@ case "${1:-help}" in
   hooks) shift; cmd_hooks "$@" ;;
   doctor) shift; cmd_doctor "$@" ;;
   scan) shift; cmd_scan "$@" ;;
+  verify) shift; cmd_verify "$@" ;;
+  policy) shift; cmd_policy "$@" ;;
+  eval) shift; cmd_eval "$@" ;;
+  compat) shift; cmd_compat "$@" ;;
   help|-h|--help) cmd_help ;;
   *) die "unknown command: $1 (try: ws help)" ;;
 esac
