@@ -138,15 +138,18 @@ session_id() {
 # which would otherwise shift every column after a blank one. v1 rows are
 # normalised on the fly (no group/scope/profile), so both shapes can be read
 # everywhere - the on-disk header is the version of record.
+# Always yields 9 columns whatever the file's version, so a v2 registry needs no
+# rewrite before context_repo can be read from it — the column is simply "-".
 reg_rows() {
   [ -f "$REGISTRY" ] || return 0
   local v1="1"
-  if [ "$(head -1 "$REGISTRY")" = "$(printf '%b' "key\tclient\tgroup\tfolder\tremote\tcontext_scope\tsecurity_profile\tdescription")" ]; then
+  local header; header="$(head -1 "$REGISTRY")"
+  if [ "$header" = "$(printf '%b' "$REG_HEADER_V2")" ] || [ "$header" = "$(printf '%b' "$REG_HEADER_V3")" ]; then
     v1=""
   fi
   tail -n +2 "$REGISTRY" | grep -v '^[[:space:]]*$' | awk -F'\t' -v v1="$v1" 'BEGIN{OFS="\t"}
-    { if (v1) { print $1, $2, "-", $3, $4, "client", "-", $5 }
-      else    { for (i = 1; i <= 8; i++) if ($i == "") $i = "-"; NF = 8; print } }'
+    { if (v1) { print $1, $2, "-", $3, $4, "client", "-", $5, "-" }
+      else    { for (i = 1; i <= 9; i++) if ($i == "") $i = "-"; NF = 9; print } }'
 }
 # "-" is the registry's empty marker
 is_empty() { [ -z "${1:-}" ] || [ "${1:-}" = "-" ]; }
@@ -269,6 +272,9 @@ cmd_context() {
     migrate-v2)
       registry_migrate_v2
       ;;
+    migrate-v3)
+      registry_migrate_v3
+      ;;
     status)
       if [ -d "$CONTEXT_DIR/.git" ]; then
         c_grn "context: ${CONTEXT_DIR#$ROOT/} ($(git -C "$CONTEXT_DIR" remote get-url origin 2>/dev/null || echo 'no remote'))"
@@ -278,7 +284,7 @@ cmd_context() {
         c_ylw "no context yet - run: ws context init"
       fi
       ;;
-    *) die "usage: ws context [status|init|clone <r>|sync|split --personal <c>|switch <r> [--force]|pack <project> [--run <id>]]" ;;
+    *) die "usage: ws context [status|init|clone <r>|sync|split --personal <c>|switch <r> [--force]|migrate-v2|migrate-v3|pack <project> [--run <id>]]" ;;
   esac
 }
 
@@ -563,6 +569,28 @@ group_list() {
 # v2: key client group folder remote context_scope security_profile description
 # New columns land last-but-one so the first five keep their positions.
 REG_HEADER_V2="key\tclient\tgroup\tfolder\tremote\tcontext_scope\tsecurity_profile\tdescription"
+# v3 appends context_repo LAST, after description, so key=1 … description=8 keep their
+# columns and every existing positional read stays correct. The value is a
+# workspace-relative folder, like `folder`, or "-" when the project's context lives in
+# the root context repo as usual.
+REG_HEADER_V3="$REG_HEADER_V2\tcontext_repo"
+
+# v2 -> v3. Reading does not need this (reg_rows normalises), but a column nobody can
+# see in the file is a column nobody will set.
+registry_migrate_v3() {
+  [ -f "$REGISTRY" ] || die "no registry.tsv yet - run: ws context init"
+  local header; header="$(head -1 "$REGISTRY")"
+  [ "$header" = "$(printf '%b' "$REG_HEADER_V3")" ] && die "registry is already v3 - nothing to migrate"
+  [ "$header" = "$(printf '%b' "$REG_HEADER_V2")" ] || die "registry is not v2 - run: ws context migrate-v2 first"
+  cp "$REGISTRY" "$REGISTRY.bak-v2"
+  {
+    printf '%b\n' "$REG_HEADER_V3"
+    tail -n +2 "$REGISTRY" | grep -v '^[[:space:]]*$' | awk -F'\t' 'BEGIN{OFS="\t"}
+      { for (i = 1; i <= 8; i++) if ($i == "") $i = "-"; NF = 8; print $0, "-" }'
+  } > "$REGISTRY.tmp" && mv "$REGISTRY.tmp" "$REGISTRY"
+  c_grn "-> registry migrated to v3 (previous file kept at registry.tsv.bak-v2)"
+  c_dim "   context_repo defaults to '-': the project's context is in the root context repo"
+}
 
 registry_migrate_v2() {
   [ -f "$REGISTRY" ] || die "no registry.tsv yet - run: ws context init"
@@ -1741,7 +1769,13 @@ session_bind() {
   fi
   if [ -n "$run" ]; then
     validate_key "$run"
-    [ -d "$RUNS/$key/$run" ] || die "run does not exist in project"
+    # A run lives in the root context as runs/<project>/<run>, or — when the project's
+    # context is a repository of its own — as runs/<run> inside it, where the repo is
+    # the project. context-pack accepts either, so this must too.
+    local external; external="$(printf '%s' "$row" | cut -f9)"
+    if [ -d "$RUNS/$key/$run" ]; then :
+    elif ! is_empty "$external" && [ -d "$ROOT/$external/runs/$run" ]; then :
+    else die "run does not exist in project"; fi
   fi
 
   local dir; dir="$(session_dir)"
