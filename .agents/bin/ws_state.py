@@ -221,17 +221,41 @@ def context_pack(root, context, project, *args):
             # Org-wide material lives in memory/ minus the per-project subtrees.
             selected += ["memory/README.md", "docs/adr/README.md"]
     selected += [f"memory/projects/{project}/{name}.md" for name in ["project", "active", "decisions"]]
+    # A project whose context is a repository of its own: the root context then holds
+    # routing stubs, and packing only those hands the agent seven pointers and an
+    # allowlist forbidding it to follow them. Both are packed — the stub explains the
+    # arrangement, the repo carries the facts.
+    external = (row.get("context_repo") or "-").strip()
+    if external in ("", "-"):
+        external = None
+    else:
+        if Path(external).is_absolute() or ".." in Path(external).parts:
+            raise ValueError("context_repo must be a relative path inside the workspace")
     if args:
         if len(args) != 2 or args[0] != "--run":
             raise ValueError("usage: ws context pack <project> [--run <run-id>]")
         run = key(args[1])
-        directory = contained(context, f"runs/{project}/{run}")
-        if not directory.is_dir():
+        # The run may live in either tree: runs/<project>/<run> in the root context, or
+        # runs/<run> in the project's own context repo, where the repo is the project.
+        here = contained(context, f"runs/{project}/{run}").is_dir()
+        there = external is not None and contained(root, f"{external}/runs/{run}").is_dir()
+        if not (here or there):
             raise ValueError("run does not exist in project")
-        selected += [f"runs/{project}/{run}/{name}.md" for name in ["brief", "plan", "handoff"]]
+        if here:
+            selected += [f"runs/{project}/{run}/{name}.md" for name in ["brief", "plan", "handoff"]]
+    # (base, relative) so each file resolves against the tree that owns it: the context
+    # repo for the root's own material, the workspace root for a project context repo.
+    targets = [(context, relative) for relative in selected]
+    if external:
+        outside = [f"{name}.md" for name in ["project", "active", "decisions", "log"]]
+        outside += [f"client/{name}.md" for name in ["client", "decisions"]]
+        if args:
+            outside += [f"runs/{key(args[1])}/{name}.md" for name in ["brief", "plan", "handoff"]]
+            outside += [f"runs/{key(args[1])}/{name}.md" for name in ["progress", "parity-audit"]]
+        targets += [(root, f"{external}/{name}") for name in outside]
     files, total = [], 0
-    for relative in selected:
-        path = contained(context, relative)
+    for base, relative in targets:
+        path = contained(base, relative)
         if not path.exists():
             continue
         if path.stat().st_size > 32768:
@@ -243,7 +267,7 @@ def context_pack(root, context, project, *args):
         files.append(dict(path=str(path.relative_to(root)), sha256=hashlib.sha256(data).hexdigest(),
                           content=data.decode(), classification="private-context"))
     print(json.dumps(dict(version=1, project=project, client=client, group=group, scope=scope,
-                          files=files,
+                          context_repo=external, files=files,
                           handling="Local/private context only. This pack is not approved for cloud upload or a sandbox boundary."), indent=2))
 
 

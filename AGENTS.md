@@ -268,6 +268,32 @@ from a project-specific one wearing a client's name.
 
 Full treatment: [`docs/context-repository.md`](docs/context-repository.md).
 
+### When one project's context needs a different audience
+
+`clients/<client>/` organises material; it does not bound who may read it. When one
+project's memory must be readable by its delivery team and nothing else may be, that
+project can own its context repository — declared in the registry's `context_repo` column
+(a workspace-relative folder, or `-` for the usual case):
+
+```bash
+ws context migrate-v3     # adds the column; reading works before migrating
+```
+
+`ws context pack` and `ws session bind` then pack **both** trees: the root's client and
+project material, and `<context_repo>/{project,active,decisions,log}.md` plus
+`client/{client,decisions}.md`. A run resolves in either — `runs/<project>/<run>` in the
+root context, `runs/<run>/` inside a project's own repo, where the repo is the project.
+
+Without this, a root context reduced to routing stubs packs seven pointers under a header
+reading "Load only these files", and an agent obeying its allowlist cannot follow them.
+
+**Hours never move.** `works/` stays in the root context whatever the column says: it is
+the invoice basis, and a project context repo may be readable by the client. Choosing
+where that repo is hosted is a separate decision from setting the column — a repo on the
+client's own host has the client's team as readers.
+
+Reasoning: [`docs/adr/0018-a-project-may-own-its-context-repository.md`](docs/adr/0018-a-project-may-own-its-context-repository.md).
+
 ### It must be private
 
 It names clients, records contract scope, and holds the hours behind invoices. Published,

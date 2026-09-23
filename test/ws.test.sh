@@ -695,6 +695,94 @@ printf '%s' "$OUT" | grep -q "$DAY" && \
       || bad "two overlapping 1h sessions count as 1.5h, not 2h" "$(printf '%s' "$OUT" | grep "$DAY")"; } \
   || bad "the overlapping day appears in the report"
 
+section "a project whose context is a repository of its own"
+# When a project's memory lives in its own repo, the root context holds routing stubs.
+# Packing only those hands the agent pointers plus an allowlist forbidding it to follow
+# them, which is the arrangement this column exists to make workable.
+PCTX="$WS/projects/acme/api-context"
+mkdir -p "$PCTX/runs/2026-09-22-own-run" "$PCTX/client"
+printf '# api — project\nPROJECT_CONTEXT_CANARY\n'      > "$PCTX/project.md"
+printf '# api — active\nOWN_REPO_ACTIVE\n'              > "$PCTX/active.md"
+printf '# api — decisions\n'                            > "$PCTX/decisions.md"
+printf '# api — log\n'                                  > "$PCTX/log.md"
+printf '# client\nOWN_REPO_CLIENT\n'                    > "$PCTX/client/client.md"
+printf '# brief\nOWN_RUN_BRIEF\n'                       > "$PCTX/runs/2026-09-22-own-run/brief.md"
+printf '# handoff\n'                                    > "$PCTX/runs/2026-09-22-own-run/handoff.md"
+
+# reg_rows normalises a v2 file to nine columns, so the column is readable before the
+# file is migrated. Migrating is what makes it editable.
+check "ws context migrate-v3 adds the column" ws context migrate-v3
+contains "$WS/context/registry.tsv" "context_repo" "the header carries context_repo"
+exists "$WS/context/registry.tsv.bak-v2" "the v2 file is kept"
+check_fails "a second migrate-v3 refuses" ws context migrate-v3
+ROWS_AFTER="$(tail -n +2 "$WS/context/registry.tsv" | grep -cv '^[[:space:]]*$')"
+[ "$ROWS_AFTER" -ge 2 ] && ok "migration preserved the rows" \
+  || bad "migration preserved the rows" "got $ROWS_AFTER"
+
+python3 - "$WS/context/registry.tsv" <<'PYEOF'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1]); out = []
+for line in p.read_text().split("\n"):
+    c = line.split("\t")
+    if c[0] == "api" and len(c) == 9:
+        c[8] = "projects/acme/api-context"
+        line = "\t".join(c)
+    out.append(line)
+p.write_text("\n".join(out))
+PYEOF
+
+WS_SESSION_ID=owncx check "bind packs a project with its own context repo" ws session bind api
+contains "$WS/.local/sessions/owncx/pack.json" "OWN_REPO_ACTIVE" \
+  "the pack reaches the project's own repo, not only the root stub"
+contains "$WS/.local/sessions/owncx/pack.json" "OWN_REPO_CLIENT" \
+  "client material inside the project repo is packed too"
+contains "$WS/.local/sessions/owncx/CONTEXT.md" "projects/acme/api-context/active.md" \
+  "CONTEXT.md lists the external path so the allowlist permits it"
+contains "$WS/.local/sessions/owncx/pack.json" '"context_repo": "projects/acme/api-context"' \
+  "the pack records where the context came from"
+
+WS_SESSION_ID=owncx check "a run inside the project's own repo resolves" \
+  ws session bind api --run 2026-09-22-own-run
+contains "$WS/.local/sessions/owncx/pack.json" "OWN_RUN_BRIEF" "the external run is packed"
+WS_SESSION_ID=owncx check_fails "a run in neither tree is still refused" \
+  ws session bind api --run nosuch-run
+
+# A project without the column must behave exactly as before.
+WS_SESSION_ID=nocx check "a project with no context repo packs unchanged" ws session bind otherp
+lacks "$WS/.local/sessions/nocx/pack.json" "OWN_REPO_ACTIVE" \
+  "the other project's pack did not pick up the api context repo"
+contains "$WS/.local/sessions/nocx/pack.json" '"context_repo": null' \
+  "no context repo is recorded as null"
+
+# The column names a path inside the workspace; anything else escapes the boundary.
+python3 - "$WS/context/registry.tsv" <<'PYEOF'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1]); out = []
+for line in p.read_text().split("\n"):
+    c = line.split("\t")
+    if c[0] == "api" and len(c) == 9:
+        c[8] = "../../etc"
+        line = "\t".join(c)
+    out.append(line)
+p.write_text("\n".join(out))
+PYEOF
+WS_SESSION_ID=owncx check_fails "a context_repo escaping the workspace is refused" \
+  ws session bind api
+# Put it back: later sections bind `api` and a poisoned column would fail them for a
+# reason that has nothing to do with what they test.
+python3 - "$WS/context/registry.tsv" <<'PYEOF'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1]); out = []
+for line in p.read_text().split("\n"):
+    c = line.split("\t")
+    if c[0] == "api" and len(c) == 9:
+        c[8] = "-"
+        line = "\t".join(c)
+    out.append(line)
+p.write_text("\n".join(out))
+PYEOF
+WS_SESSION_ID=owncx check "binding works again once the column is cleared" ws session bind api
+
 section "abandoned clocks"
 # A session killed by a quota limit, a crash, or a closed terminal never clocks
 # out. Closing that clock with `now` would bill every hour since - and because
