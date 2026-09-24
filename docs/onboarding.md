@@ -39,7 +39,7 @@ ws web --port 8765
 
 Open the printed URL (it includes `?token=`). Default UI is the UIDL-Runtime companion;
 vanilla HTML is the fallback if that companion's `dist/` is not built. Loopback only — do
-not expose the port. See [AGENTS.md](../AGENTS.md) §2 "Local web control".
+not expose the port. See [workspace layout → Local web control](workspace-layout.md#local-web-control--ws-web).
 
 ---
 
