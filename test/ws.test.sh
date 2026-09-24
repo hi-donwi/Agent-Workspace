@@ -821,6 +821,69 @@ p.write_text("\n".join(out))
 PYEOF
 WS_SESSION_ID=owncx check "binding works again once the column is cleared" ws session bind api
 
+section "one checkout, two keys (a monorepo subproject)"
+# A registry row whose folder sits inside another row's checkout, with the same remote:
+# an API and its mobile app in one repository, registered as two projects. Every
+# command that clones, inits or links into a project's folder must leave this one
+# alone — it is a subdirectory of a tracked tree.
+MONO="$WS/projects/beta/app"
+mkdir -p "$MONO/mobile" && echo 'void main() {}' > "$MONO/mobile/main.dart"
+git -C "$MONO" add -A && git -C "$MONO" commit -qm "add mobile app"
+git -C "$MONO" push -q origin HEAD
+
+check "ws new registers a subproject inside a monorepo" \
+  ws new otherp-mobile projects/beta/app/mobile "$OTHERBARE" --client beta
+not_exists "$MONO/mobile/.git" "no repository is nested inside the parent's tree"
+ROWCOLS="$(grep '^otherp-mobile' "$WS/context/registry.tsv" | awk -F'\t' '{print NF}')"
+[ "$ROWCOLS" = 9 ] && ok "ws new writes nine columns on a v3 registry" \
+  || bad "ws new writes nine columns on a v3 registry" "got $ROWCOLS"
+
+OUT="$(ws doctor 2>&1 || true)"
+printf '%s' "$OUT" | grep -q "otherp-mobile lives inside otherp's repo" \
+  && ok "doctor recognises the subproject" || bad "doctor recognises the subproject" "$OUT"
+printf '%s' "$OUT" | grep -q 'x otherp-mobile' \
+  && bad "doctor does not fail a subproject for having no .git" "$OUT" \
+  || ok "doctor does not fail a subproject for having no .git"
+
+check "ws link on a subproject succeeds without writing" ws link otherp-mobile
+not_exists "$MONO/mobile/AGENTS.md" "no pointer inside a subdirectory of a tracked tree"
+not_exists "$MONO/mobile/.workspace" "nor a breadcrumb"
+equals "$(git -C "$MONO" status --porcelain | wc -l | tr -d ' ')" "0" \
+  "the parent's working tree stays clean"
+
+# The case that actually broke: a fresh machine. The parent's clone creates the
+# subproject's folder, and the old code then tried to clone the whole monorepo into it.
+rm -rf "$MONO"
+check "a fresh bootstrap clones the monorepo once" ws bootstrap --only beta
+exists "$MONO/mobile/main.dart" "the subproject arrived with its parent"
+not_exists "$MONO/mobile/.git" "the monorepo was not cloned into its own subdirectory"
+
+# Hours from inside the subproject belong to it, not to whichever row came first.
+RUNDIR="$MONO/mobile" check "the hook clocks in from inside the subproject" ws agent auto in
+contains "$WS/context/works/.open-agent-tester-testagent-default.json" '"project":"otherp-mobile"' \
+  "the most specific folder wins, so the hours are the subproject's"
+check "and clocks out" ws agent auto out
+
+# The rule is narrow on purpose: a folder inside another project with a DIFFERENT remote
+# is a separate repository and must still be one.
+mkdir -p "$MONO/vendored"
+printf 'otherp-vendored\tbeta\t-\tprojects/beta/app/vendored\thttps://example.invalid/vendored.git\tclient\t-\tvendored\t-\n' \
+  >> "$WS/context/registry.tsv"
+mkdir -p "$WS/context/memory/projects/otherp-vendored"
+OUT="$(ws doctor 2>&1 || true)"
+printf '%s' "$OUT" | grep -q 'x otherp-vendored exists but is not a git repo' \
+  && ok "a nested folder with a different remote must still be its own repo" \
+  || bad "a nested folder with a different remote must still be its own repo" "$OUT"
+
+# Leave the registry as the later sections expect it.
+python3 - "$WS/context/registry.tsv" <<'PYEOF'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1])
+keep = [l for l in p.read_text().split("\n") if not l.startswith(("otherp-mobile\t", "otherp-vendored\t"))]
+p.write_text("\n".join(keep))
+PYEOF
+rm -rf "$MONO/vendored" "$WS/context/memory/projects/otherp-vendored" "$WS/context/memory/projects/otherp-mobile"
+
 section "abandoned clocks"
 # A session killed by a quota limit, a crash, or a closed terminal never clocks
 # out. Closing that clock with `now` would bill every hour since - and because
