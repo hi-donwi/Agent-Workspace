@@ -36,6 +36,10 @@
 
 # --- Agent state that is personal, not team knowledge -------------------------
 .agents/ops/
+# Agent tools' own state at the root: scratch notes that name client paths, and
+# the tools' own worktrees of this repo. Never framework content.
+/.freebuff/
+/.kilo/
 
 # --- OS / editor / runtime ---------------------------------------------------
 .DS_Store

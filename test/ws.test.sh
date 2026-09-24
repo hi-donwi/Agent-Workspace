@@ -58,8 +58,8 @@ export WS_USER=tester WS_AGENT=testagent
 # CODEX_SANDBOX set, WS_AGENT is ignored and every clock file is named after the
 # agent running the suite, so three cases here failed on a developer's machine
 # and passed in CI — the worst way round for a regression test to behave.
-HOST_ENV="WS_SESSION_ID GROK_SESSION_ID GROK_SESSION CLAUDE_SESSION_ID CODEX_THREAD_ID
-          CURSOR_TRACE_ID CLAUDECODE CODEX_SANDBOX"
+HOST_ENV="WS_SESSION_ID GROK_SESSION_ID GROK_SESSION CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID
+          CODEX_THREAD_ID CURSOR_TRACE_ID CLAUDECODE CODEX_SANDBOX GEMINI_CLI"
 unset $HOST_ENV
 export -n $HOST_ENV 2>/dev/null || true
 
@@ -1301,7 +1301,152 @@ printf '# acme2 belongs to a client\n' >> "$WS/.agents/standards/core/git-workfl
 git -C "$WS" add .agents/standards/core/git-workflow.md >/dev/null 2>&1
 ws client new acme2 >/dev/null 2>&1
 check_fails "a client name inside .agents/ is caught too" ws doctor --ci
+# Unstage as well: checkout alone restores the file from the index, which still
+# holds the planted line, and every later commit in this workspace would carry it.
+git -C "$WS" reset -q HEAD -- .agents/standards/core/git-workflow.md 2>/dev/null || true
 git -C "$WS" checkout -- .agents/standards/core/git-workflow.md 2>/dev/null || true
+rm -f "$WS/context/public-identifiers"
+
+section "agent identity and run keys"
+# A tool started from another agent's terminal inherits that agent's markers;
+# only an explicit WS_AGENT says which tool is actually running.
+OUT="$(CLAUDECODE=1 WS_AGENT=kilo ws run api "explicit agent wins" 2>&1)"
+printf '%s' "$OUT" | grep -q -- '-kilo-explicit-agent-wins' \
+  && ok "WS_AGENT wins over an inherited tool marker" \
+  || bad "WS_AGENT wins over an inherited tool marker" "$OUT"
+OUT="$(cd "$WS" && unset WS_AGENT && GEMINI_CLI=1 ./.agents/bin/ws run api "gemini detected" 2>&1)"
+printf '%s' "$OUT" | grep -q -- '-gemini-gemini-detected' \
+  && ok "Gemini CLI is recognised by the variable it documents" \
+  || bad "Gemini CLI is recognised by the variable it documents" "$OUT"
+OUT="$(cd "$WS" && unset WS_AGENT && ./.agents/bin/ws run api "who am i" 2>&1)"
+printf '%s' "$OUT" | grep -q 'WS_AGENT' \
+  && ok "an unidentified agent is told which variable to set" \
+  || bad "an unidentified agent is told which variable to set" "$OUT"
+# Claude Code exports CLAUDE_CODE_SESSION_ID; reading only CLAUDE_SESSION_ID put
+# every Claude session on the shared `default` clock.
+(cd "$WS" && CLAUDE_CODE_SESSION_ID=Code-Session-1 ./.agents/bin/ws session bind api >/dev/null 2>&1)
+exists "$WS/.local/sessions/code-session-1/bind" "Claude Code's own session id names the session"
+(cd "$WS" && CLAUDE_CODE_SESSION_ID=Code-Session-1 ./.agents/bin/ws session clear >/dev/null 2>&1) || true
+# A hand-made memory folder used to be enough for a run under any key.
+mkdir -p "$WS/context/memory/projects/acme"
+check_fails "ws run refuses a client key, even with a memory folder" ws run acme "keyed by client"
+check_fails "ws run refuses a group key" ws run platform "keyed by group"
+not_exists "$WS/context/runs/acme" "no run folder is left under a client key"
+rmdir "$WS/context/memory/projects/acme"
+check "ws run accepts the framework key" ws run workspace "framework work"
+
+section "checkpoint commits only this agent's context work"
+(cd "$WS" && WS_AGENT=otheragent ./.agents/bin/ws run otherp "someone elses run" >/dev/null 2>&1)
+ws run otherp "my own run" >/dev/null 2>&1
+printf 'unrelated\n' > "$WS/context/memory/projects/api/unrelated.md"
+git -C "$WS/context" add memory/projects/api/unrelated.md
+check "ws checkpoint commits the caller's work" ws checkpoint otherp -m "checkpoint test"
+CP="$(git -C "$WS/context" show --name-only --format= HEAD)"
+printf '%s' "$CP" | grep -q -- '-tester-testagent-my-own-run/' \
+  && ok "the checkpoint holds the caller's run" || bad "the checkpoint holds the caller's run" "$CP"
+printf '%s' "$CP" | grep -q -- 'otheragent' \
+  && bad "another agent's run stays out of the checkpoint" "$CP" || ok "another agent's run stays out of the checkpoint"
+printf '%s' "$CP" | grep -q 'unrelated.md' \
+  && bad "another project's staged file stays out" "$CP" || ok "another project's staged file stays out"
+git -C "$WS/context" diff --cached --name-only | grep -q 'unrelated.md' \
+  && ok "and it is still staged afterwards" || bad "and it is still staged afterwards"
+OUT="$(ws checkpoint otherp 2>&1)"
+printf '%s' "$OUT" | grep -q 'nothing changed' \
+  && ok "a checkpoint with nothing new is a no-op" || bad "a checkpoint with nothing new is a no-op" "$OUT"
+git -C "$WS/context" reset -q HEAD memory/projects/api/unrelated.md
+rm -f "$WS/context/memory/projects/api/unrelated.md"
+
+section "hard rules reach every agent"
+# One block, repeated in every tool's entry file: a copy that drifts is a rule
+# some agent never sees. Checked against this repository itself.
+CANON="$(sed -n '/<!-- hard-rules:begin -->/,/<!-- hard-rules:end -->/p' "$SRC/.agents/rules/00-hard-rules.md")"
+for f in AGENTS.md GEMINI.md .github/copilot-instructions.md .cursor/rules/00-workspace.mdc; do
+  [ -n "$CANON" ] && [ "$(sed -n '/<!-- hard-rules:begin -->/,/<!-- hard-rules:end -->/p' "$SRC/$f")" = "$CANON" ] \
+    && ok "hard rules identical in $f" || bad "hard rules identical in $f"
+done
+# Antigravity silently discards an .agents/rules file without a trigger.
+contains "$SRC/.agents/rules/00-hard-rules.md" "trigger: always_on" "the rules file is always on for Antigravity"
+# Antigravity truncates a rule file at 24 KB; stay well under it.
+SIZE="$(wc -c < "$SRC/AGENTS.md" | tr -d ' ')"
+[ "$SIZE" -lt 20000 ] && ok "AGENTS.md fits every tool's rule budget ($SIZE bytes)" \
+  || bad "AGENTS.md fits every tool's rule budget" "$SIZE bytes"
+printf "$ALLOW" > "$WS/context/public-identifiers"
+check "doctor passes with the hard rules in sync" ws doctor --ci
+sed -i.bak 's/This framework repository is public/This framework repository is private/' "$WS/AGENTS.md"
+check_fails "doctor fails when an entry file's hard rules drift" ws doctor --ci
+mv "$WS/AGENTS.md.bak" "$WS/AGENTS.md"
+
+section "framework guard: nothing naming a client leaves the machine"
+printf "$ALLOW" | grep -v '^acme$' > "$WS/context/public-identifiers"
+check "ws guard install" ws guard install
+for h in pre-commit commit-msg pre-push; do
+  contains "$WS/.git/hooks/$h" "ws-framework-guard" "the guard installs $h"
+done
+check "ws guard status reports it installed" ws guard status
+
+printf 'generic text\n' > "$WS/guard-ok.md"; git -C "$WS" add guard-ok.md
+check "a commit naming no client passes" git -C "$WS" commit -qm "docs: generic note"
+printf 'plan for acme\n' > "$WS/guard-bad.md"; git -C "$WS" add guard-bad.md
+check_fails "a commit whose content names a client is refused" git -C "$WS" commit -qm "docs: plan"
+OUT="$(git -C "$WS" commit -qm "docs: plan" 2>&1 || true)"
+printf '%s' "$OUT" | grep -q -- '--no-verify' \
+  && ok "the refusal says not to bypass it" || bad "the refusal says not to bypass it" "$OUT"
+git -C "$WS" rm -q --cached guard-bad.md; rm -f "$WS/guard-bad.md"
+printf 'x\n' > "$WS/acme-notes.md"; git -C "$WS" add acme-notes.md
+check_fails "a file whose name names a client is refused" git -C "$WS" commit -qm "docs: notes"
+git -C "$WS" rm -q --cached acme-notes.md; rm -f "$WS/acme-notes.md"
+printf 'generic\n' > "$WS/guard-two.md"; git -C "$WS" add guard-two.md
+check_fails "a commit message naming a client is refused" git -C "$WS" commit -qm "docs: notes for acme"
+check "the same change with a clean message passes" git -C "$WS" commit -qm "docs: notes"
+
+# The push is the last line: it also catches what --no-verify let through, and
+# history the tip no longer shows.
+PUB="$TMP/public.git"; git init -q --bare "$PUB"; git -C "$WS" remote add pub "$PUB"
+check "a clean push passes" git -C "$WS" push -q pub HEAD:refs/heads/main
+printf 'acme leaked\n' > "$WS/guard-three.md"; git -C "$WS" add guard-three.md
+git -C "$WS" commit -q --no-verify -m "docs: bypassed"
+check_fails "a push carrying a client name is refused, even after --no-verify" \
+  git -C "$WS" push -q pub HEAD:refs/heads/main
+git -C "$WS" rm -q guard-three.md; git -C "$WS" commit -q --no-verify -m "docs: remove it again"
+check_fails "a name added and removed before the push is still refused" \
+  git -C "$WS" push -q pub HEAD:refs/heads/main
+git -C "$WS" reset -q --hard refs/remotes/pub/main
+check_fails "a branch whose name names a client is refused" git -C "$WS" push -q pub HEAD:refs/heads/acme-fix
+
+# A framework worktree has no context/ of its own; the guard borrows the primary's.
+WT="$WS/.local/worktrees/workspace/guard"
+git -C "$WS" worktree add -q -b guard-wt "$WT" HEAD 2>/dev/null
+printf 'acme in a worktree\n' > "$WT/wt-bad.md"; git -C "$WT" add wt-bad.md
+check_fails "the guard in a framework worktree still knows every client" git -C "$WT" commit -qm "docs: wt"
+git -C "$WS" worktree remove --force "$WT"; git -C "$WS" branch -q -D guard-wt
+
+# Doctor reports what the guard cannot see from inside git.
+git -C "$WS" worktree add -q --detach "$WS/.tool-wt" HEAD 2>/dev/null
+mkdir -p "$WS/context/runs/acme/hand-made-run"
+OUT="$(ws doctor 2>&1 || true)"
+printf '%s' "$OUT" | grep -q 'framework guard hooks installed' \
+  && ok "doctor sees the guard installed" || bad "doctor sees the guard installed" "$OUT"
+printf '%s' "$OUT" | grep -q '\.tool-wt' \
+  && ok "doctor names a framework worktree outside .local/worktrees" \
+  || bad "doctor names a framework worktree outside .local/worktrees" "$OUT"
+printf '%s' "$OUT" | grep -q 'other than a project: acme' \
+  && ok "doctor names a run keyed by a client" || bad "doctor names a run keyed by a client" "$OUT"
+printf '%s' "$OUT" | grep -q 'acme/hand-made-run' \
+  && ok "doctor names a run folder not made by ws run" || bad "doctor names a run folder not made by ws run" "$OUT"
+git -C "$WS" worktree remove --force "$WS/.tool-wt"; rm -rf "$WS/context/runs/acme"
+
+# Someone else's hook is never overwritten, and remove takes only ours.
+check "ws guard remove" ws guard remove
+not_exists "$WS/.git/hooks/pre-push" "remove takes the guard hooks out"
+OUT="$(ws doctor 2>&1 || true)"
+printf '%s' "$OUT" | grep -q 'ws guard install' \
+  && ok "doctor names ws guard install when the guard is missing" \
+  || bad "doctor names ws guard install when the guard is missing" "$OUT"
+printf '#!/bin/sh\nexit 0\n' > "$WS/.git/hooks/pre-commit"; chmod +x "$WS/.git/hooks/pre-commit"
+ws guard install >/dev/null 2>&1
+lacks "$WS/.git/hooks/pre-commit" "ws-framework-guard" "a pre-commit hook that is not ours is left untouched"
+rm -f "$WS/.git/hooks/pre-commit"; ws guard remove >/dev/null 2>&1
+git -C "$WS" remote remove pub
 rm -f "$WS/context/public-identifiers"
 
 section "public CI governance stays deterministic"
