@@ -77,6 +77,18 @@ top level works only until a second top-level group enters the registry and one 
 subgroups collides with a name already in use. `/projects/*` ignores the whole tree
 regardless of depth, so nesting further costs nothing.
 
+**One checkout, two keys.** A monorepo holding, say, an API and its mobile app may be
+registered as two projects. The inner row's folder sits inside the outer row's folder
+and names the **same remote**; that is what makes it a subproject rather than a nested
+repository. It has no clone of its own, so `ws bootstrap` skips it (it arrives with its
+parent — cloning the same remote into it would plant the monorepo inside itself),
+`ws link` writes nothing into it (the exclude entries and guard hook are anchored at the
+repo root, where a subdirectory's `AGENTS.md` would slip past both), `ws new` neither
+clones nor inits there, and `ws doctor` checks that the folder really is part of the
+parent's checkout. A folder inside another project with a *different* remote is still
+required to be its own repository. The agent-hours hook resolves the working directory
+to the most specific registered folder, so time spent in the subproject is its own.
+
 **This is not a submodule, and must not become one.** A submodule would force the
 workspace repo to hold a commit pointer into a client-owned repo — extra friction on every
 clone (`git submodule update`) and a blurring of ownership. What this repo tracks instead
