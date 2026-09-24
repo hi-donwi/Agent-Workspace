@@ -154,6 +154,18 @@ to `.workspace-instructions.md` instead. Only generated pointers are excluded an
 the product's own rules remain versionable. Open the optional pointer explicitly when an
 agent does not discover it automatically.
 
+Exactly one generated pointer exists at a time. Which file it is switches when a product
+starts or stops tracking its own `AGENTS.md`, so `ws link` removes the superseded one —
+a pointer left behind keeps its absolute paths forever, and a stale pointer beside a
+correct one is how a reader ends up following the wrong one. A client-owned file is never
+removed; only a file carrying the generated marker is.
+
+When the project has a `context_repo` (see §3), the pointer names **that** repository for
+memory and runs rather than the root context's routing stubs, and `.workspace` records
+`context_repo=` for tools without `ws` on PATH. A column naming a directory that is not
+cloned falls back to the root context and says so, because a pointer to a repository
+nobody has is worse than a pointer to the stub that explains it.
+
 **The generated files are machine-local and hold absolute paths**, so they are regenerated per machine —
 never shared. `ws bootstrap` writes them automatically after each clone, so a teammate on
 a different device gets their own paths without doing anything extra. They are *not* in the
