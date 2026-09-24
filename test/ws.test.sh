@@ -754,6 +754,44 @@ lacks "$WS/.local/sessions/nocx/pack.json" "OWN_REPO_ACTIVE" \
 contains "$WS/.local/sessions/nocx/pack.json" '"context_repo": null' \
   "no context repo is recorded as null"
 
+# ws link must name the same repo the pack does. Pointing a reader at the stubs is
+# how a second, hand-written pointer gets added next to the generated one — which is
+# exactly what happened in this workspace before the column existed.
+check "ws link names the project's own context repo" ws link api
+# Assert against the file ws link actually wrote, not a guess: which of the two it is
+# depends on whether the product tracks its own AGENTS.md at this point in the suite.
+LINKPTR="$PROD/AGENTS.md"; [ -f "$PROD/.workspace-instructions.md" ] && LINKPTR="$PROD/.workspace-instructions.md"
+not_exists "$PROD/$( [ "$LINKPTR" = "$PROD/AGENTS.md" ] && echo .workspace-instructions.md || echo AGENTS.md )" \
+  "only one generated pointer is left on disk"
+contains "$LINKPTR" "projects/acme/api-context/" "the pointer names the external context repo"
+contains "$LINKPTR" "repository of its own" "the pointer says why the root holds stubs"
+contains "$PROD/.workspace" "context_repo=projects/acme/api-context" \
+  "the breadcrumb records it for tools without ws on PATH"
+
+# The cleanup above deletes a file inside a CLIENT repository. The only thing standing
+# between it and a client's own AGENTS.md is owned_pointer, so that guard gets its own
+# check rather than being trusted.
+printf '# Product engineering rules\nCLIENT_OWNED_CANARY\n' > "$PROD/AGENTS.md"
+check "ws link with a product-owned AGENTS.md" ws link api
+exists "$PROD/AGENTS.md" "a client-owned AGENTS.md is never removed by the cleanup"
+contains "$PROD/AGENTS.md" "CLIENT_OWNED_CANARY" "and its contents are untouched"
+exists "$PROD/.workspace-instructions.md" "the generated pointer moved aside instead"
+rm -f "$PROD/AGENTS.md"
+check "ws link again once the product file is gone" ws link api
+not_exists "$PROD/.workspace-instructions.md" "the superseded generated pointer is cleaned up"
+exists "$PROD/AGENTS.md" "and the generated pointer moved back"
+
+# A column naming a directory that is not on disk must degrade, not mislead: a pointer
+# to a repo nobody has cloned is worse than a pointer to the stub that explains it.
+mv "$PCTX" "$TMP/api-context-parked"
+LINKOUT="$(ws link api 2>&1)"
+printf '%s' "$LINKOUT" | grep -q 'not on disk' \
+  && ok "link warns when context_repo is not cloned" \
+  || bad "link warns when context_repo is not cloned" "$LINKOUT"
+contains "$LINKPTR" "context/memory/projects/api/" "it falls back to the root context"
+mv "$TMP/api-context-parked" "$PCTX"
+check "link recovers once the context repo is back" ws link api
+
 # The column names a path inside the workspace; anything else escapes the boundary.
 python3 - "$WS/context/registry.tsv" <<'PYEOF'
 import sys, pathlib

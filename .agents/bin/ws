@@ -837,6 +837,25 @@ cmd_link() {
   local dst; dst="$(repo_path "$folder")"
   is_repo "$dst" || die "$folder is not a git repo - run ws bootstrap first"
 
+  # A project whose context is a repository of its own (ADR-0018) keeps only routing
+  # stubs in the root context. Pointing a reader at the stubs is how a second,
+  # hand-written pointer gets added next to this one, aimed at the real repo.
+  local external; external="$(printf '%s' "$row" | cut -f9)"
+  local memory_row runs_row context_note=""
+  if is_empty "$external" || [ ! -d "$ROOT/$external" ]; then
+    memory_row="\`$MEM/$key/\`"
+    runs_row="\`$RUNS/$key/\`"
+    is_empty "$external" || c_ylw "  ! context_repo '$external' is not on disk - pointing at the root context"
+  else
+    memory_row="\`$ROOT/$external/\` (its own repository)"
+    runs_row="\`$ROOT/$external/runs/\`"
+    context_note="
+This project's context is a **repository of its own**; \`$MEM/$key/\` holds routing
+stubs only. Its remote is separate from this product repo's — check who can read it
+before writing anything there.
+"
+  fi
+
   local pointer="$dst/AGENTS.md"
   [ ! -L "$pointer" ] && [ ! -L "$dst/.workspace" ] || die "refusing a symlink pointer"
   if git -C "$dst" ls-files --error-unmatch AGENTS.md >/dev/null 2>&1 || { [ -e "$pointer" ] && ! owned_pointer "$pointer"; }; then
@@ -863,14 +882,27 @@ stored here; they all live in the engineering workspace that contains this check
 | Agent contract | \`$ROOT/AGENTS.md\` |
 | Engineering standards | \`$ROOT/.agents/standards/\` |
 | Skills | \`$ROOT/.agents/skills/\` and \`$ROOT/context/skills/\` |
-| Memory for this project | \`$MEM/$key/\` |
-| Active runs | \`$RUNS/$key/\` |
-
+| Memory for this project | $memory_row |
+| Active runs | $runs_row |
+$context_note
 **Recommended:** close this folder and open your editor at \`$ROOT\` instead. Standards and
 skills then load automatically while this repo stays isolated in git terms.
 
 Regenerate with: \`ws link $key\`
 PTR
+
+  # Only one generated pointer at a time. Which file it is switches when a product
+  # starts or stops tracking its own AGENTS.md, and the one left behind keeps its
+  # absolute paths and its context_repo forever — a stale second pointer beside a
+  # correct one, which is the failure this whole column exists to stop.
+  local other
+  for other in "$dst/AGENTS.md" "$dst/.workspace-instructions.md"; do
+    [ "$other" = "$pointer" ] && continue
+    [ -f "$other" ] && [ ! -L "$other" ] && owned_pointer "$other" && {
+      rm -f "$other"
+      c_dim "  removed the superseded generated pointer $(basename "$other")"
+    }
+  done
 
   # Exclude each pointer independently. A single combined guard would skip
   # /.workspace in any clone linked before that file existed, leaving it visible
@@ -897,6 +929,7 @@ PTR
 # Local to this machine and NOT committed. Regenerate with: ws link $key
 workspace=$ROOT
 project_key=$key
+context_repo=${external:--}
 generated=$(date +%F)
 MARK
   install_guard_hook "$dst"
