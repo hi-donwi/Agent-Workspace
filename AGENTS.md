@@ -124,6 +124,8 @@ not a hosted product.
   server injects the token into the companion HTML so it redirects to `/?token=...`. The
   token is per-process, loopback-only, and is not written to disk.
 - APIs under `/api/` still require `Authorization: Bearer <token>`.
+- For AI-assisted workspace interaction and LLM chat, use `ws chat` (or `ws web --runtime agent-control`).
+  This runs Agent-Control, connecting multi-provider LLMs to the workspace via `ws` tooling.
 
 ### Open your editor at the workspace root, not at `projects/<x>`
 

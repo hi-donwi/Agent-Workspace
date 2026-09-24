@@ -433,7 +433,104 @@ context_switch() {
   c_dim "  this history will be visible to everyone who can clone that remote"
 }
 
+# ─────────────────────────────────────────────────────────────── chat / agent-control
+# AI-powered workspace assistant and control web UI.
+cmd_chat() {
+  local dev=0 port="" build=0 host="127.0.0.1"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dev) dev=1; shift ;;
+      --build) build=1; shift ;;
+      --port) port="${2:-}"; [ -n "$port" ] || die "--port requires a value"; shift 2 ;;
+      --host) host="${2:-}"; [ -n "$host" ] || die "--host requires a value"; shift 2 ;;
+      --help|-h)
+        cat <<'HELP'
+ws chat — AI-powered workspace assistant and control interface
+
+Usage:
+  ws chat [options]
+
+Options:
+  --dev       run in Vite + Node dev mode with hot module reloading
+  --port N    specify port (default: 3141)
+  --host H    specify host (default: 127.0.0.1)
+  --build     rebuild frontend assets before starting
+HELP
+        return 0
+        ;;
+      *) die "usage: ws chat [--dev] [--port N] [--host H] [--build]" ;;
+    esac
+  done
+
+  local ctrl_dir="${WS_AGENT_CONTROL_DIR:-}"
+  if [ -z "$ctrl_dir" ]; then
+    local rel_folder; rel_folder="$(reg_get "agent-control" 2>/dev/null | cut -f4 || true)"
+    if [ -n "$rel_folder" ] && [ -d "$ROOT/$rel_folder" ]; then
+      ctrl_dir="$ROOT/$rel_folder"
+    elif [ -d "$ROOT/projects/donwi/public/Agent-Control" ]; then
+      ctrl_dir="$ROOT/projects/donwi/public/Agent-Control"
+    fi
+  fi
+
+  [ -n "$ctrl_dir" ] && [ -d "$ctrl_dir" ] || die "agent-control not found. Register it in registry.tsv or set WS_AGENT_CONTROL_DIR"
+
+  command -v node >/dev/null || die "node is required to run agent-control (Node.js >= 22)"
+  command -v npm >/dev/null || die "npm is required to run agent-control"
+
+  if [ ! -d "$ctrl_dir/node_modules" ]; then
+    c_grn "-> installing dependencies in agent-control..."
+    (cd "$ctrl_dir" && npm install) || die "failed to install dependencies"
+  fi
+
+  if [ "$build" = 1 ] || { [ "$dev" = 0 ] && [ ! -f "$ctrl_dir/dist/index.html" ]; }; then
+    c_grn "-> building agent-control assets..."
+    (cd "$ctrl_dir" && npm run build) || die "build failed"
+  fi
+
+  c_grn "-> launching Agent-Control..."
+  export WS_WORKSPACE_ROOT="$ROOT"
+  [ -n "$port" ] && export PORT="$port"
+  [ -n "$host" ] && export HOST="$host"
+
+  if [ "$dev" = 1 ]; then
+    (cd "$ctrl_dir" && npm run dev)
+  else
+    (cd "$ctrl_dir" && npm start)
+  fi
+}
+
 cmd_web() {
+  local delegate=0
+  for arg in "$@"; do
+    case "$arg" in
+      agent-control|--runtime=agent-control|--chat|--ai) delegate=1 ;;
+    esac
+  done
+  if [ "${1:-}" = "--runtime" ] && [ "${2:-}" = "agent-control" ]; then
+    delegate=1
+  fi
+
+  if [ "$delegate" = 1 ]; then
+    local chat_args=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --runtime)
+          shift
+          [ "${1:-}" = "agent-control" ] && shift || true
+          ;;
+        --runtime=agent-control|--chat|--ai)
+          shift
+          ;;
+        *)
+          chat_args+=("$1")
+          shift
+          ;;
+      esac
+    done
+    cmd_chat "${chat_args[@]}"
+    return
+  fi
+
   python3 "$ROOT/.agents/bin/ws_web.py" --root "$ROOT" "$@"
 }
 
@@ -3104,7 +3201,8 @@ ws — engineering workspace CLI
   ws agent stop [note]              clock-out and drop this session's lock
   ws hours [--month M] [--project k|--client c] [--rollup]   report both, side by side
   ws usage [--month M] [--project k|--client c]  token usage, from a separate optional tool
-  ws web [--host 127.0.0.1] [--port 0] [--runtime uidl|vanilla]
+  ws chat [--dev] [--port N]        launch Agent-Control AI assistant
+  ws web [--host 127.0.0.1] [--port 0] [--runtime uidl|vanilla|agent-control]
                                     local web control (UIDL-Runtime by default)
   ws ide                           copy the shared VS Code defaults into this clone
   ws hooks [status|install|remove]  clock agent time automatically in Claude Code
@@ -3158,6 +3256,7 @@ case "${1:-help}" in
   session) shift; cmd_session "$@" ;;
   hours) shift; cmd_hours "$@" ;;
   usage) shift; cmd_usage "$@" ;;
+  chat|ai|control) shift; cmd_chat "$@" ;;
   web) shift; cmd_web "$@" ;;
   log) shift; cmd_log "$@" ;;
   sync) shift; cmd_sync "$@" ;;
