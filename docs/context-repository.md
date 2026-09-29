@@ -220,3 +220,82 @@ ws init && ws context init
 
 The standards and skills arrive; no other organisation's projects, clients, or memory
 come with them.
+
+## One client, several projects: `clients/<client>/`
+
+`registry.tsv` links every project to a client (`key<TAB>client<TAB>folder<TAB>remote<TAB>
+description`). A client may have several projects — a REST API and its later mobile
+companion, say — and `clients/<client-key>/` is where what is true for **all** of them
+lives: `client.md`, cross-project `decisions.md`, their domain skills, their proposals and
+client-specific ADRs.
+
+```bash
+ws client new <key>                       # scaffold clients/<key>/
+ws context migrate-v2                     # one-time: add group/scope/profile columns
+ws group new <key> --client <key>         # a product group inside one client
+ws new <project-key> <folder> --client <key> [--group g] [--scope s] [--profile p]
+ws client list                            # every client and its project keys
+ws tree                                   # client > group > project, from the registry
+ws route "..."                            # also searches clients/*/skills/
+ws hours --client <key>                   # billable hours across all their projects
+```
+
+Project keys stay **flat** — `memory/projects/<key>/`, `runs/<key>/`, `works/*/<key>/` —
+never nested under a client. A key is unique workspace-wide; a project changing client is
+then one row in a registry rather than a move across four directory trees.
+
+**Groups (registry v2).** A *group* is a product group inside one client — several repos,
+one roadmap (an ERP with API, web, and mobile). It is recorded in `context/groups.tsv`
+(`key`, `client`, `description`) and referenced by the registry's `group` column. A group
+belongs to exactly one client forever; `ws new --group` refuses a group owned by another
+client, and `ws doctor` fails on any row that violates this. Group material lives in
+`clients/<client>/groups/<group>/` (`client.md`, `decisions.md`) and is distinct from
+client-wide material.
+
+**Context scope.** The registry's `context_scope` column (`client` default, `group`,
+`org`) bounds what `ws context pack <project>` assembles: `group` packs only the group's
+material, `client` adds the client's own wide docs, `org` adds org-wide ones. It is an
+audience boundary for packs, not a permission system — real access control stays
+server-side on the context repo and remote. `security_profile` is a free-form label (e.g.
+`strict`) that `ws scan` keys on: it loads
+`.local/secure/policies/<profile>.json` (or `default.json` when the column is
+`-`). That file is operator-owned and must not live inside the product repo.
+
+**Every project belongs to a client.** `ws new` refuses to register one without
+`--client`, and `ws doctor` fails on any existing project with no client, or one naming a
+`clients/<key>/` that does not exist. A project with no client is invisible to `ws hours
+--client` and to that client's domain skills — almost always an oversight, not a choice.
+Work with no real client (internal tooling, overhead) still gets one: `ws client new
+internal` costs one command and keeps this rule with no exception to remember.
+
+A decision belongs in `clients/<key>/decisions.md` only once a **second** project confirms
+it is genuinely client-wide — one project alone cannot distinguish a client-wide decision
+from a project-specific one wearing a client's name.
+
+Full treatment: [`docs/context-repository.md`](context-repository.md).
+
+## When one project's context needs a different audience
+
+`clients/<client>/` organises material; it does not bound who may read it. When one
+project's memory must be readable by its delivery team and nothing else may be, that
+project can own its context repository — declared in the registry's `context_repo` column
+(a workspace-relative folder, or `-` for the usual case):
+
+```bash
+ws context migrate-v3     # adds the column; reading works before migrating
+```
+
+`ws context pack` and `ws session bind` then pack **both** trees: the root's client and
+project material, and `<context_repo>/{project,active,decisions,log}.md` plus
+`client/{client,decisions}.md`. A run resolves in either — `runs/<project>/<run>` in the
+root context, `runs/<run>/` inside a project's own repo, where the repo is the project.
+
+Without this, a root context reduced to routing stubs packs seven pointers under a header
+reading "Load only these files", and an agent obeying its allowlist cannot follow them.
+
+**Hours never move.** `works/` stays in the root context whatever the column says: it is
+the invoice basis, and a project context repo may be readable by the client. Choosing
+where that repo is hosted is a separate decision from setting the column — a repo on the
+client's own host has the client's team as readers.
+
+Reasoning: [`docs/adr/0018-a-project-may-own-its-context-repository.md`](adr/0018-a-project-may-own-its-context-repository.md).

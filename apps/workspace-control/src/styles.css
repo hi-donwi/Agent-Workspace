@@ -75,6 +75,8 @@
   .breadcrumb > span { margin: 0 12px; opacity: .6; }
   .breadcrumb strong { color: var(--ink); font-weight: 500; }
   .connection { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
+  .agent-control-link { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 9999px; background: rgba(13, 148, 136, 0.12); color: var(--accent); font-size: 11px; font-weight: 600; text-decoration: none; transition: all 0.15s ease; border: 1px solid rgba(13, 148, 136, 0.25); }
+  .agent-control-link:hover { background: rgba(13, 148, 136, 0.22); border-color: var(--accent); }
   .icon-button { background: transparent; border: 1px solid var(--line); display: grid; place-items: center; border-radius: 7px; color: var(--muted); width: 33px; height: 33px; font-size: 23px; }
   .icon-button:hover { color: var(--ink); background: var(--surface-subtle); }
   .menu-toggle, .menu-scrim { display: none; }

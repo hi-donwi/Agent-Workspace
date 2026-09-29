@@ -96,7 +96,51 @@ export function pageDocument(view: View, data: PageData, projects: Project[], pr
   else if (view === 'runs' && data.runs) children = data.runs.runs.length ? data.runs.runs.map((run, i) => section(`run-${i}`, run.id, [text(`run-${i}-updated`, new Date(run.updated).toLocaleString(), 'muted small'), text(`run-${i}-handoff`, run.handoff || 'No handoff written yet.', 'pre-wrap'), button(`run-${i}-context`, 'Read full handoffs', command('view.open', { view: 'context' }), 'text-button')])) : [empty('runs-empty', 'No runs yet', 'Create a run with ws run to capture the next piece of work.')];
   else if (view === 'context' && data.context) children = data.context.files.length ? data.context.files.map((file, i) => disclosure(`file-${i}`, file.path, file.content)) : [empty('context-empty', 'No context documents', 'Project memory and run handoffs will appear here.')];
   else if (view === 'health' && data.health) children = [box('health-summary', 'health-summary', [badge('health-badge', data.health.ok ? 'Checks passed' : 'Needs attention', data.health.ok ? 'success' : 'warning'), text('health-message', data.health.ok ? 'Your workspace is ready.' : 'Some workspace checks need attention.', '', 2), text('health-description', 'Local registry, context configuration, and project checkout checks.', 'muted')]), section('health-checks', 'Workspace checks', data.health.checks.map(check => box(`check-${check.id}`, 'data-row', [badge(`${check.id}-status`, check.ok ? 'Pass' : 'Check', check.ok ? 'success' : 'warning'), text(`${check.id}-name`, check.id.replaceAll('_', ' ')), text(`${check.id}-detail`, check.detail, 'muted')])))];
-  else if (view === 'settings' && data.settings) children = [section('appearance', 'Appearance', [text('appearance-help', 'Choose Light, Dark, or System in the sidebar. Your choice is saved on this device.', 'muted')]), section('configuration', 'Workspace configuration', [...Object.entries(data.settings.identity).map(([key, value]) => box(`setting-${key}`, 'data-row', [text(`${key}-label`, key.replaceAll('_', ' ')), text(`${key}-value`, value || 'Not configured', 'mono muted')])), box('runtime-setting', 'data-row', [text('runtime-label', 'UI runtime'), text('runtime-value', `${data.settings.runtime} · npm uidl-runtime 0.1.4`, 'mono muted')]), text('settings-help', 'Configuration is read from workspace.conf. Update that file to change workspace settings.', 'muted small')])];
+  else if (view === 'settings' && data.settings) children = [
+    section('appearance', 'Appearance', [text('appearance-help', 'Choose Light, Dark, or System in the sidebar. Your choice is saved on this device.', 'muted')]),
+    section('configuration', 'Workspace configuration', [
+      ...Object.entries(data.settings.identity).map(([key, value]) => box(`setting-${key}`, 'data-row', [text(`${key}-label`, key.replaceAll('_', ' ')), text(`${key}-value`, value || 'Not configured', 'mono muted')])),
+      box('runtime-setting', 'data-row', [text('runtime-label', 'UI runtime'), text('runtime-value', `${data.settings.runtime} · npm uidl-runtime 0.1.4`, 'mono muted')]),
+      text('settings-help', 'Configuration is read from workspace.conf. Update that file to change workspace settings.', 'muted small')
+    ]),
+    section('ecosystem', 'Integrated Developer Tools & AI', [
+      box('tool-agent-control', 'spread data-row', [
+        box('ac-info', 'stack', [
+          text('ac-title', 'Agent-Control (AI Companion)'),
+          text('ac-desc', 'Multi-provider LLM chat with ws bridge and generative UIDL preview', 'muted small'),
+        ]),
+        badge('ac-status', 'Active (ws chat · :3141)', 'success'),
+      ]),
+      box('tool-dbakit', 'spread data-row', [
+        box('db-info', 'stack', [
+          text('db-title', 'DBA-Toolkit (dbakit)'),
+          text('db-desc', 'Non-blocking PostgreSQL health, locks, indexes, and replication probes', 'muted small'),
+        ]),
+        badge('db-status', 'Integrated', 'neutral'),
+      ]),
+      box('tool-opskit', 'spread data-row', [
+        box('ops-info', 'stack', [
+          text('ops-title', 'OPS-Toolkit (opskit)'),
+          text('ops-desc', 'SRE diagnostics for Host, Docker, Swarm, and Kubernetes', 'muted small'),
+        ]),
+        badge('ops-status', 'Integrated', 'neutral'),
+      ]),
+      box('tool-agent-secure', 'spread data-row', [
+        box('sec-info', 'stack', [
+          text('sec-title', 'Agent-Secure (ws scan)'),
+          text('sec-desc', 'Automated security auditor and policy enforcement engine', 'muted small'),
+        ]),
+        badge('sec-status', 'Integrated', 'neutral'),
+      ]),
+      box('tool-agent-skills', 'spread data-row', [
+        box('skills-info', 'stack', [
+          text('skills-title', 'Agent-Skills'),
+          text('skills-desc', '48 authoritative engineering workflow standards & AI skills', 'muted small'),
+        ]),
+        badge('skills-status', '48 Skills Active', 'success'),
+      ]),
+    ]),
+  ];
   if (['board', 'backlog', 'search', 'runs', 'context', 'activity'].includes(view) && !project) children = [empty('choose-project', 'Choose a project', 'Select a project from the sidebar to view its work.')];
   return DocumentSchema.parse({ version: '1.0', id: `workspace-${view}`, name: viewLabels[view], state: { filters: { ...filters }, month, clock: { ...clock } }, root: box('page', 'page-content', children) });
 }
