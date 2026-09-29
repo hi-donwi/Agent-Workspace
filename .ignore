@@ -25,3 +25,25 @@ context/**/.git/
 
 # Client material is never searched, whatever a tool's defaults are.
 .local/
+
+# Agent tools' own state at the root: run metadata, preview logs, worktree
+# metadata. Git already ignores these (see .gitignore); this keeps their logs
+# and scratch files out of the search index too.
+.freebuff/
+.kilo/
+.wrangler/
+
+# The Agent-Workspace mirror under projects/ duplicates this repository's own
+# instruction payload (AGENTS.md, .agents/, docs/, editor rules). Indexing both
+# copies double-counts every instruction file and inflates agent context; keep
+# only the original in the search index. The mirror stays fully readable by
+# explicit path, and its product code under projects/ is untouched.
+projects/donwi/public/Agent-Workspace/AGENTS.md
+projects/donwi/public/Agent-Workspace/CLAUDE.md
+projects/donwi/public/Agent-Workspace/GEMINI.md
+projects/donwi/public/Agent-Workspace/.agents/
+projects/donwi/public/Agent-Workspace/docs/
+projects/donwi/public/Agent-Workspace/.cursor/
+projects/donwi/public/Agent-Workspace/.github/
+projects/donwi/public/Agent-Workspace/.vscode/
+projects/donwi/public/Agent-Workspace/apps/
