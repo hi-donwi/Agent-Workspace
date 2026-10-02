@@ -770,6 +770,19 @@ contains "$WS/.local/sessions/wtbind/bind" "project=api" "agent start bound api"
 WS_SESSION_ID=wtbind check "ws agent stop leaves the bind in place" ws agent stop
 exists "$WS/.local/sessions/wtbind/bind" "bind survives agent stop"
 
+section "workspace-local user preferences reach CONTEXT.md"
+# session_dir() is $ROOT/.local/sessions/<id>: two .parent hops land on $ROOT/.local
+# already, so appending another ".local" looked for $ROOT/.local/.local/rules/ - a path
+# that never exists. The workspace's own preferences file was silently never read.
+mkdir -p "$WS/.local/rules"
+printf 'PREFERS_TABS_CANARY
+' > "$WS/.local/rules/user-preferences.md"
+WS_SESSION_ID=prefs check "bind succeeds with a workspace-local preferences file"   ws session bind api
+contains "$WS/.local/sessions/prefs/CONTEXT.md" "PREFERS_TABS_CANARY"   "the workspace-local preferences file reaches CONTEXT.md"
+rm -rf "$WS/.local/rules"
+WS_SESSION_ID=prefs check "bind still succeeds with neither preferences file"   ws session bind api
+lacks "$WS/.local/sessions/prefs/CONTEXT.md" "## User preferences"   "no preferences section is added when neither file exists"
+
 section "overlap is merged, not summed"
 # Two agent sessions covering the same hour are one hour of elapsed work.
 M="$(date +%Y-%m)"; F="$WS/context/works/agent/overlap/$M.jsonl"; mkdir -p "${F%/*}"
