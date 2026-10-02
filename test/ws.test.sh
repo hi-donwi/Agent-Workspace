@@ -1342,6 +1342,31 @@ not_exists "$WS/context/runs/acme" "no run folder is left under a client key"
 rmdir "$WS/context/memory/projects/acme"
 check "ws run accepts the framework key" ws run workspace "framework work"
 
+section "the framework key binds like a project"
+# Framework work is keyed `workspace` and has no registry row. ws run accepted it, but
+# a bind died with "unknown project" - and ws agent start died with it, after the
+# worktree, lock, and clock already existed.
+printf '# workspace - active\n\nFRAMEWORK_MEMORY_CANARY\n' \
+  > "$WS/context/memory/projects/workspace/active.md"
+WS_SESSION_ID=fwbind check "ws session bind accepts the framework key" ws session bind workspace
+contains "$WS/.local/sessions/fwbind/bind" "project=workspace" "the bind records the framework key"
+contains "$WS/.local/sessions/fwbind/bind" "scope=framework" "the bind scope says framework"
+contains "$WS/.local/sessions/fwbind/pack.json" "FRAMEWORK_MEMORY_CANARY" \
+  "the framework pack holds the framework's own memory"
+lacks "$WS/.local/sessions/fwbind/pack.json" "clients/" "the framework pack holds no client material"
+lacks "$WS/.local/sessions/fwbind/pack.json" "SIBLING_SESSION_CANARY" \
+  "the framework pack holds no project's memory"
+check "ws context pack accepts the framework key" ws context pack workspace
+FW_RUN="$(ls "$WS/context/runs/workspace" | head -1)"
+WS_SESSION_ID=fwbind check "the framework key binds with --run" ws session bind workspace --run "$FW_RUN"
+contains "$WS/.local/sessions/fwbind/pack.json" "runs/workspace/$FW_RUN/brief.md" \
+  "the framework pack includes its run brief"
+WS_SESSION_ID=fwstart check "ws agent start completes for the framework key" \
+  ws agent start workspace "framework"
+exists "$WS/.local/sessions/fwstart/bind" "ws agent start bound the framework key"
+exists "$WS/.local/worktrees/workspace/fwstart/.git" "the framework worktree exists"
+WS_SESSION_ID=fwstart check "ws agent stop closes the framework session" ws agent stop
+
 section "checkpoint commits only this agent's context work"
 (cd "$WS" && WS_AGENT=otheragent ./.agents/bin/ws run otherp "someone elses run" >/dev/null 2>&1)
 ws run otherp "my own run" >/dev/null 2>&1

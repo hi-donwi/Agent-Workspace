@@ -13,6 +13,11 @@ import time
 import uuid
 
 
+# The run key for work on the framework itself, which has no registry row. Matches
+# FRAMEWORK_KEY in ws.
+FRAMEWORK_KEY = "workspace"
+
+
 def key(value):
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", value):
         raise ValueError("invalid key")
@@ -182,12 +187,8 @@ def hours(kind):
     print(f"TOTAL {sum(days.values()) / 3600:.2f} {sum(estimated.values()) / 3600:.2f}")
 
 
-def context_pack(root, context, project, *args):
-    root, context = Path(root).resolve(), Path(context).resolve()
-    key(project)
-    with (context / "registry.tsv").open() as source:
-        rows = list(csv.DictReader(source, delimiter="\t"))
-    matches = [row for row in rows if row["key"] == project]
+def registered_scope(context, matches):
+    """Client, group, scope, client-material files, and external context repo of a registry row."""
     if len(matches) != 1:
         raise ValueError("unknown or duplicate project")
     row = matches[0]
@@ -220,7 +221,6 @@ def context_pack(root, context, project, *args):
         if scope == "org":
             # Org-wide material lives in memory/ minus the per-project subtrees.
             selected += ["memory/README.md", "docs/adr/README.md"]
-    selected += [f"memory/projects/{project}/{name}.md" for name in ["project", "active", "decisions"]]
     # A project whose context is a repository of its own: the root context then holds
     # routing stubs, and packing only those hands the agent seven pointers and an
     # allowlist forbidding it to follow them. Both are packed — the stub explains the
@@ -231,6 +231,22 @@ def context_pack(root, context, project, *args):
     else:
         if Path(external).is_absolute() or ".." in Path(external).parts:
             raise ValueError("context_repo must be a relative path inside the workspace")
+    return client, group, scope, selected, external
+
+
+def context_pack(root, context, project, *args):
+    root, context = Path(root).resolve(), Path(context).resolve()
+    key(project)
+    with (context / "registry.tsv").open() as source:
+        rows = list(csv.DictReader(source, delimiter="\t"))
+    matches = [row for row in rows if row["key"] == project]
+    if not matches and project == FRAMEWORK_KEY:
+        # Framework work has a run key but no registry row and no client. Its pack is the
+        # framework's own memory and run - never any client's material.
+        client, group, scope, selected, external = "-", None, "framework", [], None
+    else:
+        client, group, scope, selected, external = registered_scope(context, matches)
+    selected += [f"memory/projects/{project}/{name}.md" for name in ["project", "active", "decisions"]]
     if args:
         if len(args) != 2 or args[0] != "--run":
             raise ValueError("usage: ws context pack <project> [--run <run-id>]")

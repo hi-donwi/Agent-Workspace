@@ -1941,13 +1941,20 @@ session_bind() {
   [ -n "$key" ] || die "usage: ws session bind <project-key> [--run <run-id>]"
   validate_key "$key"
   local row; row="$(reg_get "$key")"
-  [ -n "$row" ] || die "unknown project"
   local client group scope
-  client="$(printf '%s' "$row" | cut -f2)"
-  group="$(printf '%s' "$row" | cut -f3)"
-  scope="$(printf '%s' "$row" | cut -f6)"
-  validate_key "$client"
-  [ -n "$scope" ] && [ "$scope" != "-" ] || scope="client"
+  if [ -n "$row" ]; then
+    client="$(printf '%s' "$row" | cut -f2)"
+    group="$(printf '%s' "$row" | cut -f3)"
+    scope="$(printf '%s' "$row" | cut -f6)"
+    validate_key "$client"
+    [ -n "$scope" ] && [ "$scope" != "-" ] || scope="client"
+  elif [ "$key" = "$FRAMEWORK_KEY" ]; then
+    # Framework work has a run key but no registry row and no client. Its pack is
+    # the framework's own memory and run - never any client's material.
+    client="-"; group="-"; scope="framework"
+  else
+    die "unknown project"
+  fi
   local session; session="$(session_id)"
   if [ "$session" = "default" ]; then
     c_ylw "! session id is 'default' - export WS_SESSION_ID so parallel agents do not share a bind"
