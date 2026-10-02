@@ -13,6 +13,8 @@ import sys
 ROOT = Path(__file__).resolve().parent.parent.parent
 CONTEXT = ROOT / 'context'
 DRAFTS_DIR = ROOT / '.local' / 'skills-draft'
+USER_SKILLS_DIR = Path.home() / '.gemini' / 'config' / 'skills'
+DOMAIN_SKILLS_DIR = CONTEXT / 'skills'
 AGENT_SKILLS_DIR = ROOT / 'projects' / 'donwi' / 'public' / 'Agent-Skills'
 
 
@@ -135,14 +137,55 @@ def validate_draft(skill_file: Path) -> bool:
     return True
 
 
+def deploy_skill(draft_file: Path, skill_name: str, target: str) -> Path:
+    content = draft_file.read_text(encoding='utf-8')
+
+    if target == 'user':
+        dest_dir = USER_SKILLS_DIR / skill_name
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest_file = dest_dir / 'SKILL.md'
+        dest_file.write_text(content, encoding='utf-8')
+        print(f"\n[INSTALLED] Private user skill deployed to: {dest_file}")
+        print("  - Scope: Private Individual User (machine-local, untracked by Git)")
+        print("  - Active immediately in AI coding agent sessions.")
+        return dest_file
+
+    elif target == 'domain':
+        dest_dir = DOMAIN_SKILLS_DIR / skill_name
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest_file = dest_dir / 'SKILL.md'
+        dest_file.write_text(content, encoding='utf-8')
+        print(f"\n[INSTALLED] Private domain skill deployed to: {dest_file}")
+        print("  - Scope: Private Organization Context (context/ repository)")
+        print("  - Run 'ws skills index' to register in context/skills/index.json.")
+        return dest_file
+
+    return draft_file
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Harvest learnings from a run into a draft skill.")
+    parser = argparse.ArgumentParser(description="Harvest learnings from a run into a private candidate skill.")
     parser.add_argument("project", help="Project key (e.g. workspace, my-service)")
     parser.add_argument("--run", help="Specific run ID (defaults to latest)")
     parser.add_argument("--name", help="Candidate skill slug name")
     parser.add_argument("--pack", default="core", help="Target pack (core, web, java, agent)")
+    parser.add_argument("--target", choices=["user", "domain", "draft"], default="user",
+                        help="Target scope: 'user' (~/.gemini/config/skills), 'domain' (context/skills), or 'draft' (.local/skills-draft). Default: user")
+    parser.add_argument("--user", action="store_true", help="Shortcut for --target user (default)")
+    parser.add_argument("--domain", action="store_true", help="Shortcut for --target domain")
+    parser.add_argument("--draft", action="store_true", help="Shortcut for --target draft")
+    parser.add_argument("--no-install", action="store_true", help="Stage only in .local/skills-draft/ without deploying to target")
 
     args = parser.parse_args()
+
+    # Determine effective target
+    target = args.target
+    if args.domain:
+        target = 'domain'
+    elif args.draft:
+        target = 'draft'
+    elif args.user:
+        target = 'user'
 
     if args.run:
         run_dir = CONTEXT / 'runs' / args.project / args.run
@@ -158,17 +201,34 @@ def main():
     print(f"Harvesting learnings from: {run_dir.name}")
     print(f"  Project: {args.project}")
     print(f"  Extracted Title: {run_data['title']}")
+    print(f"  Target Scope: {target} (private)")
     print(f"  Identified Keywords: {', '.join(sorted(run_data['keywords']))}")
 
     draft_file = generate_draft(run_data, skill_name, args.pack)
     is_valid = validate_draft(draft_file)
 
-    print("\nNext steps for this draft:")
-    print(f"1. Review and refine: {draft_file}")
-    print(f"2. If domain/private: move to context/skills/{skill_name}/")
-    print(f"3. If public/portable: submit PR to projects/donwi/public/Agent-Skills/skills/{skill_name}/")
+    if not is_valid:
+        sys.exit(1)
 
-    sys.exit(0 if is_valid else 1)
+    if not args.no_install and target in ('user', 'domain'):
+        dest_file = deploy_skill(draft_file, skill_name, target)
+    else:
+        dest_file = draft_file
+
+    print("\nNext steps for this learned skill:")
+    if target == 'user':
+        print(f"1. Audit token budget: python3 projects/donwi/public/Agent-Skills/bin/harness.py budget --user")
+        print(f"2. Test query routing: python3 projects/donwi/public/Agent-Skills/bin/harness.py route \"<prompt>\" --user")
+        print(f"3. Refine as needed:   {dest_file}")
+    elif target == 'domain':
+        print(f"1. Update index:       ws skills index")
+        print(f"2. Audit token budget: python3 projects/donwi/public/Agent-Skills/bin/harness.py budget --domain")
+        print(f"3. Refine as needed:   {dest_file}")
+    else:
+        print(f"1. Review and refine:  {draft_file}")
+        print(f"2. Deploy to user:     ws learn {args.project} --run {run_dir.name} --name {skill_name} --user")
+
+    sys.exit(0)
 
 
 if __name__ == '__main__':
