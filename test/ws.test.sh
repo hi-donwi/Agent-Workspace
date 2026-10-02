@@ -920,17 +920,23 @@ exists "$OPEN" "recover --dry-run writes nothing"
 
 OUT="$(ws agent recover 2>&1)"
 not_exists "$OPEN" "recover closes the clock"
-M="$(date +%Y-%m)"
-contains "$WS/context/works/agent/api/$M.jsonl" '"recovered":true' \
+# A recovered record is dated by the backdated start, 500000s (~6 days) ago - in the
+# first days of a month that is last month's file. Read every month, and ask
+# `ws hours` for the start's month, or this block fails the first six days of a month.
+RM_TS=$(( $(date +%s) - 500000 ))
+RM="$(date -r "$RM_TS" +%Y-%m 2>/dev/null || date -d "@$RM_TS" +%Y-%m)"
+RECS="$TMP/agent-api-records.jsonl"
+cat "$WS"/context/works/agent/api/*.jsonl > "$RECS"
+contains "$RECS" '"recovered":true' \
   "the recovered session is marked as an estimate"
 # The start is 139h back and nothing touched the file, so the only honest end is
 # the start itself - never `now`, and never the 8h cap either.
-contains "$WS/context/works/agent/api/$M.jsonl" '"recovered_basis":"start"' \
+contains "$RECS" '"recovered_basis":"start"' \
   "with no later evidence the end falls back to the start"
-RECOVERED="$(grep -c '"recovered":true' "$WS/context/works/agent/api/$M.jsonl")"
+RECOVERED="$(grep -c '"recovered":true' "$RECS")"
 [ "$RECOVERED" = 1 ] && ok "a 139h abandoned clock with no evidence writes one record" \
   || bad "a 139h abandoned clock with no evidence writes one record" "got $RECOVERED"
-MINUTES="$(grep '"recovered":true' "$WS/context/works/agent/api/$M.jsonl" | sed -n 's/.*"minutes":\([0-9]*\).*/\1/p')"
+MINUTES="$(grep '"recovered":true' "$RECS" | sed -n 's/.*"minutes":\([0-9]*\).*/\1/p')"
 [ "$MINUTES" = 0 ] && ok "no evidence means no hours invented" \
   || bad "no evidence means no hours invented" "got $MINUTES minutes"
 
@@ -939,9 +945,10 @@ MINUTES="$(grep '"recovered":true' "$WS/context/works/agent/api/$M.jsonl" | sed 
 check "clock in for the cap case" ws agent in api "ran long, died late"
 backdate_open "$OPEN" 500000 now
 check "recover closes the long-running clock" ws agent recover
-contains "$WS/context/works/agent/api/$M.jsonl" '"recovered_basis":"cap"' \
+cat "$WS"/context/works/agent/api/*.jsonl > "$RECS"
+contains "$RECS" '"recovered_basis":"cap"' \
   "a late heartbeat past the cap is recorded as capped"
-CAPPED="$(grep '"recovered_basis":"cap"' "$WS/context/works/agent/api/$M.jsonl" \
+CAPPED="$(grep '"recovered_basis":"cap"' "$RECS" \
           | sed -n 's/.*"minutes":\([0-9]*\).*/\1/p' | awk '{s+=$1} END{print s}')"
 # 478-480, not exactly 480: minutes are floored per day segment, so a window
 # that crosses midnight loses up to a minute to rounding.
@@ -975,7 +982,7 @@ printf '%s' "$OUT" | grep -q 'treating it as abandoned' \
   || bad "clock-in recovers an abandoned clock instead of refusing" "$OUT"
 contains "$OPEN" '"note":"the next session"' "the new session is the one now open"
 
-OUT="$(ws hours --project api 2>&1)"
+OUT="$(ws hours --project api --month "$RM" 2>&1)"
 printf '%s' "$OUT" | grep -q 'Estimated, not measured' \
   && ok "ws hours flags that recovered time is an estimate" \
   || bad "ws hours flags that recovered time is an estimate" "$OUT"
