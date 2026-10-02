@@ -1,7 +1,7 @@
 # ADR-0012: Framework-owned web control using the published UIDL runtime
 
 - **Date:** 2026-09-21
-- **Status:** Accepted
+- **Status:** Accepted; agent mode revised by [ADR-0019](0019-agent-host-beside-the-control-plane.md)
 - **Deciders:** Workspace maintainer (requested npm UIDL redesign)
 - **Project:** workspace
 
