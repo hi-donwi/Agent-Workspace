@@ -3475,6 +3475,16 @@ cmd_compat() {
   python3 "$ROOT/.agents/bin/ws_compat.py" compare "$abs" --observed "$observed"
 }
 
+cmd_learn() {
+  local project="${1:-}"; [ -n "$project" ] || project="$(session_project 2>/dev/null || true)"
+  [ -n "$project" ] || die "usage: ws learn <project-key> [--run <run-id>] [--name <skill-name>] [--pack <pack>]"
+  python3 "$ROOT/.agents/bin/ws_learn.py" "$@"
+}
+
+cmd_compact() {
+  python3 "$ROOT/.agents/bin/ws_compact.py" "$@"
+}
+
 cmd_help() {
   cat <<'H'
 ws — engineering workspace CLI
@@ -3527,6 +3537,9 @@ ws — engineering workspace CLI
   ws eval compare <file> --observed f compare recorded outcomes without invoking a model
   ws compat validate <file>           validate pinned cross-repository compatibility
   ws compat compare <file> --observed f compare recorded component versions and commits
+  ws learn <key> [--run id] [--name slug] [--pack pack]
+                                     harvest run decisions into a candidate draft skill
+  ws compact [memory <k>|exec <cmd>] auto-compact project memory or condense tool output
   ws help                          this help
 
 Add to PATH (run once, from inside your clone):
@@ -3582,6 +3595,8 @@ case "${1:-help}" in
   policy) shift; cmd_policy "$@" ;;
   eval) shift; cmd_eval "$@" ;;
   compat) shift; cmd_compat "$@" ;;
+  learn) shift; cmd_learn "$@" ;;
+  compact) shift; cmd_compact "$@" ;;
   help|-h|--help) cmd_help ;;
   *) die "unknown command: $1 (try: ws help)" ;;
 esac
