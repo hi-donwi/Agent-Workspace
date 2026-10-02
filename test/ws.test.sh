@@ -1196,9 +1196,22 @@ check "ws hours --client survives a sibling project with no session file" \
 
 section "ws usage: reading a separate, optional tool's data - never merging it in"
 check_fails "ws usage fails cleanly with no source configured" ws usage
+M="$(date +%Y-%m)"
+# The agent host writes its own records under .local/agent/usage/ (ADR-0021): the
+# workspace's own data, read with or without an external tool's source.
+AGU="$WS/.local/agent/usage"; mkdir -p "$AGU"
+agent_usage() {
+  printf '{"tool":"agent-control","endpoint":"mock","model":"echo","projectRoot":"%s","end":"%sT03:00:00Z","tokens":{"input":7,"output":8,"cacheRead":0,"cacheWrite":0}}\n' \
+    "$PROD" "$(date +%Y-%m-%d)" > "$AGU/$M.jsonl"
+}
+agent_usage
+OUT="$(ws usage --project api 2>&1)"
+printf '%s' "$OUT" | grep -q 'agent-control=1' \
+  && ok "ws usage reads the agent host's records with no external source" \
+  || bad "ws usage reads the agent host's records with no external source" "$OUT"
+rm -f "$AGU/$M.jsonl"
 USRC="$TMP/fake-agent-ops"
 mkdir -p "$USRC/ops/usage"
-M="$(date +%Y-%m)"
 cat > "$USRC/ops/usage/$M.jsonl" <<EOF
 {"id":"a","tool":"claude-code","projectRoot":"$PROD","start":"$(date +%Y-%m-%d)T01:00:00Z","end":"$(date +%Y-%m-%d)T02:00:00Z","tokens":{"input":100,"output":200}}
 {"id":"b","tool":"cursor","projectRoot":"$WS/projects/acme/api2","start":"$(date +%Y-%m-%d)T01:00:00Z","end":"$(date +%Y-%m-%d)T02:00:00Z","tokens":{"input":10,"output":20}}
@@ -1220,6 +1233,12 @@ printf '%s' "$OUT" | grep -qE '^TOTAL +2 ' && ok "ws usage --client sums across 
 
 check "a record with projectRoot: null never crashes the filter" ws usage --project api
 check_fails "ws usage refuses --project and --client together" ws usage --project api --client acme
+agent_usage
+OUT="$(ws usage --project api 2>&1)"
+printf '%s' "$OUT" | grep -qE '^TOTAL +2 +107 ' \
+  && ok "agent host records add to the external source's, not replace them" \
+  || bad "agent host records add to the external source's, not replace them" "$OUT"
+rm -f "$AGU/$M.jsonl"
 
 section "doctor on a bare clone"
 # Three bugs have now shipped that only appear before anything has been created:
