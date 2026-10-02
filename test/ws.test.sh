@@ -513,9 +513,82 @@ Always use record DTOs.
 MD
 check "ws learn extracts run and generates valid draft" ws learn api --run run-mock --name mock-skill
 exists "$WS/.local/skills-draft/mock-skill/SKILL.md" "draft SKILL.md written"
+# The default used to install into a machine-wide skills folder that every later
+# session loads, whatever client it works for: one client's decisions in every other
+# client's prompt (ADR-0011). A draft stays in .local/ until someone picks a scope.
+not_exists "$HOME/.gemini/config/skills/mock-skill" "the default installs nothing machine-wide"
+check_fails "a client project's run cannot be installed machine-wide" \
+  ws learn api --run run-mock --name client-skill --user
+not_exists "$HOME/.gemini/config/skills/client-skill" "the refused install wrote nothing"
+mkdir -p "$WS/context/runs/workspace/run-fw"
+printf '# Framework lesson\n## Goal\nKeep the CLI dependency-free.\n' \
+  > "$WS/context/runs/workspace/run-fw/brief.md"
+check "the framework's own run may be installed machine-wide" \
+  ws learn workspace --run run-fw --name fw-skill --user
+exists "$HOME/.gemini/config/skills/fw-skill/SKILL.md" "the framework skill is installed"
+check_fails "a skill name cannot climb out of the drafts folder" \
+  ws learn api --run run-mock --name ../../escaped
+not_exists "$WS/escaped" "nothing was written outside .local/skills-draft"
+check_fails "a run id cannot climb out of the project's runs" ws learn api --run ../workspace/run-fw
+WS_SESSION_ID=learnbind ws session bind api >/dev/null 2>&1
+WS_SESSION_ID=learnbind check "ws learn defaults to the bound project" \
+  ws learn --run run-mock --name bound-skill
+exists "$WS/.local/skills-draft/bound-skill/SKILL.md" "the bound project's run was harvested"
+WS_SESSION_ID=learnbind ws session clear >/dev/null 2>&1
 
 section "ws compact: memory and output auto-compaction"
-check "ws compact memory cleans project memory" ws compact memory api
+# Compaction rewrites shared memory files, so what it keeps matters more than what it
+# saves. ws run inserts the newest run at the TOP of the table; State is a column, and
+# "opencode" in an owner is not the word "open".
+CM="$WS/context/memory/projects/compactdemo"; mkdir -p "$CM"
+cat > "$CM/active.md" <<'MD'
+# compactdemo - active
+
+- **Current focus:** COMPACT_FOCUS_CANARY
+
+## Active runs
+
+| Run | Owner | State |
+|---|---|---|
+| `2026-09-09-090000-a-x-new` | a (claude-code) | open |
+| `2026-09-08-090000-a-x-review` | a (claude-code) | ready for review |
+| `2026-09-07-090000-a-x-progress` | a (claude-code) | in progress |
+| `2026-09-06-090000-a-x-blocked` | a (claude-code) | blocked |
+| `2026-09-05-090000-a-x-d5` | a (claude-code) | done |
+| `2026-09-04-090000-a-x-d4` | a (claude-code) | done |
+| `2026-09-03-090000-a-x-d3` | a (claude-code) | done |
+| `2026-09-02-090000-a-x-d2` | a (claude-code) | done |
+| `2026-09-01-090000-a-opencode-d1` | a (opencode) | done |
+
+## Next up
+
+- COMPACT_NEXT_CANARY
+MD
+{ printf '# compactdemo - log\n\n| Date | Milestone |\n|---|---|\n'
+  for d in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20; do
+    printf '| 2026-09-%s | milestone %s |\n' "$d" "$d"
+  done
+  printf '\nCOMPACT_FOOTER_CANARY\n'; } > "$CM/log.md"
+cp "$CM/active.md" "$TMP/compact-active.before"; cp "$CM/log.md" "$TMP/compact-log.before"
+check "ws compact memory without --apply is a dry run" ws compact memory compactdemo
+cmp -s "$CM/active.md" "$TMP/compact-active.before" && cmp -s "$CM/log.md" "$TMP/compact-log.before" \
+  && ok "the dry run changed nothing" || bad "the dry run changed nothing"
+check "ws compact memory --apply compacts" ws compact memory compactdemo --apply
+for live in x-new x-review x-progress x-blocked; do
+  contains "$CM/active.md" "$live" "a live run is kept ($live)"
+done
+contains "$CM/active.md" "x-d5" "the newest done runs are kept"
+contains "$CM/active.md" "x-d3" "up to the limit of three"
+lacks "$CM/active.md" "x-d2" "older done runs are dropped"
+lacks "$CM/active.md" "opencode-d1" "an owner named opencode is not mistaken for an open run"
+contains "$CM/active.md" "COMPACT_FOCUS_CANARY" "text above the runs table is kept"
+contains "$CM/active.md" "COMPACT_NEXT_CANARY" "sections after the runs table are kept"
+contains "$CM/log.md" "| 2026-09-20 |" "the newest milestones stay in log.md"
+lacks "$CM/log.md" "| 2026-09-05 |" "older milestones leave log.md"
+contains "$CM/log-archive.md" "| 2026-09-05 |" "and are archived, not deleted"
+contains "$CM/log.md" "COMPACT_FOOTER_CANARY" "text after the log table is kept"
+check_fails "ws compact refuses something that is not a project key" ws compact memory ../api
+rm -rf "$CM"
 check "ws compact exec runs command with condensation" ws compact exec -- echo "compact-ok"
 
 # The hook is the second line of defence: exclude keeps them out of sight,
