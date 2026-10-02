@@ -500,6 +500,24 @@ check_fails "ws compat rejects floating or short pins" ws compat validate "$WS/.
 check_fails "ws compat rejects product-owned manifests" \
   ws compat validate "$PROD/inside-compatibility.json"
 
+section "ws learn: harvest run learnings into a candidate skill"
+mkdir -p "$WS/context/runs/api/run-mock"
+cat > "$WS/context/runs/api/run-mock/brief.md" <<'MD'
+# Mock Feature
+## Goal
+Implement mock endpoint.
+MD
+cat > "$WS/context/runs/api/run-mock/decisions.md" <<'MD'
+## D-01: Mock Decision
+Always use record DTOs.
+MD
+check "ws learn extracts run and generates valid draft" ws learn api --run run-mock --name mock-skill
+exists "$WS/.local/skills-draft/mock-skill/SKILL.md" "draft SKILL.md written"
+
+section "ws compact: memory and output auto-compaction"
+check "ws compact memory cleans project memory" ws compact memory api
+check "ws compact exec runs command with condensation" ws compact exec -- echo "compact-ok"
+
 # The hook is the second line of defence: exclude keeps them out of sight,
 # the hook stops `git add -f`.
 git -C "$PROD" add -f AGENTS.md .workspace >/dev/null 2>&1
