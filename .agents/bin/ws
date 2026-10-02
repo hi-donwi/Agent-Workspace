@@ -2272,10 +2272,16 @@ cmd_usage() {
   done
   [ -n "$client" ] && [ "$project" != "-" ] && die "pass --project or --client, not both"
 
-  local src; src="$(usage_source)"
-  [ -n "$src" ] || die "no usage source found - set 'usage_source' in workspace.conf, or install one at ~/.agent-ops"
-  local udir="$src/ops/usage"
-  [ -d "$udir" ] || die "usage_source is set to $src but $udir does not exist"
+  # Two sources, summed: an optional external tool's records, and the agent host's own
+  # under .local/agent/usage/ (ADR-0021), which are this workspace's data.
+  local src udir="" agentdir="$ROOT/.local/agent/usage"
+  src="$(usage_source)"
+  if [ -n "$src" ]; then
+    udir="$src/ops/usage"
+    [ -d "$udir" ] || die "usage_source is set to $src but $udir does not exist"
+  fi
+  [ -n "$udir" ] || [ -d "$agentdir" ] \
+    || die "no usage source found - set 'usage_source' in workspace.conf, install one at ~/.agent-ops, or run the agent host (.local/agent/usage/)"
 
   # Resolve the target project(s) to absolute roots a record's projectRoot is
   # matched against - a record whose cwd was anywhere under a project's own
@@ -2289,9 +2295,9 @@ cmd_usage() {
     [ "${#roots[@]}" -gt 0 ] || die "unknown project '$project' - see: ws list"
   fi
 
-  local files=() p
-  for p in "$udir"/*.jsonl; do
-    case "$(basename "$p")" in "$month".jsonl) [ -f "$p" ] && files+=("$p") ;; esac
+  local files=() p d
+  for d in "$udir" "$agentdir"; do
+    [ -n "$d" ] && [ -f "$d/$month.jsonl" ] && files+=("$d/$month.jsonl")
   done
   # No matching month is not an error - it means no usage was recorded that
   # month, same stance ws hours takes.
@@ -2345,9 +2351,13 @@ else:
     print()
     print("by tool: " + ", ".join(f"{k}={v}" for k, v in sorted(by_tool.items())))
 PYEOF
-  cat "${files[@]}" 2>/dev/null | python3 "$pyfile" "$month" "${roots[@]:-}"
+  # An empty month is no records - not `cat` reading stdin, nor an unbound empty
+  # array under bash 3.2's set -u.
+  { [ "${#files[@]}" -gt 0 ] && cat "${files[@]}" 2>/dev/null; true; } | python3 "$pyfile" "$month" "${roots[@]:-}"
   rm -f "$pyfile"
-  c_dim "Source: $src (a separate personal tool - see: ws doctor)."
+  [ -n "$src" ] && c_dim "Source: $src (a separate personal tool - see: ws doctor)."
+  [ -d "$agentdir" ] && c_dim "Source: ${agentdir#$ROOT/} (the agent host's own records)."
+  return 0
 }
 
 # ─────────────────────────────────────────────────────────────── doctor
