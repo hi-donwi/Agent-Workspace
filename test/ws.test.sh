@@ -920,17 +920,23 @@ exists "$OPEN" "recover --dry-run writes nothing"
 
 OUT="$(ws agent recover 2>&1)"
 not_exists "$OPEN" "recover closes the clock"
-M="$(date +%Y-%m)"
-contains "$WS/context/works/agent/api/$M.jsonl" '"recovered":true' \
+# A recovered record is dated by the backdated start, 500000s (~6 days) ago - in the
+# first days of a month that is last month's file. Read every month, and ask
+# `ws hours` for the start's month, or this block fails the first six days of a month.
+RM_TS=$(( $(date +%s) - 500000 ))
+RM="$(date -r "$RM_TS" +%Y-%m 2>/dev/null || date -d "@$RM_TS" +%Y-%m)"
+RECS="$TMP/agent-api-records.jsonl"
+cat "$WS"/context/works/agent/api/*.jsonl > "$RECS"
+contains "$RECS" '"recovered":true' \
   "the recovered session is marked as an estimate"
 # The start is 139h back and nothing touched the file, so the only honest end is
 # the start itself - never `now`, and never the 8h cap either.
-contains "$WS/context/works/agent/api/$M.jsonl" '"recovered_basis":"start"' \
+contains "$RECS" '"recovered_basis":"start"' \
   "with no later evidence the end falls back to the start"
-RECOVERED="$(grep -c '"recovered":true' "$WS/context/works/agent/api/$M.jsonl")"
+RECOVERED="$(grep -c '"recovered":true' "$RECS")"
 [ "$RECOVERED" = 1 ] && ok "a 139h abandoned clock with no evidence writes one record" \
   || bad "a 139h abandoned clock with no evidence writes one record" "got $RECOVERED"
-MINUTES="$(grep '"recovered":true' "$WS/context/works/agent/api/$M.jsonl" | sed -n 's/.*"minutes":\([0-9]*\).*/\1/p')"
+MINUTES="$(grep '"recovered":true' "$RECS" | sed -n 's/.*"minutes":\([0-9]*\).*/\1/p')"
 [ "$MINUTES" = 0 ] && ok "no evidence means no hours invented" \
   || bad "no evidence means no hours invented" "got $MINUTES minutes"
 
@@ -939,9 +945,10 @@ MINUTES="$(grep '"recovered":true' "$WS/context/works/agent/api/$M.jsonl" | sed 
 check "clock in for the cap case" ws agent in api "ran long, died late"
 backdate_open "$OPEN" 500000 now
 check "recover closes the long-running clock" ws agent recover
-contains "$WS/context/works/agent/api/$M.jsonl" '"recovered_basis":"cap"' \
+cat "$WS"/context/works/agent/api/*.jsonl > "$RECS"
+contains "$RECS" '"recovered_basis":"cap"' \
   "a late heartbeat past the cap is recorded as capped"
-CAPPED="$(grep '"recovered_basis":"cap"' "$WS/context/works/agent/api/$M.jsonl" \
+CAPPED="$(grep '"recovered_basis":"cap"' "$RECS" \
           | sed -n 's/.*"minutes":\([0-9]*\).*/\1/p' | awk '{s+=$1} END{print s}')"
 # 478-480, not exactly 480: minutes are floored per day segment, so a window
 # that crosses midnight loses up to a minute to rounding.
@@ -975,7 +982,7 @@ printf '%s' "$OUT" | grep -q 'treating it as abandoned' \
   || bad "clock-in recovers an abandoned clock instead of refusing" "$OUT"
 contains "$OPEN" '"note":"the next session"' "the new session is the one now open"
 
-OUT="$(ws hours --project api 2>&1)"
+OUT="$(ws hours --project api --month "$RM" 2>&1)"
 printf '%s' "$OUT" | grep -q 'Estimated, not measured' \
   && ok "ws hours flags that recovered time is an estimate" \
   || bad "ws hours flags that recovered time is an estimate" "$OUT"
@@ -1334,6 +1341,31 @@ check_fails "ws run refuses a group key" ws run platform "keyed by group"
 not_exists "$WS/context/runs/acme" "no run folder is left under a client key"
 rmdir "$WS/context/memory/projects/acme"
 check "ws run accepts the framework key" ws run workspace "framework work"
+
+section "the framework key binds like a project"
+# Framework work is keyed `workspace` and has no registry row. ws run accepted it, but
+# a bind died with "unknown project" - and ws agent start died with it, after the
+# worktree, lock, and clock already existed.
+printf '# workspace - active\n\nFRAMEWORK_MEMORY_CANARY\n' \
+  > "$WS/context/memory/projects/workspace/active.md"
+WS_SESSION_ID=fwbind check "ws session bind accepts the framework key" ws session bind workspace
+contains "$WS/.local/sessions/fwbind/bind" "project=workspace" "the bind records the framework key"
+contains "$WS/.local/sessions/fwbind/bind" "scope=framework" "the bind scope says framework"
+contains "$WS/.local/sessions/fwbind/pack.json" "FRAMEWORK_MEMORY_CANARY" \
+  "the framework pack holds the framework's own memory"
+lacks "$WS/.local/sessions/fwbind/pack.json" "clients/" "the framework pack holds no client material"
+lacks "$WS/.local/sessions/fwbind/pack.json" "SIBLING_SESSION_CANARY" \
+  "the framework pack holds no project's memory"
+check "ws context pack accepts the framework key" ws context pack workspace
+FW_RUN="$(ls "$WS/context/runs/workspace" | head -1)"
+WS_SESSION_ID=fwbind check "the framework key binds with --run" ws session bind workspace --run "$FW_RUN"
+contains "$WS/.local/sessions/fwbind/pack.json" "runs/workspace/$FW_RUN/brief.md" \
+  "the framework pack includes its run brief"
+WS_SESSION_ID=fwstart check "ws agent start completes for the framework key" \
+  ws agent start workspace "framework"
+exists "$WS/.local/sessions/fwstart/bind" "ws agent start bound the framework key"
+exists "$WS/.local/worktrees/workspace/fwstart/.git" "the framework worktree exists"
+WS_SESSION_ID=fwstart check "ws agent stop closes the framework session" ws agent stop
 
 section "checkpoint commits only this agent's context work"
 (cd "$WS" && WS_AGENT=otheragent ./.agents/bin/ws run otherp "someone elses run" >/dev/null 2>&1)
