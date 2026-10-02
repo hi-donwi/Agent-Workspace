@@ -28,4 +28,13 @@ An ADR with no rejected alternatives records a preference, not a decision.
 | [0009](0009-client-grouping-in-context.md) | Group projects by client inside the context repository | Accepted | 2026-09-13 |
 | [0010](0010-context-repositories-follow-access-boundaries.md) | Context repositories follow access boundaries | Accepted | 2026-09-13 |
 | [0011](0011-attention-isolation-is-not-access-isolation.md) | Attention isolation is not access isolation | Accepted | 2026-09-17 |
-| [0012](0012-framework-owned-web-control.md) | Framework-owned web control using the published UIDL runtime | Accepted | 2026-09-21 |
+| [0012](0012-framework-owned-web-control.md) | Framework-owned web control using the published UIDL runtime | Accepted (agent mode revised by 0019) | 2026-09-21 |
+| [0013](0013-operator-owned-verification-contracts.md) | Operator-owned verification contracts | Accepted | 2026-09-23 |
+| [0014](0014-risk-based-agent-autonomy.md) | Risk-based agent autonomy | Accepted | 2026-09-23 |
+| [0015](0015-synthetic-agent-evaluation.md) | Synthetic agent evaluation | Accepted | 2026-09-23 |
+| [0016](0016-cross-repository-release-pins.md) | Cross-repository release pins | Accepted | 2026-09-23 |
+| [0017](0017-trusted-approval-boundary.md) | Trusted approval boundary | Accepted | 2026-09-23 |
+| [0018](0018-a-project-may-own-its-context-repository.md) | A project may own its context repository | Accepted | 2026-09-24 |
+| [0019](0019-agent-host-beside-the-control-plane.md) | Agent host beside the control plane | Accepted | 2026-10-02 |
+| [0020](0020-local-approval-record.md) | Local approval record for actions that stay on this machine | Accepted | 2026-10-02 |
+| [0021](0021-llm-endpoints-and-context-egress.md) | LLM endpoints by protocol, and context egress per project | Accepted | 2026-10-02 |
