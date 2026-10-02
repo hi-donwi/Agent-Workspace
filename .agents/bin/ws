@@ -1182,6 +1182,10 @@ cmd_run() {
     fi
   done
 
+  # Which session made the run: the owner id is human + tool, which every session of
+  # the same tool shares, so it cannot tell `ws checkpoint` whose run this is.
+  mkdir -p "$(session_dir)" && printf '%s/%s\n' "$key" "$(basename "$dir")" >> "$(session_dir)/runs"
+
   c_grn "-> run created"
   printf '%s\n' "${dir#$ROOT/}"
   c_dim "  owner: $(human_id) ($(agent_id)) - start with brief.md, then plan.md"
@@ -3132,6 +3136,17 @@ cmd_guard() {
 # owner created - and nothing else: every other path stays as it is, staged or
 # not. Nothing is pushed; `ws context sync` shares it. Without this, agents left
 # dozens of runs uncommitted on one machine, invisible to every other.
+# Open agent clocks of other sessions on <key>. Clock files are one JSON line each.
+other_agents_on() {
+  local key="$1" mine f n=0
+  mine="$(open_file agent)"
+  for f in "$WORKS"/.open-agent-*.json; do
+    [ -f "$f" ] && [ "$f" != "$mine" ] || continue
+    grep -qF "\"project\":\"$key\"" "$f" && n=$((n + 1))
+  done
+  printf '%s' "$n"
+}
+
 cmd_checkpoint() {
   local key="" msg=""
   while [ $# -gt 0 ]; do
@@ -3150,11 +3165,26 @@ cmd_checkpoint() {
   fi
   is_repo "$CONTEXT_DIR" || die "no context repository at ${CONTEXT_DIR#$ROOT/}"
 
-  local owner d paths=()
+  local owner d run mine others paths=()
   owner="$(owner_id)"
-  [ -d "$MEM/$key" ] && paths+=("memory/projects/$key")
+  # Memory files are shared. Another session clocked in on this project may be half-way
+  # through an edit, and committing it would publish that under this agent's name.
+  others="$(other_agents_on "$key")"
+  if [ -d "$MEM/$key" ]; then
+    if [ "$others" -gt 0 ]; then
+      c_ylw "! another agent is clocked in on $key ($others): memory/projects/$key/ left for a later checkpoint"
+      c_dim "  an abandoned clock counts too - ws agent recover closes it"
+    else
+      paths+=("memory/projects/$key")
+    fi
+  fi
+  # This agent's runs, narrowed to the ones this session created when it recorded any.
+  mine="$(session_dir)/runs"
   for d in "$RUNS/$key"/*-"$owner"-*/; do
-    [ -d "$d" ] && paths+=("runs/$key/$(basename "$d")")
+    [ -d "$d" ] || continue
+    run="$(basename "$d")"
+    if [ -s "$mine" ] && ! grep -qxF "$key/$run" "$mine"; then continue; fi
+    paths+=("runs/$key/$run")
   done
   [ "${#paths[@]}" -gt 0 ] || { c_dim "- nothing of $owner to checkpoint for $key"; return 0; }
   if [ -z "$(git -C "$CONTEXT_DIR" status --porcelain -- "${paths[@]}")" ]; then
