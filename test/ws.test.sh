@@ -1479,6 +1479,39 @@ printf '%s' "$OUT" | grep -q 'nothing changed' \
 git -C "$WS/context" reset -q HEAD memory/projects/api/unrelated.md
 rm -f "$WS/context/memory/projects/api/unrelated.md"
 
+# The owner pattern is human + tool, so it also matched every other session of the
+# same tool: two sessions of one agent checkpointed each other's runs.
+WS_SESSION_ID=cpa ws run otherp "session a run" >/dev/null 2>&1
+WS_SESSION_ID=cpb ws run otherp "session b run" >/dev/null 2>&1
+WS_SESSION_ID=cpa check "a named session checkpoints" ws checkpoint otherp -m "session a"
+CP="$(git -C "$WS/context" show --name-only --format= HEAD)"
+printf '%s' "$CP" | grep -q -- '-session-a-run/' \
+  && ok "the checkpoint holds this session's run" || bad "the checkpoint holds this session's run" "$CP"
+printf '%s' "$CP" | grep -q -- '-session-b-run/' \
+  && bad "another session of the same tool keeps its run" "$CP" \
+  || ok "another session of the same tool keeps its run"
+# Shared memory files: another agent clocked in on the project may be half-way through
+# an edit, and a checkpoint would publish it under this agent's name.
+RA="$(ls "$WS/context/runs/otherp" | grep -- '-session-a-run$')"
+WS_SESSION_ID=cpb ws agent in otherp "editing memory" >/dev/null 2>&1
+printf '\nCPB_HALF_WRITTEN\n' >> "$WS/context/memory/projects/otherp/active.md"
+printf 'more\n' >> "$WS/context/runs/otherp/$RA/plan.md"
+OUT="$(WS_SESSION_ID=cpa ws checkpoint otherp -m 'while b works' 2>&1)"
+CP="$(git -C "$WS/context" show --name-only --format= HEAD)"
+printf '%s' "$CP" | grep -q "runs/otherp/$RA/plan.md" \
+  && ok "this session's run is still checkpointed" || bad "this session's run is still checkpointed" "$CP"
+printf '%s' "$CP" | grep -q 'memory/projects/otherp/active.md' \
+  && bad "memory another agent may be editing stays out" "$CP" \
+  || ok "memory another agent may be editing stays out"
+printf '%s' "$OUT" | grep -q 'another agent' \
+  && ok "the checkpoint says why memory was left" || bad "the checkpoint says why memory was left" "$OUT"
+WS_SESSION_ID=cpb ws agent out >/dev/null 2>&1
+WS_SESSION_ID=cpa check "with no other agent on the project, memory is checkpointed" \
+  ws checkpoint otherp -m "memory"
+CP="$(git -C "$WS/context" show --name-only --format= HEAD)"
+printf '%s' "$CP" | grep -q 'memory/projects/otherp/active.md' \
+  && ok "the memory file is in that checkpoint" || bad "the memory file is in that checkpoint" "$CP"
+
 section "hard rules reach every agent"
 # One block, repeated in every tool's entry file: a copy that drifts is a rule
 # some agent never sees. Checked against this repository itself.

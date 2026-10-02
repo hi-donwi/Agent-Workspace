@@ -87,6 +87,8 @@ Rules:
 5. Stop with `ws agent stop` (clock-out + lock removal; the worktree and the session bind are kept until you `git worktree remove` / `ws session clear`).
 6. **Shared context:** `ws context sync` stashes, rebases, and restores local work (no longer `pull --ff-only` that dies on a dirty tree). `ws context switch <remote>` refuses a different origin — use another workspace clone (ADR-0010). `ws bootstrap --only <client|group|project>` clones one audience, not every row in the registry.
 7. **One agent, one context pack.** Do not load another client's memory because it is in the same `context/` repo or the same editor-memory workspace. ADR-0010 is who may read; ADR-0011 is what this session loads.
+8. **`ws checkpoint` commits this session's work only.** Runs are those this session created with `ws run` (sessions recorded before this rule fall back to every run of the same human and tool). `memory/projects/<key>/` is shared, so it is left out while another session has an agent clock open on the same project; the next checkpoint after that agent clocks out takes it.
+9. **Framework changes go through a pull request, one concern per PR,** from a worktree (`ws agent start workspace`) on a branch cut from `origin/main` — never from the primary checkout another agent may be committing in. `main` requires the CI checks and an up-to-date branch, so merge PRs one at a time and update the next branch before its merge.
 
 Two habits prevent most of the remaining friction:
 
