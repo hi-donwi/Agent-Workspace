@@ -113,6 +113,14 @@ def compact_memory(project: str, max_milestones: int = 15, max_closed_runs: int 
             else:
                 new_lines.append(line)
 
+        if in_runs_table:
+            open_runs = [r for r in run_rows if 'open' in r.lower()]
+            closed_runs = [r for r in run_rows if 'open' not in r.lower()]
+            kept_closed = closed_runs[-max_closed_runs:] if len(closed_runs) > max_closed_runs else closed_runs
+            new_lines.extend(table_header)
+            new_lines.extend(open_runs)
+            new_lines.extend(kept_closed)
+
         new_active_content = '\n'.join(new_lines) + '\n'
         if len(new_active_content) < len(content):
             diff = len(content.encode('utf-8')) - len(new_active_content.encode('utf-8'))
