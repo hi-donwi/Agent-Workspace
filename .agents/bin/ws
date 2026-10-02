@@ -2022,8 +2022,9 @@ client = pack.get("client", bind.get("client", ""))
 group = pack.get("group") or bind.get("group") or "-"
 handling = pack.get("handling", "")
 user_prefs_section = ""
-root_dir = directory.resolve().parent.parent
-prefs_path = root_dir / ".local" / "rules" / "user-preferences.md"
+# directory is $ROOT/.local/sessions/<id>; three hops up is $ROOT.
+workspace_root = directory.resolve().parent.parent.parent
+prefs_path = workspace_root / ".local" / "rules" / "user-preferences.md"
 if not prefs_path.is_file():
     prefs_path = pathlib.Path.home() / ".gemini" / "config" / "rules" / "user-preferences.md"
 
