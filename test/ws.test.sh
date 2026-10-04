@@ -764,6 +764,24 @@ printf '%s' "$BOUND" | grep -q "session bound to api" \
   && ok "doctor reports the bound project" \
   || bad "doctor reports the bound project" "$BOUND"
 
+section "SessionStart(compact) reminder (PreCompact pairing)"
+# Compaction erases the transcript, including whatever told the agent which
+# project's allowlist is still in force. ws session compact-reminder is what
+# the installed SessionStart(compact) hook calls to hand that back.
+REMINDER="$(WS_SESSION_ID=attn ws session compact-reminder)"
+printf '%s' "$REMINDER" | grep -q '"hookSpecificOutput"' \
+  && printf '%s' "$REMINDER" | grep -q 'project `api`' \
+  && ok "compact-reminder names the bound project" \
+  || bad "compact-reminder names the bound project" "$REMINDER"
+printf '%s' "$REMINDER" | grep -q "sessions/attn/CONTEXT.md" \
+  && ok "compact-reminder points at this session's pack" \
+  || bad "compact-reminder points at this session's pack" "$REMINDER"
+
+UNBOUND_REMINDER="$(WS_SESSION_ID=attn-unbound ws session compact-reminder)"
+[ -z "$UNBOUND_REMINDER" ] \
+  && ok "compact-reminder is silent with no bind" \
+  || bad "compact-reminder is silent with no bind" "$UNBOUND_REMINDER"
+
 WS_SESSION_ID=wtbind check "ws agent start also binds the session" ws agent start api "bind-on-start"
 exists "$WS/.local/sessions/wtbind/bind" "agent start wrote a bind"
 contains "$WS/.local/sessions/wtbind/bind" "project=api" "agent start bound api"

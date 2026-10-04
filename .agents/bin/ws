@@ -1926,6 +1926,9 @@ cmd_session() {
     bind) shift; session_bind "$@" ;;
     status) session_status ;;
     clear) session_clear ;;
+    # Internal plumbing for the SessionStart(compact) hook - not in the usage
+    # string on purpose, the same way `ws guard --supported` stays out of it.
+    compact-reminder) session_compact_reminder ;;
     *) die "usage: ws session [bind <project-key> [--run <id>] | status | clear]" ;;
   esac
 }
@@ -2091,6 +2094,36 @@ session_clear() {
   fi
   rm -rf "$dir"
   c_grn "-> session bind cleared ($(session_id))"
+}
+
+# Compaction erases the transcript, including whatever told the agent this
+# session is bound to one project's allowlist (ADR-0011). A SessionStart hook
+# with matcher "compact" calls this right after, and whatever it prints on
+# stdout is re-injected as additionalContext - the one way left to hand that
+# back without re-running `ws session bind` (which would also re-read the
+# context repo for no reason; the pack on disk has not gone stale). Silent
+# wherever there is nothing to remind: no bind, or the pack was never written.
+session_compact_reminder() {
+  local dir bind_file key
+  dir="$(session_dir)"
+  bind_file="$dir/bind"
+  [ -f "$bind_file" ] || return 0
+  key="$(sed -n 's/^project=//p' "$bind_file" | head -1)"
+  [ -n "$key" ] && [ -f "$dir/CONTEXT.md" ] || return 0
+  python3 - "$dir/CONTEXT.md" "$key" "$ROOT" <<'PY'
+import json
+import os
+import sys
+
+context_path, key, root = sys.argv[1], sys.argv[2], sys.argv[3]
+rel = os.path.relpath(context_path, root)
+text = (
+    f"Compaction just ran. This session was bound to project `{key}`; its "
+    f"allowlist is still `{rel}`. Re-read it before touching that project's "
+    "material again - do not reconstruct the allowlist from the compacted summary."
+)
+print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}}))
+PY
 }
 
 # Called from an editor hook, where three things are true that are not on a
