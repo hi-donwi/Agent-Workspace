@@ -2799,7 +2799,28 @@ cmd_doctor() {
       c_ylw "  ! pre-commit guard missing - run: ws link $key"
     fi
 
-    [ -d "$MEM/$key" ] || c_ylw "  ! no memory at context/memory/projects/$key/"
+    if [ -d "$MEM/$key" ]; then
+      # ws_state.py context-pack refuses any single file over 32 KiB (and the
+      # pack as a whole over 128 KiB), so a file creeping up on that is a future
+      # `ws session bind` failure, not just a slow read today. ws compact memory
+      # exists for exactly active.md/log.md; this is the nudge to run it before
+      # the hard refusal does.
+      local f size
+      for f in active.md log.md; do
+        [ -f "$MEM/$key/$f" ] || continue
+        size="$(wc -c < "$MEM/$key/$f" | tr -d ' ')"
+        if [ "$size" -gt 32768 ]; then
+          c_red "  x memory/projects/$key/$f is ${size}B - over the 32 KiB pack limit; ws session bind $key will fail"
+          c_dim "      ws compact memory $key --apply"
+          fail=1
+        elif [ "$size" -gt 16384 ]; then
+          c_ylw "  ! memory/projects/$key/$f is ${size}B - past half the 32 KiB pack limit"
+          c_dim "      ws compact memory $key --apply"
+        fi
+      done
+    else
+      c_ylw "  ! no memory at context/memory/projects/$key/"
+    fi
   done < <(reg_rows)
 
   local extra

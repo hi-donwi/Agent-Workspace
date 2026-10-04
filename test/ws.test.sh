@@ -591,6 +591,17 @@ check_fails "ws compact refuses something that is not a project key" ws compact 
 rm -rf "$CM"
 check "ws compact exec runs command with condensation" ws compact exec -- echo "compact-ok"
 
+# A line-count limit alone does nothing against one line that is itself huge -
+# a single-line JSON dump or minified bundle never trips "too many lines".
+HUGE_OUT="$(ws compact exec -- python3 -c 'print("A" * 5000)')"
+printf '%s' "$HUGE_OUT" | grep -q "more chars on this line" \
+  && ok "ws compact exec truncates a single oversized line" \
+  || bad "ws compact exec truncates a single oversized line" "$HUGE_OUT"
+LOGGED="$(/usr/bin/grep -l "AAAAA" "$WS/.local/logs"/python3-*.log 2>/dev/null | tail -1)"
+[ -n "$LOGGED" ] && [ "$(wc -c < "$LOGGED")" -gt 5000 ] \
+  && ok "the full, untruncated line is still saved to .local/logs/" \
+  || bad "the full, untruncated line is still saved to .local/logs/" "$LOGGED"
+
 # The hook is the second line of defence: exclude keeps them out of sight,
 # the hook stops `git add -f`.
 git -C "$PROD" add -f AGENTS.md .workspace >/dev/null 2>&1
@@ -1404,6 +1415,24 @@ mv "$WS/.gitignore" "$TMP/gitignore.bak"
 printf '/projects/*\n!/projects/README.md\n' > "$WS/.gitignore"
 check_fails "doctor fails when context is no longer ignored" ws doctor --ci
 mv "$TMP/gitignore.bak" "$WS/.gitignore"
+
+# context-pack (ws_state.py) refuses any single file over 32 KiB; doctor should
+# say so before ws session bind does, and only warn, not fail, on the way there.
+cp "$WS/context/memory/projects/api/active.md" "$TMP/active.bak"
+python3 -c "print('x' * 20000)" > "$WS/context/memory/projects/api/active.md"
+DOC="$(ws doctor --ci 2>&1 || true)"
+printf '%s' "$DOC" | grep -q "past half the 32 KiB pack limit" \
+  && ok "doctor warns when a project's memory file nears the pack limit" \
+  || bad "doctor warns when a project's memory file nears the pack limit" "$DOC"
+check "a near-limit memory file is a warning, not a doctor failure" ws doctor --ci
+
+python3 -c "print('x' * 40000)" > "$WS/context/memory/projects/api/active.md"
+check_fails "doctor fails once a memory file is over the 32 KiB pack limit" ws doctor --ci
+DOC="$(ws doctor --ci 2>&1 || true)"
+printf '%s' "$DOC" | grep -q "over the 32 KiB pack limit.*ws session bind api will fail" \
+  && ok "doctor says bind will fail, and names ws compact memory as the fix" \
+  || bad "doctor says bind will fail, and names ws compact memory as the fix" "$DOC"
+cp "$TMP/active.bak" "$WS/context/memory/projects/api/active.md"
 
 git -C "$WS" add -A >/dev/null 2>&1
 check "doctor passes again once each fault is undone" ws doctor --ci
