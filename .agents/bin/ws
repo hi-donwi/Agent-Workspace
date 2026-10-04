@@ -2446,7 +2446,7 @@ PYEOF
 # as a key, and neither are the names an operator has declared already public in
 # `context/public-identifiers` — their own open-source repos and the account
 # those live under.
-GENERIC_IDENT='^(apps?|api|web|web-app|website|console|pos|worker|mobile|core|main|docs|public|private|projects|workspace|client|group|test|dev|prod|demo|sample|local|shared|context|framework|product|skills|example|example organisation|org)$'
+GENERIC_IDENT='^(apps?|api|web|web-app|website|console|pos|worker|mobile|core|main|docs|public|private|projects|workspace|client|group|test|dev|prod|demo|sample|local|shared|context|framework|product|skills|example|example organisation|org|owner|brand|key|name|pt|cv|ltd|llc|inc|co)$'
 
 # The framework's own memory and runs live under this key. It is not a registry
 # row - the framework is not a product - but it is a legitimate run key.
@@ -2487,10 +2487,37 @@ adopt_primary_context() {
 private_identifiers() {
   local allow="${1:-}" tmp; tmp="$(mktemp)" || return 0
   {
+    # key, client, group, folder segments, and the remote's own owner/org - the
+    # part of git@host:owner/repo.git or https://host/owner/repo neither the key
+    # nor the folder carries, and the part a leak actually showed missing: a
+    # product repo hosted under the client's own GitLab/GitHub group.
     reg_rows 2>/dev/null \
-      | awk -F'\t' '{ print $1; print $2; print $3; n = split($4, p, "/"); for (i = 2; i <= n; i++) print p[i] }'
+      | awk -F'\t' '{
+          print $1; print $2; print $3
+          n = split($4, p, "/"); for (i = 2; i <= n; i++) print p[i]
+          remote = $5
+          if (remote != "" && remote != "-") {
+            sub(/\.git$/, "", remote)
+            if (remote ~ /^[A-Za-z0-9_.-]+@[^:]+:/) { sub(/^[^:]+:/, "", remote) }
+            else if (remote ~ /^[A-Za-z]+:\/\//) { sub(/^[A-Za-z]+:\/\//, "", remote); sub(/^[^\/]+\//, "", remote) }
+            m = split(remote, q, "/")
+            if (m >= 1 && q[1] != "") print q[1]
+          }
+        }'
     [ -f "$CONTEXT_DIR/groups.tsv" ] && awk -F'\t' 'NR > 1 && $0 !~ /^#/ { print $1 }' "$CONTEXT_DIR/groups.tsv"
     [ -d "$CONTEXT_DIR/clients" ] && find "$CONTEXT_DIR/clients" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;
+    # A client's legal name or brand in client.md often carries the one word the
+    # registry never will - a company name, a brand, an owner's own name - split
+    # on anything that is not a letter/digit so each word is its own candidate,
+    # filtered below exactly like every other one. donwi is the operator, not a
+    # client being protected, and is already public by name in LICENSE; excluded
+    # here rather than let its own identity fail the very check it is running.
+    if [ -d "$CONTEXT_DIR/clients" ]; then
+      find "$CONTEXT_DIR/clients" -mindepth 2 -maxdepth 2 -name client.md \
+          ! -path "$CONTEXT_DIR/clients/donwi/client.md" -exec \
+        sed -n 's/^- \*\*Full name:\*\*[[:space:]]*//p' {} + \
+        | tr -c '[:alnum:]' '\n'
+    fi
     conf_get org_key
   } 2>/dev/null \
     | tr '[:upper:]' '[:lower:]' \

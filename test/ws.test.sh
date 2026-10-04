@@ -1702,6 +1702,34 @@ printf '%s' "$OUT" | grep -q 'acme/hand-made-run' \
   && ok "doctor names a run folder not made by ws run" || bad "doctor names a run folder not made by ws run" "$OUT"
 git -C "$WS" worktree remove --force "$WS/.tool-wt"; rm -rf "$WS/context/runs/acme"
 
+# A project's identifiers also include its remote's own owner/org segment, and
+# a client's legal/brand name from client.md - not just key/client/group/folder.
+cp "$WS/context/registry.tsv" "$TMP/reg-remote.bak"
+printf 'acme-upstream\tacme\t-\tprojects/acme/upstream\tgit@gitlab.com:acme-upstream-org/widget.git\tclient\t-\tfixture\t-\n' \
+  >> "$WS/context/registry.tsv"
+cp "$WS/context/clients/acme/client.md" "$TMP/acme-client.bak"
+printf '# acme\n\n- **Full name:** Acme Widgets Corp (brand: Widgetronic)\n' > "$WS/context/clients/acme/client.md"
+cp "$WS/context/clients/donwi/client.md" "$TMP/donwi-client.bak"
+printf '# donwi\n\n- **Full name:** Some Operator (brand: Operatronic)\n' > "$WS/context/clients/donwi/client.md"
+IDS="$(ws identifiers 2>&1)"
+printf '%s' "$IDS" | grep -qx 'acme-upstream-org' \
+  && ok "a project's remote owner/org becomes a guarded identifier" \
+  || bad "a project's remote owner/org becomes a guarded identifier" "$IDS"
+printf '%s' "$IDS" | grep -qx 'widgetronic' \
+  && ok "a word from client.md's Full name becomes a guarded identifier" \
+  || bad "a word from client.md's Full name becomes a guarded identifier" "$IDS"
+printf '%s' "$IDS" | grep -qx 'operatronic' \
+  && bad "donwi's own client.md leaked into the guarded list" "$IDS" \
+  || ok "donwi's own Full name is excluded - the operator, not a protected client"
+
+printf 'widgetronic leaked\n' > "$WS/guard-brand.md"; git -C "$WS" add guard-brand.md
+check_fails "a brand word from client.md's Full name is refused" git -C "$WS" commit -qm "docs: brand"
+git -C "$WS" rm -q --cached guard-brand.md; rm -f "$WS/guard-brand.md"
+
+cp "$TMP/reg-remote.bak" "$WS/context/registry.tsv"
+cp "$TMP/acme-client.bak" "$WS/context/clients/acme/client.md"
+cp "$TMP/donwi-client.bak" "$WS/context/clients/donwi/client.md"
+
 # Someone else's hook is never overwritten, and remove takes only ours.
 check "ws guard remove" ws guard remove
 not_exists "$WS/.git/hooks/pre-push" "remove takes the guard hooks out"
