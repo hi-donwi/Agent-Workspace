@@ -2537,11 +2537,12 @@ private_identifiers() {
 }
 
 # The same list doctor checks tracked files against, printed. A published repo's
-# CI cannot derive it — CI has neither the context repo nor workspace.conf — so it
-# reads a secret instead, and a secret maintained by hand goes stale every time a
-# project is registered. Stale in one direction fails a build, which is noisy and
-# harmless; stale in the other misses a new client name, which is the leak the
-# check exists to catch. This makes regenerating it one command.
+# CI cannot derive it — CI has neither the context repo nor workspace.conf — and
+# does not try to: a regex of every private name, however it got there (hand-kept,
+# a secret, generated at publish time), would itself be the leak this check
+# exists to prevent. The published-tree check stays local-machine-only by design;
+# `--regex` is for a one-off local scan (feed it to `grep -E`), never for shipping
+# the list anywhere CI, or anyone else, could read it back from.
 cmd_identifiers() {
   local regex=0
   while [ $# -gt 0 ]; do
@@ -2563,8 +2564,8 @@ cmd_identifiers() {
   printf '%s\n' "$ids"
   echo >&2
   c_dim "  $(printf '%s\n' "$ids" | wc -l | tr -d ' ') names. Declared-public ones are excluded (${CONTEXT_DIR#$ROOT/}/public-identifiers)." >&2
-  c_dim "  To refresh a published repo's CI secret:" >&2
-  c_dim "    ws identifiers --regex | gh secret set PRIVATE_IDENTIFIERS --repo <owner>/<repo>" >&2
+  c_dim "  This list never leaves this machine - ws doctor checks tracked files against it" >&2
+  c_dim "  locally, and CI runs no equivalent check (it has neither context/ nor workspace.conf)." >&2
 }
 
 cmd_doctor() {

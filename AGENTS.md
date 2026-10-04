@@ -194,10 +194,11 @@ abandoned and closed with `ws agent recover`, not billed. Rollups and `ws usage`
 - **No tracked file here and no commit message may name a client, a group, a project
   key, or the organisation.** The **framework guard** (`ws guard install`, run by
   `ws init` and `ws bootstrap`) refuses them at commit, commit-message, and push time;
-  `ws doctor` scans tracked files against the same list. A name that is public anyway
-  (your own open repos, their account) is declared in `context/public-identifiers`;
-  refresh CI whenever `registry.tsv` gains a row:
-  `ws identifiers --regex | gh secret set PRIVATE_IDENTIFIERS --repo <owner>/<repo>`.
+  `ws doctor` scans tracked files against the same list, derived from `registry.tsv`
+  and `context/clients/*/client.md` (key, client, group, folder, remote owner, legal/
+  brand name). A name that is public anyway (your own open repos, their account) is
+  declared in `context/public-identifiers`. CI runs neither check: both need the
+  context repo, which is never CI's to have.
 - If a secret is committed by accident: **rotate it first**, then clean history.
   Deleting the file is not enough. An unpushed commit is dropped (`git reset --soft`),
   never "fixed" by a follow-up commit that leaves it in history.
