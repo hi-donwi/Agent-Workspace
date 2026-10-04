@@ -1271,6 +1271,38 @@ printf '%s' "$OUT" | grep -qE '^TOTAL +2 +107 ' \
   || bad "agent host records add to the external source's, not replace them" "$OUT"
 rm -f "$AGU/$M.jsonl"
 
+section "ws usage: cache hit rate and the heaviest sessions"
+# api2's own root (record "b" above) gets three more records, clean enough to
+# check exact arithmetic rather than tolerate float rounding: a 900/90/10 split
+# across cacheRead gives every total and every percentage a single right answer.
+cat >> "$USRC/ops/usage/$M.jsonl" <<EOF
+{"id":"hvy-big","tool":"claude-code","projectRoot":"$WS/projects/acme/api2","end":"$(date +%Y-%m-%d)T03:00:00Z","tokens":{"input":100,"output":10,"cacheRead":900,"cacheWrite":0}}
+{"id":"hvy-mid","tool":"claude-code","projectRoot":"$WS/projects/acme/api2","end":"$(date +%Y-%m-%d)T03:00:00Z","tokens":{"input":10,"output":5,"cacheRead":90,"cacheWrite":0}}
+{"id":"hvy-low","tool":"codex","projectRoot":"$WS/projects/acme/api2","end":"$(date +%Y-%m-%d)T03:00:00Z","tokens":{"input":90,"output":5,"cacheRead":10,"cacheWrite":0}}
+EOF
+OUT="$(ws usage --project api2 2>&1)"
+printf '%s' "$OUT" | grep -q 'cache hit: 83% (cacheRead=1000 cacheWrite=0)' \
+  && ok "ws usage reports the scope's overall cache-hit rate" \
+  || bad "ws usage reports the scope's overall cache-hit rate" "$OUT"
+printf '%s' "$OUT" | grep -qE '^claude-code *2 *110 *990 *0 *15 *90%' \
+  && ok "per-tool breakdown sums cache read/write and its own hit rate" \
+  || bad "per-tool breakdown sums cache read/write and its own hit rate" "$OUT"
+printf '%s' "$OUT" | grep -qE '^codex *1 *90 *10 *0 *5 *10%' \
+  && ok "a second tool in the same scope gets its own row, not merged with the first" \
+  || bad "a second tool in the same scope gets its own row, not merged with the first" "$OUT"
+BIG_LINE="$(printf '%s' "$OUT" | grep -n 'hvy-big' | cut -d: -f1)"
+MID_LINE="$(printf '%s' "$OUT" | grep -n 'hvy-mid' | cut -d: -f1)"
+LOW_LINE="$(printf '%s' "$OUT" | grep -n 'hvy-low' | cut -d: -f1)"
+[ -n "$BIG_LINE" ] && [ -n "$MID_LINE" ] && [ -n "$LOW_LINE" ] \
+  && [ "$BIG_LINE" -lt "$MID_LINE" ] && [ "$MID_LINE" -lt "$LOW_LINE" ] \
+  && ok "heaviest sessions are listed biggest cache-read first" \
+  || bad "heaviest sessions are listed biggest cache-read first" "$OUT"
+
+OUT="$(ws usage --project api 2>&1)"
+printf '%s' "$OUT" | grep -q 'hvy-big' \
+  && bad "another project's heavy session leaked into this scope" "$OUT" \
+  || ok "the heaviest-sessions list is scoped like everything else"
+
 section "doctor on a bare clone"
 # Three bugs have now shipped that only appear before anything has been created:
 # check-ignore not matching a directory that does not exist, and `find` on a

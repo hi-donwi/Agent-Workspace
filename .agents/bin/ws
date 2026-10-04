@@ -2347,7 +2347,9 @@ roots = [r.rstrip('/') for r in sys.argv[2:] if r]
 
 by_day = {}
 by_tool = {}
+tool_tok = {}
 total = {"sessions": 0, "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}
+records = []
 
 for line in sys.stdin:
     line = line.strip()
@@ -2372,6 +2374,24 @@ for line in sys.stdin:
     d["output"] += tok.get("output") or 0
     t = rec.get("tool") or "unknown"
     by_tool[t] = by_tool.get(t, 0) + 1
+    tt = tool_tok.setdefault(t, {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0})
+    for f in ("input", "output", "cacheRead", "cacheWrite"):
+        tt[f] += tok.get(f) or 0
+    # Kept per-record so a few outsized sessions can be told apart from a workload
+    # that genuinely re-reads this much - the question token-hygiene.md asks of a
+    # low cache-hit rate, not just the day/tool totals above.
+    records.append({
+        "id": str(rec.get("id") or rec.get("sessionId") or "-")[:12],
+        "tool": t,
+        "day": day or "-",
+        "cacheRead": tok.get("cacheRead") or 0,
+        "input": tok.get("input") or 0,
+        "output": tok.get("output") or 0,
+    })
+
+def hit_pct(cache_read, input_, cache_write):
+    denom = cache_read + input_ + cache_write
+    return f"{100 * cache_read / denom:.0f}%" if denom else "-"
 
 if total["sessions"] == 0:
     print("no usage records for this scope in " + month)
@@ -2382,8 +2402,25 @@ else:
         print(f"{day:<12} {d['sessions']:>8} {d['input']:>10} {d['output']:>10}")
     print()
     print(f"{'TOTAL':<12} {total['sessions']:>8} {total['input']:>10} {total['output']:>10}")
+    print(f"cache hit: {hit_pct(total['cacheRead'], total['input'], total['cacheWrite'])}"
+          f" (cacheRead={total['cacheRead']} cacheWrite={total['cacheWrite']})"
+          " - see docs/token-hygiene.md")
     print()
     print("by tool: " + ", ".join(f"{k}={v}" for k, v in sorted(by_tool.items())))
+    print()
+    print(f"{'TOOL':<14} {'SESSIONS':>8} {'INPUT':>10} {'CACHE-READ':>12} {'CACHE-WRITE':>12} {'OUTPUT':>10} {'HIT%':>6}")
+    for t in sorted(tool_tok):
+        tt = tool_tok[t]
+        print(f"{t:<14} {by_tool[t]:>8} {tt['input']:>10} {tt['cacheRead']:>12} {tt['cacheWrite']:>12} {tt['output']:>10} "
+              f"{hit_pct(tt['cacheRead'], tt['input'], tt['cacheWrite']):>6}")
+
+    heavy = sorted(records, key=lambda r: r["cacheRead"], reverse=True)[:5]
+    if heavy and heavy[0]["cacheRead"] > 0:
+        print()
+        print("heaviest sessions (by cache read):")
+        print(f"  {'ID':<14} {'TOOL':<12} {'DAY':<12} {'INPUT':>10} {'CACHE-READ':>12} {'OUTPUT':>10}")
+        for r in heavy:
+            print(f"  {r['id']:<14} {r['tool']:<12} {r['day']:<12} {r['input']:>10} {r['cacheRead']:>12} {r['output']:>10}")
 PYEOF
   # An empty month is no records - not `cat` reading stdin, nor an unbound empty
   # array under bash 3.2's set -u.
