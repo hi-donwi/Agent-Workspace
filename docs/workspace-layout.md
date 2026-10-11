@@ -142,7 +142,9 @@ falls back to the breadcrumb for a product repo cloned outside the workspace.
 Because `projects/` is ignored, it is a target for `git clean -x`. Plain `git clean -xdf`
 refuses to delete a nested repository, but **`git clean -ffxd` deletes the product repo
 outright** — working tree, `.git`, and any commit not yet pushed. Never use `-ff` at the
-workspace root. Put `.agents/bin` on PATH: the `git` wrapper there refuses `-ff` at this
-root. Push product work the same day; nothing in a workspace clone backs it up.
+workspace root. Run `.agents/bin/ws install` to make the workspace CLI available to agent
+shells; the installed launcher resolves the current workspace and the `git` wrapper remains
+available at `.agents/bin/git` for explicit use. Push product work the same day; nothing in a
+workspace clone backs it up.
 
 ---

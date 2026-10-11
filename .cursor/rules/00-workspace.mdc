@@ -46,6 +46,9 @@ The full contract is `AGENTS.md`. Where it and this list differ, this list wins.
 Credentials, tokens, keys, and client documents never go in `.agents/`, `docs/`, or a
 commit message; raw client material stays in `.local/`, which is git-ignored.
 
+If `ws` is not on PATH, run `.agents/bin/ws install` from the workspace root. Until the user
+bin directory is available to this agent, invoke `.agents/bin/ws` directly.
+
 ## Before starting a task
 
 1. Check whether a skill applies (`.agents/skills/README.md`); read its `SKILL.md` first.

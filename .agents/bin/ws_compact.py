@@ -178,7 +178,17 @@ def compact_memory(project: str, max_milestones: int = 15, max_closed_runs: int 
     return True
 
 
-def condense_exec(cmd_args: list, max_lines: int = 60, head_lines: int = 25, tail_lines: int = 25) -> int:
+def truncate_line(line: str, max_chars: int, log_file: Path) -> str:
+    """A line capped to max_chars - a line count limit does nothing against one
+    line that is itself megabytes (a single-line JSON dump, a minified bundle)."""
+    if len(line) <= max_chars:
+        return line
+    omitted = len(line) - max_chars
+    return f"{line[:max_chars]} …[{omitted} more chars on this line, full output: {log_file}]"
+
+
+def condense_exec(cmd_args: list, max_lines: int = 60, head_lines: int = 25, tail_lines: int = 25,
+                  max_line_chars: int = 2000) -> int:
     """Executes a command and condenses its output to prevent token window pollution."""
     LOCAL_LOGS.mkdir(parents=True, exist_ok=True)
     ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -197,15 +207,16 @@ def condense_exec(cmd_args: list, max_lines: int = 60, head_lines: int = 25, tai
     output, _ = proc.communicate()
     lines = output.splitlines()
 
-    # Always persist full output to .local/logs/
+    # Always persist full output to .local/logs/, untouched - what prints here
+    # is a condensation for the agent reading it, never the record of what ran.
     log_file.write_text(output, encoding='utf-8')
 
     if len(lines) <= max_lines:
-        print(output, end='')
+        print('\n'.join(truncate_line(l, max_line_chars, log_file) for l in lines))
     else:
         omitted = len(lines) - (head_lines + tail_lines)
-        head_part = '\n'.join(lines[:head_lines])
-        tail_part = '\n'.join(lines[-tail_lines:])
+        head_part = '\n'.join(truncate_line(l, max_line_chars, log_file) for l in lines[:head_lines])
+        tail_part = '\n'.join(truncate_line(l, max_line_chars, log_file) for l in lines[-tail_lines:])
         condensed = (
             f"{head_part}\n\n"
             f"[... {omitted} lines omitted by ws compact. Full output saved to: {log_file} ...]\n\n"
@@ -230,6 +241,8 @@ def main():
     # exec command
     p_exec = subparsers.add_parser("exec", help="Run a command with smart output condensation")
     p_exec.add_argument("--max-lines", type=int, default=60, help="Max output lines before condensing")
+    p_exec.add_argument("--max-line-chars", type=int, default=2000,
+                        help="Max characters kept per line - catches one huge line a line-count limit would miss")
     p_exec.add_argument("cmd", nargs=argparse.REMAINDER, help="Command and arguments to execute")
 
     args = parser.parse_args()
@@ -243,7 +256,7 @@ def main():
             sys.exit(2)
         # Strip leading '--' if present
         cmd = args.cmd[1:] if args.cmd and args.cmd[0] == '--' else args.cmd
-        rc = condense_exec(cmd, max_lines=args.max_lines)
+        rc = condense_exec(cmd, max_lines=args.max_lines, max_line_chars=args.max_line_chars)
         sys.exit(rc)
     else:
         parser.print_help()

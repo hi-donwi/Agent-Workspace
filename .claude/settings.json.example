@@ -4,13 +4,31 @@
     "They record AGENT working hours automatically, so the numbers do not depend on",
     "anyone remembering. Human hours stay manual on purpose: `ws clock in/out`.",
     "`ws agent auto` never fails and records nothing when it cannot tell which",
-    "project the session belongs to - an hour on the wrong project is worse than none."
+    "project the session belongs to - an hour on the wrong project is worse than none.",
+    "",
+    "PreCompact and SessionStart(compact) keep this session's run and memory",
+    "continuous across a compaction: checkpoint before the transcript is folded,",
+    "then remind the agent which project's allowlist still applies after.",
+    "See docs/memory-and-runs.md#compaction."
   ],
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           { "type": "command", "command": ".agents/bin/ws agent auto in || true" }
+        ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          { "type": "command", "command": ".agents/bin/ws session compact-reminder || true" }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          { "type": "command", "command": ".agents/bin/ws checkpoint || true" }
         ]
       }
     ],
