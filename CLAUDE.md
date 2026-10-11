@@ -12,10 +12,12 @@ Shared instructions for all agents live in AGENTS.md. Claude Code loads them via
 - **Skills live in `.agents/skills/`** (framework) and `context/skills/` (this
   organisation), not `.claude/skills/`. Read the `SKILL.md` directly before working on a
   task it covers. `ws route --project <key> "<task>"` searches both.
-- **Project commands** are in `.agents/bin/ws` (`init`, `context`, `bootstrap`, `new`,
+- **Project commands** are in `.agents/bin/ws` (`init`, `install`, `context`, `bootstrap`, `new`,
   `link`, `run`, `checkpoint`, `session`, `log`, `sync`, `route`, `skills`, `identifiers`,
   `guard`, `doctor`). `ws` reads Claude Code's `CLAUDE_CODE_SESSION_ID` itself, so parallel
   Claude sessions no longer share the `default` clock.
+- If `ws` is not on PATH, run `.agents/bin/ws install` from the workspace root; until then,
+  call `.agents/bin/ws` directly.
 - **Bind before loading client memory.** `ws session bind <project-key>`, then read
   `.local/sessions/<session>/CONTEXT.md`. Ignore injected editor memory for any
   other client. Client facts go in `context/memory/projects/<key>/`, not in

@@ -8,15 +8,18 @@ For a developer or an AI agent joining a project in this workspace.
 
 ```bash
 git clone <workspace-remote> workspace && cd workspace
-echo "export PATH=\"$PWD/.agents/bin:\$PATH\"" >> ~/.zshrc && source ~/.zshrc
+.agents/bin/ws install
 
-ws bootstrap     # clone the product repos
-ws ide           # copy the shared VS Code defaults into this clone
-ws doctor        # verify toolchain and repo isolation
+.agents/bin/ws bootstrap     # clone the product repos
+.agents/bin/ws ide            # copy the shared VS Code defaults into this clone
+.agents/bin/ws doctor         # verify toolchain and repo isolation
 ```
 
 Clone it wherever you like. Nothing tracked in this repo assumes a path, so your location
 never has to match anyone else's; `ws where` resolves the root from anywhere.
+The installer puts a cwd-resolving launcher in `~/.local/bin` by default, which avoids relying
+on an interactive `~/.zshrc` or `~/.bashrc`. If that directory is not on the agent's `PATH`,
+add it to the agent environment or use `.agents/bin/ws` directly.
 
 Runs and log entries are attributed to you by the local part of your git email. If that
 gives an awkward handle, set your own once: `export WS_USER=doni` in your shell profile.

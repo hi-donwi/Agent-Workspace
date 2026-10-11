@@ -36,6 +36,11 @@ This file is kept under 13 KB so every tool loads it whole. Detail and reasoning
 The full contract is `AGENTS.md`. Where it and this list differ, this list wins.
 <!-- hard-rules:end -->
 
+If a shell reports `ws: command not found`, run `.agents/bin/ws install` from the workspace
+root and retry. The installer creates a user-level, cwd-resolving launcher; it does not depend
+on an interactive shell profile. Until its bin directory is on the agent's `PATH`, invoke
+`.agents/bin/ws` directly.
+
 ---
 
 ## 1. Three repositories, one directory

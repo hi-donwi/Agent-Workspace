@@ -26,7 +26,7 @@ This repository is the *how*, kept separate from the *what*:
 - **Two clocks** — human hours and agent hours, recorded separately and never summed
 - **A CLI (`ws`)** that wires the repositories together and checks they stay separate
 
-Nothing here names an organisation. Clone it, run `ws init`, and it is yours.
+Nothing here names an organisation. Clone it, run `.agents/bin/ws init`, and it is yours.
 
 > **A caveat worth reading before you adopt it.** `core` carries the git workflow, the
 > REST API contract, and the definition of done. Testing, security, and observability live
@@ -43,6 +43,7 @@ Nothing here names an organisation. Clone it, run `ws init`, and it is yours.
 ```bash
 git clone <workspace-remote> workspace && cd workspace
 cp workspace.conf.example workspace.conf        # leave context_remote empty for local-only
+.agents/bin/ws install                         # make `ws` available to agent shells
 .agents/bin/ws bootstrap                        # skills, and product repos that have remotes
 .agents/bin/ws context init                     # only if context/ is not already present
 .agents/bin/ws ide                              # copy the shared editor defaults
@@ -57,6 +58,7 @@ context repository is shared. `ws doctor` reports a context with no remote as pr
 ```bash
 git clone <workspace-remote> workspace && cd workspace
 .agents/bin/ws init            # writes local settings without an organisation name
+.agents/bin/ws install         # make `ws` available to agent shells
 .agents/bin/ws context init    # create an empty context repository for it
 .agents/bin/ws doctor
 ```
@@ -163,12 +165,17 @@ ws verify <project-key> [--run <run-id>]   # execute an operator-owned verificat
 ws policy check <key> --action <action>    # classify read/change/approval-required work
 ws eval validate <file>                    # validate synthetic agent scenarios
 ws compat validate <file>                  # validate pinned release metadata
+ws install                                 # install the user-level launcher for agent shells
 ```
 
-Add to `PATH` once, from inside your clone:
+`ws install` writes a small dispatcher to `~/.local/bin/ws` (or `XDG_BIN_HOME`). The dispatcher
+resolves the workspace from the agent's current directory, so multiple workspace clones can
+coexist without one clone being hard-coded into a shell profile. If the command reports that
+the chosen directory is not on `PATH`, add that directory to the environment used by the agent.
+Until then, invoke the CLI directly from the workspace root:
 
 ```bash
-echo "export PATH=\"$PWD/.agents/bin:\$PATH\"" >> ~/.zshrc && source ~/.zshrc
+.agents/bin/ws <command> [args]
 ```
 
 ---
