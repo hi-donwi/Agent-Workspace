@@ -65,8 +65,15 @@ not a hosted product.
   server injects the token into the companion HTML so it redirects to `/?token=...`. The
   token is per-process, loopback-only, and is not written to disk.
 - APIs under `/api/` still require `Authorization: Bearer <token>`.
-- For AI-assisted workspace interaction and LLM chat, use `ws chat` (or `ws web --runtime agent-control`).
-  This runs Agent-Control, connecting multi-provider LLMs to the workspace via `ws` tooling.
+- For AI-assisted workspace interaction and LLM chat, use `ws web --agent` (ADR-0019) or
+  the standalone `ws chat` (also `ws web --runtime agent-control`). Both run Agent-Control,
+  connecting multi-provider LLMs to the workspace via `ws` tooling.
+- **`ws web --agent`** starts two processes that live and die together: the Python control
+  plane on an internal loopback port with an internal token the browser never receives, and
+  the agent host as the browser-facing server. The agent host is resolved by
+  `WS_AGENT_HOST_DIR`, else the registry key `agent-control` - never a fixed checkout path.
+  It receives `WS_CONTROL_URL`, `WS_CONTROL_TOKEN`, `WS_DESK_DIST`, `WS_AGENT_MODE`, `HOST`,
+  and `PORT`; serving the desk and proxying the control-plane API is the host's job.
 
 ## Open your editor at the workspace root, not at `projects/<x>`
 

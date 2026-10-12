@@ -112,6 +112,10 @@ We split the web control into two roles with one owner each.
 
 - [x] ADR-0012 gains a note pointing at this ADR for agent mode
 - [ ] Control-plane API version and compatibility fixtures
-- [ ] `ws web --agent`, and `ws chat` resolving the installed package instead of a checkout path
+- [x] `ws web --agent` starts the control plane and the agent host together (internal
+      loopback port and token; the host receives `WS_CONTROL_URL`, `WS_CONTROL_TOKEN`,
+      `WS_DESK_DIST`, `WS_AGENT_MODE`, `HOST`, `PORT`). The host still has to consume that
+      contract - serve the desk and proxy the control-plane API - which is product work.
+- [ ] `ws chat` resolving the installed package instead of a checkout path
 - [ ] `ws session bind` / `ws agent start` accept the framework key (they fail today)
 - [ ] Mock LLM provider for end-to-end tests, so CI never calls a real endpoint
