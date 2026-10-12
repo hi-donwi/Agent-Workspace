@@ -174,6 +174,28 @@ ws context clone <private-remote>
 `ws bootstrap` does this for you when `workspace.conf` names a `context_remote`, before it
 clones the product repos.
 
+## Publishing checkpoints
+
+Context publication is controlled by the untracked, machine-local `workspace.conf`:
+
+```text
+context_publish = manual   # safe default
+# context_publish = auto   # publish normal checkpoints after the guards pass
+```
+
+`ws checkpoint` always commits only the current agent's context work. In `manual` mode it
+stays local. Use `ws context publish` to publish an already-clean, reviewed context branch,
+or `ws checkpoint --publish` to checkpoint and publish explicitly. In `auto` mode, a normal
+checkpoint may publish only when the remote tip is exactly the pre-checkpoint local tip;
+older unpublished commits therefore require an explicit review and `ws context publish`.
+The compaction hook always uses `--no-publish`, while the normal stop hook follows the local
+publication mode.
+
+Every publish refuses a missing or mismatched `context_remote`, mixed audiences, a publicly
+readable remote, a dirty working tree, a detached branch, a remote branch that moved ahead,
+or a force option. It pushes only the current context branch with no force or tag propagation.
+Product repositories and the public framework never inherit this setting.
+
 ## What goes in, and what never does
 
 | Goes in | Never |

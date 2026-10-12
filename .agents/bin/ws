@@ -28,7 +28,9 @@ conf_set() {
 import pathlib, re, sys
 path, key, value = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
 text = path.read_text() if path.exists() else ""
-pattern = re.compile(rf"^(\s*{re.escape(key)}\s*=\s*).*$", re.M)
+# Restrict whitespace around a setting to the current line. `\s*` also consumes
+# newlines and used to delete the setting immediately after the one being updated.
+pattern = re.compile(rf"^([ \t]*{re.escape(key)}[ \t]*=[ \t]*).*$", re.M)
 line = f"{key} = {value}"
 if pattern.search(text):
     path.write_text(pattern.sub(line, text, count=1))
@@ -231,6 +233,7 @@ cmd_init() {
 org_key        = $key
 context_dir    = context
 context_remote =
+context_publish = manual
 
 packs = core, java, web
 CONF
@@ -274,6 +277,56 @@ context_is_mixed() {
   [ "$found_p" = 1 ] && [ "$found_o" = 1 ]
 }
 
+context_publish_mode() {
+  local mode; mode="$(conf_get context_publish manual)"
+  case "$mode" in
+    manual|auto) printf '%s' "$mode" ;;
+    *) die "invalid context_publish '$mode' (use manual or auto)" ;;
+  esac
+}
+
+# Push only the private context repository. The optional expected base is used by
+# automatic checkpoint publication: it must still be the remote tip, so an auto
+# checkpoint cannot silently publish older local commits from another session.
+context_publish() {
+  local expected_base="${1:-}" origin configured branch dirty remote_ref counts behind ahead remote_head
+  is_repo "$CONTEXT_DIR" || die "no context repository"
+  origin="$(git -C "$CONTEXT_DIR" remote get-url origin 2>/dev/null || true)"
+  [ -n "$origin" ] || die "context has no origin remote"
+  configured="$(conf_get context_remote '')"
+  [ -n "$configured" ] || die "context_remote is empty; attach the configured private remote first"
+  [ "$(normalize_remote "$origin")" = "$(normalize_remote "$configured")" ] \
+    || die "context origin does not match context_remote; refusing to publish"
+  context_is_mixed && die "context mixes audiences; split it before publishing (ADR-0010)"
+  if repo_is_public "$origin"; then
+    die "context remote is publicly readable; refusing to publish private context"
+  fi
+  branch="$(git -C "$CONTEXT_DIR" branch --show-current)"
+  [ -n "$branch" ] || die "context is in detached HEAD; checkout a branch before publishing"
+  dirty="$(git -C "$CONTEXT_DIR" status --porcelain --untracked-files=all)"
+  [ -z "$dirty" ] || die "context has local changes; run ws checkpoint first"
+  if ! git -C "$CONTEXT_DIR" fetch --prune origin >/dev/null; then
+    die "unable to fetch context origin; refusing to publish"
+  fi
+  remote_ref="refs/remotes/origin/$branch"
+  if git -C "$CONTEXT_DIR" show-ref --verify --quiet "$remote_ref"; then
+    counts="$(git -C "$CONTEXT_DIR" rev-list --left-right --count "origin/$branch...$branch")"
+    read -r behind ahead <<< "$counts"
+    [ "$behind" = "0" ] || die "context branch is $behind commit(s) behind origin/$branch; run ws context sync"
+    remote_head="$(git -C "$CONTEXT_DIR" rev-parse "$remote_ref")"
+    if [ -n "$expected_base" ] && [ "$remote_head" != "$expected_base" ]; then
+      die "context origin moved before automatic publication; review and run ws context publish"
+    fi
+    [ "$ahead" != "0" ] || { c_dim "- context is already published"; return 0; }
+  elif [ -n "$expected_base" ]; then
+    c_dim "  context origin has no $branch branch; creating it"
+  fi
+  if ! git -C "$CONTEXT_DIR" push --no-follow-tags origin "HEAD:$branch" >/dev/null; then
+    die "context push failed; no force-push was attempted"
+  fi
+  c_grn "-> context published: $branch ($(git -C "$CONTEXT_DIR" rev-parse --short HEAD))"
+}
+
 cmd_context() {
   local action="${1:-status}"; shift || true
   case "$action" in
@@ -282,6 +335,10 @@ cmd_context() {
       ;;
     sync)
       context_sync
+      ;;
+    publish)
+      [ "$#" -eq 0 ] || die "usage: ws context publish"
+      context_publish
       ;;
     split)
       context_split "$@"
@@ -318,11 +375,12 @@ cmd_context() {
         c_grn "context: ${CONTEXT_DIR#$ROOT/} ($(git -C "$CONTEXT_DIR" remote get-url origin 2>/dev/null || echo 'no remote'))"
         local n; n="$(count_dirs "$MEM")"
         c_dim "  $n project(s) in memory"
+        c_dim "  publication mode: $(context_publish_mode)"
       else
         c_ylw "no context yet - run: ws context init"
       fi
       ;;
-    *) die "usage: ws context [status|init|clone <r>|sync|split --personal <c>|switch <r> [--force]|migrate-v2|migrate-v3|pack <project> [--run <id>]]" ;;
+    *) die "usage: ws context [status|init|clone <r>|sync|publish|split --personal <c>|switch <r> [--force]|migrate-v2|migrate-v3|pack <project> [--run <id>]]" ;;
   esac
 }
 
@@ -3397,8 +3455,9 @@ cmd_guard() {
 # ─────────────────────────────────────────────────────────────── checkpoint
 # Commits this agent's own context work - the project's memory and the runs this
 # owner created - and nothing else: every other path stays as it is, staged or
-# not. Nothing is pushed; `ws context sync` shares it. Without this, agents left
-# dozens of runs uncommitted on one machine, invisible to every other.
+# not. Publication is opt-in through `--publish` or `context_publish = auto`,
+# and is guarded by context_publish. Without this, agents left dozens of runs
+# uncommitted on one machine, invisible to every other.
 # Open agent clocks of other sessions on <key>. Clock files are one JSON line each.
 other_agents_on() {
   local key="$1" mine f n=0
@@ -3411,24 +3470,26 @@ other_agents_on() {
 }
 
 cmd_checkpoint() {
-  local key="" msg=""
+  local key="" msg="" publish="" publish_expected=0
   while [ $# -gt 0 ]; do
     case "$1" in
       -m|--message) msg="${2:?}"; shift 2 ;;
-      -*) die "usage: ws checkpoint [<project-key>] [-m message]" ;;
+      --publish) publish=1; shift ;;
+      --no-publish) publish=0; shift ;;
+      -*) die "usage: ws checkpoint [<project-key>] [-m message] [--publish|--no-publish]" ;;
       *) key="$1"; shift ;;
     esac
   done
   if [ -z "$key" ]; then
     key="$(sed -n 's/^project=//p' "$(session_dir)/bind" 2>/dev/null | head -1)"
-    [ -n "$key" ] || die "usage: ws checkpoint [<project-key>] [-m message]  (no session bind to default to)"
+    [ -n "$key" ] || die "usage: ws checkpoint [<project-key>] [-m message] [--publish|--no-publish]  (no session bind to default to)"
   fi
   if [ "$key" != "$FRAMEWORK_KEY" ] && [ -z "$(reg_get "$key")" ]; then
     die "'$key' is not a registered project key"
   fi
   is_repo "$CONTEXT_DIR" || die "no context repository at ${CONTEXT_DIR#$ROOT/}"
 
-  local owner d run mine others paths=()
+  local owner d run mine others paths=() before_head
   owner="$(owner_id)"
   # Memory files are shared. Another session clocked in on this project may be half-way
   # through an edit, and committing it would publish that under this agent's name.
@@ -3453,10 +3514,23 @@ cmd_checkpoint() {
   if [ -z "$(git -C "$CONTEXT_DIR" status --porcelain -- "${paths[@]}")" ]; then
     c_dim "- $key: nothing changed since the last checkpoint"; return 0
   fi
+  before_head="$(git -C "$CONTEXT_DIR" rev-parse HEAD)"
   git -C "$CONTEXT_DIR" add -A -- "${paths[@]}"
   git -C "$CONTEXT_DIR" commit -q -m "${msg:-chore($key): checkpoint by $owner}" -- "${paths[@]}"
   c_grn "-> checkpoint $(git -C "$CONTEXT_DIR" log -1 --format=%h): $key ($owner)"
-  c_dim "  local only - ws context sync shares it"
+  if [ -z "$publish" ] && [ "$(context_publish_mode)" = "auto" ]; then
+    publish=1
+    publish_expected=1
+  fi
+  if [ "$publish" = 1 ]; then
+    if [ "$publish_expected" = 1 ]; then
+      context_publish "$before_head"
+    else
+      context_publish
+    fi
+  else
+    c_dim "  local only - ws context publish shares it"
+  fi
 }
 
 # ─────────────────────────────────────────────────────────────── ide
@@ -3789,7 +3863,7 @@ cmd_help() {
 ws — engineering workspace CLI
 
   ws init [--key abc] [--force]         create local settings without organisation name
-  ws context [status|init|clone <r>|sync|split|switch <r>|pack <key>]
+  ws context [status|init|clone <r>|sync|publish|split|switch <r>|pack <key>]
                                     private memory repo; switch refuses a different audience
                                     split --personal <c>  ADR-0010 copies; never publishes mixed history
                                     pack <key>            allowlist for one project (no sibling clients)
@@ -3824,7 +3898,8 @@ ws — engineering workspace CLI
   ws ide                           copy the shared VS Code defaults into this clone
   ws hooks [status|install|remove]  clock agent time automatically in Claude Code
   ws guard [status|install|remove]  framework hooks that refuse commits/pushes naming a client
-  ws checkpoint [<key>] [-m msg]    commit this agent's own runs and the project's memory (context)
+  ws checkpoint [<key>] [-m msg] [--publish|--no-publish]
+                                    commit context work; auto mode may publish safely
   ws where                         print the workspace root from anywhere
   ws doctor [--ci]                 check repo isolation, ignores, toolchain
   ws scan <key> [--doctor] [--policy f]  Agent-Secure gate; policy is operator-owned

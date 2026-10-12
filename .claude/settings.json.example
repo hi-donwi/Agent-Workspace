@@ -7,7 +7,9 @@
     "project the session belongs to - an hour on the wrong project is worse than none.",
     "",
     "PreCompact and SessionStart(compact) keep this session's run and memory",
-    "continuous across a compaction: checkpoint before the transcript is folded,",
+    "continuous across a compaction: checkpoint locally before the transcript is folded,",
+    "and never publish from the compaction hook. A configured auto mode publishes only",
+    "from the normal stop checkpoint after its remote guards pass.",
     "then remind the agent which project's allowlist still applies after.",
     "See docs/memory-and-runs.md#compaction."
   ],
@@ -28,13 +30,14 @@
     "PreCompact": [
       {
         "hooks": [
-          { "type": "command", "command": ".agents/bin/ws checkpoint || true" }
+          { "type": "command", "command": ".agents/bin/ws checkpoint --no-publish || true" }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
+          { "type": "command", "command": ".agents/bin/ws checkpoint || true" },
           { "type": "command", "command": ".agents/bin/ws agent auto out || true" }
         ]
       }

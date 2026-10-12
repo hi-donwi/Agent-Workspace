@@ -12,6 +12,9 @@ org_key        = example
 # with access to that remote can read every file in it.
 context_dir    = context
 context_remote =
+# Context publication is local-only by default. `auto` lets `ws checkpoint` publish a
+# newly-created context checkpoint after its remote and divergence guards pass.
+context_publish = manual
 
 # Client keys that are this operator's own/public work, not a paying client.
 # When the registry also has other clients, the context is mixed (ADR-0010):
