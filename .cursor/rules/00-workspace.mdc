@@ -24,9 +24,10 @@ not product code.
    organisation name, client document, credential, or absolute path from your machine
    into a tracked file here or into a commit message. Product documents go in the
    product repo; plans, notes, and evidence go in `context/`.
-2. **Commit only where and when the user asked; never push unless asked.** Never bypass
-   hooks with `--no-verify`: the framework's guard hooks refuse any commit or push that
-   names a client.
+2. **Commit only within the repository and paths authorized by the task or workspace
+   workflow. Push only when the user asks or an explicit local policy enables publication
+   for a private context repository.** Never bypass hooks with `--no-verify`: the
+   framework's guard hooks refuse any commit or push that names a client.
 3. **Three repositories, three owners.** The framework (this folder), `context/`, and
    each repo under `projects/` are separate git repositories. Nothing from `context/` or
    `projects/` enters the framework; nothing from the framework or `context/` enters a

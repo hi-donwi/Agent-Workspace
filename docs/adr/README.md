@@ -38,3 +38,4 @@ An ADR with no rejected alternatives records a preference, not a decision.
 | [0019](0019-agent-host-beside-the-control-plane.md) | Agent host beside the control plane | Accepted | 2026-10-02 |
 | [0020](0020-local-approval-record.md) | Local approval record for actions that stay on this machine | Accepted | 2026-10-02 |
 | [0021](0021-llm-endpoints-and-context-egress.md) | LLM endpoints by protocol, and context egress per project | Accepted | 2026-10-02 |
+| [0022](0022-context-checkpoint-publication.md) | Opt-in context checkpoint publication | Accepted | 2026-10-12 |

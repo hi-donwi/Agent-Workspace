@@ -105,6 +105,7 @@ section "init and identity"
 check "ws init writes workspace.conf" ws init --key acme
 exists "$WS/workspace.conf" "workspace.conf exists"
 lacks "$WS/workspace.conf" "org_name" "workspace.conf does not record an organisation name"
+contains "$WS/workspace.conf" "context_publish = manual" "context publication defaults to manual"
 check "ws init is idempotent and refuses to clobber" ws init
 contains "$WS/workspace.conf" "org_key        = acme" "workspace.conf keeps only a technical workspace key"
 
@@ -177,6 +178,20 @@ git -C "$WS/context" push -q -u origin main
 echo "local-note" >> "$WS/context/README.md"
 check "ws context sync succeeds with dirty local files" ws context sync
 contains "$WS/context/README.md" "local-note" "sync restored the stashed local edit"
+check "ws context switch records the publish origin" ws context switch "$CTXBARE"
+check_fails "context publish refuses dirty files" ws context publish
+git -C "$WS/context" add README.md && git -C "$WS/context" commit -qm "docs: publish context fixture"
+check "ws context publish pushes the context repository" ws context publish
+equals "$(git -C "$CTXBARE" rev-parse main)" "$(git -C "$WS/context" rev-parse HEAD)" \
+  "context publish updates only the context remote"
+check_fails "context publish refuses a force option" ws context publish --force
+CTXPEER="$TMP/context-peer"
+git clone -q "$CTXBARE" "$CTXPEER"
+printf 'peer update\n' >> "$CTXPEER/README.md"
+git -C "$CTXPEER" add README.md && git -C "$CTXPEER" commit -qm "docs: peer context update"
+git -C "$CTXPEER" push -q origin main
+check_fails "context publish refuses a remote branch that moved ahead" ws context publish
+check "context sync recovers from the remote update" ws context sync
 CTXBARE2="$TMP/context-b.git"
 git init -q --bare "$CTXBARE2"
 check_fails "ws context switch refuses a different remote" ws context switch "$CTXBARE2"
@@ -250,6 +265,36 @@ exists "$WS/context/memory/projects/api/log.md" "memory is created from template
 contains "$WS/context/registry.tsv" "api" "the registry gains a row"
 contains "$WS/context/registry.tsv" "$(printf 'api\tacme\t')" "the row records its client"
 contains "$WS/context/registry.tsv" "$(printf 'api\tacme\tplatform\t')" "the row records its group"
+
+# Establish a clean, published baseline before testing automatic publication. This is a
+# disposable fixture repository, so committing the setup is intentional.
+git -C "$WS/context" add -A && git -C "$WS/context" commit -qm "test: prepare context publish baseline"
+git -C "$WS/context" push -q origin main
+sed -i.bak -E 's/^[[:space:]]*context_publish[[:space:]]*=.*/context_publish = auto/' "$WS/workspace.conf"
+rm -f "$WS/workspace.conf.bak"
+contains "$WS/workspace.conf" "context_publish = auto" "auto context publication is enabled"
+NO_PUBLISH_REMOTE="$(git -C "$CTXBARE" rev-parse main)"
+check "ws run creates a no-publish override fixture" ws run api "no publish context checkpoint"
+NO_PUBLISH_RUN="$(ls "$WS/context/runs/api")"
+printf '\nno publish checkpoint\n' >> "$WS/context/runs/api/$NO_PUBLISH_RUN/plan.md"
+check "checkpoint no-publish override stays local" ws checkpoint api --no-publish
+equals "$(git -C "$CTXBARE" rev-parse main)" "$NO_PUBLISH_REMOTE" \
+  "no-publish override leaves the context remote unchanged"
+check "explicit publish shares the no-publish checkpoint" ws context publish
+check "ws run creates an auto-publish fixture" ws run api "auto context checkpoint"
+AUTO_RUN=""
+for run_path in "$WS/context/runs/api"/*; do AUTO_RUN="${run_path##*/}"; done
+printf '\nauto publish checkpoint\n' >> "$WS/context/runs/api/$AUTO_RUN/plan.md"
+AUTO_OUT="$(ws checkpoint api -m "checkpoint auto publish" 2>&1)"
+if printf '%s' "$AUTO_OUT" | grep -q 'context published'; then
+  ok "auto context publication pushes the session checkpoint"
+else
+  bad "auto context publication pushes the session checkpoint" "$AUTO_OUT"
+fi
+equals "$(git -C "$CTXBARE" rev-parse main)" "$(git -C "$WS/context" rev-parse HEAD)" \
+  "auto publication reaches the configured context remote"
+sed -i.bak -E 's/^[[:space:]]*context_publish[[:space:]]*=.*/context_publish = manual/' "$WS/workspace.conf"
+rm -f "$WS/workspace.conf.bak"
 
 OTHER="$TMP/other-src"
 mkdir -p "$OTHER" && git -C "$OTHER" init -q
@@ -1159,6 +1204,8 @@ check "ws hooks status works before installing" ws hooks status
 check "ws hooks install"                        ws hooks install
 exists "$WS/.claude/settings.json" "settings.json is written"
 contains "$WS/.claude/settings.json" "ws agent auto" "it wires the auto clock"
+contains "$WS/.claude/settings.json" "checkpoint --no-publish" "compaction checkpoint never publishes"
+contains "$WS/.claude/settings.json" "ws checkpoint || true" "stop checkpoint uses the publication policy"
 
 check "auto out is a no-op when nothing is running" ws agent auto out
 check "auto in from the root records nothing without a default" ws agent auto in
