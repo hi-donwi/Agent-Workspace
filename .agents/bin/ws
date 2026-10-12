@@ -577,7 +577,110 @@ HELP
   fi
 }
 
+# Resolve the agent host (Agent-Control) directory: an explicit override wins, then the
+# registry. There is deliberately no fixed checkout path (ADR-0019 §3): the host is a
+# dependency `ws` installs, not a product it knows the location of.
+agent_host_dir() {
+  local d="${WS_AGENT_HOST_DIR:-}"
+  if [ -z "$d" ]; then
+    local rel; rel="$(reg_get agent-control 2>/dev/null | cut -f4 || true)"
+    [ -n "$rel" ] && d="$ROOT/$rel"
+  fi
+  if [ -n "$d" ] && [ -d "$d" ]; then printf '%s\n' "$d"; fi
+  return 0
+}
+
+web_help() {
+  cat <<'HELP'
+ws web — local workspace control desk
+
+Usage:
+  ws web [--host H] [--port N] [--runtime uidl|vanilla]   Python control desk (default)
+  ws web --agent [--host H] [--port N]                    desk + AI coding agent host
+
+Options:
+  --agent        start the agent host beside the control plane (ADR-0019). Needs Node.
+                 Requires WS_AGENT_HOST_DIR or an `agent-control` row in registry.tsv.
+  --host H       bind host (default: 127.0.0.1)
+  --port N       bind port (default: 9689; 0 picks a free port)
+  --runtime R    UI runtime: uidl (default) or vanilla
+HELP
+}
+
+# ws web --agent (ADR-0019 §4): one entry point, two processes, started and stopped
+# together. The Python control plane runs on an internal loopback port with an internal
+# token the browser never receives; the agent host is the browser-facing server that
+# serves the desk and proxies the control-plane API.
+cmd_web_agent() {
+  local host="127.0.0.1" port="9689" dir
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --host) host="${2:-}"; [ -n "$host" ] || die "--host requires a value"; shift 2 ;;
+      --port) port="${2:-}"; [ -n "$port" ] || die "--port requires a value"; shift 2 ;;
+      -h|--help) web_help; return 0 ;;
+      *) die "usage: ws web --agent [--host H] [--port N]" ;;
+    esac
+  done
+
+  dir="$(agent_host_dir)"
+  [ -n "$dir" ] || die "agent host not found: set WS_AGENT_HOST_DIR or register the agent-control project in registry.tsv"
+  command -v node >/dev/null || die "node >= 22 is required to run the agent host"
+  command -v npm  >/dev/null || die "npm is required to run the agent host"
+
+  if [ ! -d "$dir/node_modules" ]; then
+    c_grn "-> installing agent host dependencies..."
+    (cd "$dir" && npm install) || die "failed to install agent host dependencies"
+  fi
+  if [ ! -f "$dir/dist/index.html" ]; then
+    c_grn "-> building agent host assets..."
+    (cd "$dir" && npm run build) || die "failed to build agent host assets"
+  fi
+
+  local cp_port token desk
+  cp_port="${WS_CONTROL_PORT:-$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')}"
+  token="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+  desk="${WS_UIDL_DIST:-$ROOT/apps/workspace-control/dist}"
+
+  c_grn "-> control plane: 127.0.0.1:$cp_port (internal; token hidden from the browser)"
+  python3 "$ROOT/.agents/bin/ws_web.py" --root "$ROOT" --host 127.0.0.1 --port "$cp_port" --token "$token" >/dev/null 2>&1 &
+  WEB_AGENT_CP_PID=$!
+  trap 'if [ -n "${WEB_AGENT_CP_PID:-}" ]; then kill "$WEB_AGENT_CP_PID" 2>/dev/null; wait "$WEB_AGENT_CP_PID" 2>/dev/null; fi' EXIT INT TERM
+
+  c_grn "-> agent host: http://$host:$port (browser-facing)"
+  ( cd "$dir" && \
+    WS_WORKSPACE_ROOT="$ROOT" \
+    WS_AGENT_MODE=1 \
+    WS_CONTROL_URL="http://127.0.0.1:$cp_port" \
+    WS_CONTROL_TOKEN="$token" \
+    WS_DESK_DIST="$desk" \
+    HOST="$host" PORT="$port" \
+    npm start )
+
+  kill "$WEB_AGENT_CP_PID" 2>/dev/null || true
+  wait "$WEB_AGENT_CP_PID" 2>/dev/null || true
+  WEB_AGENT_CP_PID=""
+  trap - EXIT INT TERM
+}
+
 cmd_web() {
+  local agent=0 arg
+  for arg in "$@"; do
+    [ "$arg" = "--agent" ] && agent=1
+    case "$arg" in
+      -h|--help) web_help; return 0 ;;
+    esac
+  done
+
+  if [ "$agent" = 1 ]; then
+    local -a rest=()
+    while [ $# -gt 0 ]; do
+      if [ "$1" != "--agent" ]; then rest+=("$1"); fi
+      shift
+    done
+    cmd_web_agent "${rest[@]}"
+    return
+  fi
+
   local delegate=0
   for arg in "$@"; do
     case "$arg" in
@@ -3893,8 +3996,9 @@ ws — engineering workspace CLI
   ws hours [--month M] [--project k|--client c] [--rollup]   report both, side by side
   ws usage [--month M] [--project k|--client c]  token usage, from a separate optional tool
   ws chat [--dev] [--port N]        launch Agent-Control AI assistant
-  ws web [--host 127.0.0.1] [--port 0] [--runtime uidl|vanilla|agent-control]
-                                    local web control (UIDL-Runtime by default)
+  ws web [--host 127.0.0.1] [--port 9689] [--runtime uidl|vanilla] [--agent]
+                                    local web control (UIDL-Runtime by default);
+                                    --agent also starts the AI coding agent host
   ws ide                           copy the shared VS Code defaults into this clone
   ws hooks [status|install|remove]  clock agent time automatically in Claude Code
   ws guard [status|install|remove]  framework hooks that refuse commits/pushes naming a client
