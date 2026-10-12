@@ -3773,7 +3773,7 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Run the local Agent Workspace control shell")
     parser.add_argument("--root", default=".")
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", default=0, type=int)
+    parser.add_argument("--port", default=9689, type=int)
     parser.add_argument("--token")
     parser.add_argument(
         "--runtime",
