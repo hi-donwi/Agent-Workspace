@@ -114,8 +114,12 @@ We split the web control into two roles with one owner each.
 - [ ] Control-plane API version and compatibility fixtures
 - [x] `ws web --agent` starts the control plane and the agent host together (internal
       loopback port and token; the host receives `WS_CONTROL_URL`, `WS_CONTROL_TOKEN`,
-      `WS_DESK_DIST`, `WS_AGENT_MODE`, `HOST`, `PORT`). The host still has to consume that
-      contract - serve the desk and proxy the control-plane API - which is product work.
+      `WS_DESK_DIST`, `WS_AGENT_MODE`, `HOST`, `PORT`). The host consumes that contract -
+      serves the desk from `WS_DESK_DIST`, moves its own API to `/api/agent/*`, and
+      proxies the rest to the control plane - shipped as product work.
+- [ ] §8: exchange the one-time code for an `HttpOnly`, `SameSite=Strict` session cookie
+      instead of the `?token=`/bearer model the host ships today
+- [ ] Embed an agent panel in the served desk so `/api/agent/*` is exercised from the desk
 - [ ] `ws chat` resolving the installed package instead of a checkout path
 - [ ] `ws session bind` / `ws agent start` accept the framework key (they fail today)
 - [ ] Mock LLM provider for end-to-end tests, so CI never calls a real endpoint
