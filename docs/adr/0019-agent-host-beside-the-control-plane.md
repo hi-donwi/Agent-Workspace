@@ -125,4 +125,6 @@ We split the web control into two roles with one owner each.
       `?token=` and degrading to a read-only desk when no host answers the origin
 - [ ] `ws chat` resolving the installed package instead of a checkout path
 - [ ] `ws session bind` / `ws agent start` accept the framework key (they fail today)
-- [ ] Mock LLM provider for end-to-end tests, so CI never calls a real endpoint
+- [x] Mock LLM provider for end-to-end tests, so CI never calls a real endpoint: the host
+      resolves a deterministic `mock` wire protocol, and the product's CI spawns the real
+      entry point against a disposable workspace to drive a chat end to end offline
