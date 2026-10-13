@@ -5,6 +5,7 @@ import { pageDocument } from './documents/pages';
 import { editorDocument } from './documents/task-editor';
 import { useWorkspace } from './use-workspace';
 import { useTheme } from './use-theme';
+import { AgentPanel } from './agent/agent-panel';
 import { registry, RenderBoundary, TaskDialog } from './ui';
 
 const navigation: { title: string; items: { view: View; icon: string }[] }[] = [
@@ -24,6 +25,7 @@ export function App() {
   const ws = useWorkspace();
   const theme = useTheme();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [agentOpen, setAgentOpen] = useState(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const workspaceTree = useMemo(() => {
     const clients = new Map<string, Map<string, typeof ws.projects>>();
@@ -51,7 +53,7 @@ export function App() {
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === 'k') { event.preventDefault(); ws.navigate('search'); }
-      if (event.key === 'Escape') setMenuOpen(false);
+      if (event.key === 'Escape') { setMenuOpen(false); setAgentOpen(false); }
     };
     window.addEventListener('keydown', shortcut);
     return () => window.removeEventListener('keydown', shortcut);
@@ -76,7 +78,7 @@ export function App() {
       <div className="sidebar-footer"><div className="theme-switch" role="group" aria-label="Color theme">{(['light', 'dark', 'system'] as const).map(mode => <button key={mode} aria-pressed={theme.preference === mode} onClick={() => theme.changeTheme(mode)}>{mode[0].toUpperCase() + mode.slice(1)}</button>)}</div><p className="local-label"><span /> Local workspace <span className="version">v0.1</span></p></div>
     </aside>
     <div className="main-shell">
-      <header className="topbar"><div className="row"><button className="icon-button menu-toggle" aria-label="Open navigation" aria-expanded={menuOpen} aria-controls="workspace-sidebar" onClick={() => setMenuOpen(value => !value)}><Icon name="menu" className="shell-icon" /></button><span className="breadcrumb">Workspace <span>/</span> <strong>{viewLabels[ws.view]}</strong></span></div><div className="row"><span className="connection"><span /> Loopback</span><a href="http://127.0.0.1:3141" target="_blank" rel="noreferrer" className="agent-control-link" title="Open Agent-Control (ws chat)">✦ Agent Control</a><button className="icon-button" aria-label="Refresh workspace" onClick={ws.refresh} disabled={ws.loading || ws.busy}><Icon name="refresh" className="shell-icon" /></button></div></header>
+      <header className="topbar"><div className="row"><button className="icon-button menu-toggle" aria-label="Open navigation" aria-expanded={menuOpen} aria-controls="workspace-sidebar" onClick={() => setMenuOpen(value => !value)}><Icon name="menu" className="shell-icon" /></button><span className="breadcrumb">Workspace <span>/</span> <strong>{viewLabels[ws.view]}</strong></span></div><div className="row"><button className="button" type="button" aria-expanded={agentOpen} aria-controls="agent-panel" onClick={() => setAgentOpen(value => !value)}>Agent</button><span className="connection"><span /> Loopback</span><a href="http://127.0.0.1:3141" target="_blank" rel="noreferrer" className="agent-control-link" title="Open Agent-Control (ws chat)">✦ Agent Control</a><button className="icon-button" aria-label="Refresh workspace" onClick={ws.refresh} disabled={ws.loading || ws.busy}><Icon name="refresh" className="shell-icon" /></button></div></header>
       <main id="main-content">
         <div className="page-heading"><div><div className="eyebrow">{projectViews.includes(ws.view) && ws.project ? ws.project : 'YOUR WORKSPACE, IN FOCUS'}</div><h1 ref={headingRef} tabIndex={-1}>{viewLabels[ws.view]}</h1><p className="muted">{descriptions[ws.view]}</p></div><span className="page-date">{new Date().toLocaleDateString('en', { weekday: 'short', month: 'short', day: 'numeric' })}</span></div>
         {theme.warning && <p className="notice warning" role="status">{theme.warning}</p>}
@@ -91,5 +93,6 @@ export function App() {
       {ws.notice && <p className="notice success" role="status">{ws.notice}</p>}
       <fieldset className="content-fieldset" disabled={ws.busy} aria-busy={ws.busy}><UIDocumentRenderer {...renderOptions} document={editorDoc} stateStore={editorState.getState()} /></fieldset>
     </TaskDialog>}
+    <AgentPanel open={agentOpen} onClose={() => setAgentOpen(false)} />
   </div>;
 }

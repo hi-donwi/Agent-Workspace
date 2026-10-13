@@ -119,7 +119,10 @@ We split the web control into two roles with one owner each.
       proxies the rest to the control plane - shipped as product work.
 - [ ] §8: exchange the one-time code for an `HttpOnly`, `SameSite=Strict` session cookie
       instead of the `?token=`/bearer model the host ships today
-- [ ] Embed an agent panel in the served desk so `/api/agent/*` is exercised from the desk
+- [x] Embed an agent panel in the served desk so `/api/agent/*` is exercised from the desk:
+      the classic shell gains a toggle to a panel that chats, decides approvals, starts and
+      stops coding sessions, and edits provider config over `/api/agent/*`, using the host's
+      `?token=` and degrading to a read-only desk when no host answers the origin
 - [ ] `ws chat` resolving the installed package instead of a checkout path
 - [ ] `ws session bind` / `ws agent start` accept the framework key (they fail today)
 - [ ] Mock LLM provider for end-to-end tests, so CI never calls a real endpoint
