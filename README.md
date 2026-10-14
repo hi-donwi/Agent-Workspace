@@ -160,8 +160,6 @@ ws sync                                    # pull workspace, report repo state
 ws new <key> <folder> [remote]             # register a new product repo
 ws link <key>                              # pointer + commit guard in a client repo
 ws doctor                                  # health check: isolation, portability, drift
-ws web                                     # local web control via npm UIDL (vanilla fallback)
-ws web --agent                             # same, plus the AI coding agent host (needs Node)
 ws verify <project-key> [--run <run-id>]   # execute an operator-owned verification contract
 ws policy check <key> --action <action>    # classify read/change/approval-required work
 ws eval validate <file>                    # validate synthetic agent scenarios

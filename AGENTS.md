@@ -83,7 +83,7 @@ remote, ignored via `/projects/*`. Not a submodule, and it must not become one.
 - **Never run `git clean -ffxd` at the root**, and push product work the same day: `-ff`
   deletes nested product repos, `.git` and unpushed commits included.
 
-`ws bootstrap` · `ws ide` · `ws doctor` · `ws web` (loopback control UI) · `ws chat`.
+`ws bootstrap` · `ws ide` · `ws doctor` · `ws chat`.
 Detail: [docs/workspace-layout.md](docs/workspace-layout.md).
 
 ## 3. `context/` — the organisation's own repo

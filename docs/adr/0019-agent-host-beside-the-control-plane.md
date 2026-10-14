@@ -1,7 +1,7 @@
 # ADR-0019: Agent host beside the control plane
 
 - **Date:** 2026-10-02
-- **Status:** Accepted
+- **Status:** Accepted (framework web desk removed for redesign)
 - **Deciders:** Workspace maintainer
 - **Project:** workspace
 

@@ -154,7 +154,7 @@ contains "$WS/context/.gitattributes" "merge=union" "the merge strategy is actua
 check_fails "a second context init refuses" ws context init
 git -C "$WS" add -A >/dev/null 2>&1
 equals "$(git -C "$WS" ls-files context | wc -l | tr -d ' ')" "0" "context is never tracked by the framework"
-check "ws web help is available" ws web --help
+check_fails "ws web refuses" ws web
 check "ws context sync is a no-op without a remote" ws context sync
 check_fails "ws context switch without a remote url refuses" ws context switch
 OUT="$(ws doctor --ci 2>&1 || true)"
@@ -1870,44 +1870,6 @@ contains "$GOVERNANCE" 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b
 contains "$GOVERNANCE" 'ws_eval.py validate' "governance validates evaluation template"
 contains "$GOVERNANCE" 'ws_compat.py validate' "governance validates compatibility template"
 lacks "$GOVERNANCE" 'git clone' "governance does not clone private repositories"
-
-section "ws web --agent: one entry, two processes (ADR-0019)"
-
-WEBHELP="$(ws web --help 2>&1 || true)"
-printf '%s' "$WEBHELP" | grep -q -- '--agent' \
-  && ok "ws web help names --agent" \
-  || bad "ws web help names --agent" "$WEBHELP"
-
-# With no agent host pointed at or registered, the flag must refuse with a clear
-# message instead of silently starting the plain Python desk.
-AGENT_ERR="$(env -u WS_AGENT_HOST_DIR "$WS/.agents/bin/ws" web --agent --port 0 2>&1 >/dev/null || true)"
-printf '%s' "$AGENT_ERR" | grep -qi 'agent host' \
-  && ok "ws web --agent refuses when no agent host resolves" \
-  || bad "ws web --agent refuses when no agent host resolves" "$AGENT_ERR"
-
-# A stub agent host and a stub npm prove which process is launched and which
-# environment reaches it, with no Node, no pnpm, and no network. The control
-# plane is a real ws_web.py on an internal loopback port, stopped with the stub.
-AGENTHOST="$TMP/agent-host"
-mkdir -p "$AGENTHOST/node_modules" "$AGENTHOST/dist"
-printf '{"name":"stub-agent-host","scripts":{"start":"node ."}}\n' > "$AGENTHOST/package.json"
-printf '<!doctype html><title>stub</title>\n' > "$AGENTHOST/dist/index.html"
-STUBBIN="$TMP/agent-stub-bin"; mkdir -p "$STUBBIN"
-printf '#!/bin/sh\nexit 0\n' > "$STUBBIN/node"
-cat > "$STUBBIN/npm" <<'STUB'
-#!/bin/sh
-printf 'npm %s\n' "$*" >> "$WS_AGENT_STUB_LOG"
-env | grep -E '^(WS_CONTROL_URL|WS_CONTROL_TOKEN|WS_DESK_DIST|WS_AGENT_MODE|HOST|PORT)=' >> "$WS_AGENT_STUB_LOG"
-exit 0
-STUB
-chmod +x "$STUBBIN/node" "$STUBBIN/npm"
-AGENTLOG="$TMP/agent-stub.log"; : > "$AGENTLOG"
-env PATH="$STUBBIN:$PATH" HOME="$HOME" \
-  WS_AGENT_HOST_DIR="$AGENTHOST" WS_AGENT_STUB_LOG="$AGENTLOG" \
-  "$WS/.agents/bin/ws" web --agent --port 0 >/dev/null 2>&1
-contains "$AGENTLOG" "npm start" "ws web --agent launches the agent host"
-contains "$AGENTLOG" "WS_CONTROL_URL=" "the agent host receives the control-plane URL"
-contains "$AGENTLOG" "WS_CONTROL_TOKEN=" "the agent host receives the internal token"
 
 # ═════════════════════════════════════════════════════════════════════════════
 printf '\n'

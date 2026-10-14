@@ -48,32 +48,11 @@ the code it then clones. An unreachable skills source is a warning, not a failur
 machine on a bad network still ends up with its repositories, and `ws doctor` keeps
 reporting the missing skills until someone syncs them.
 
-## Local web control — `ws web`
+## Local web control
 
-`ws web` is a **loopback** control UI for this clone (board, runs, hours, health). It is
-not a hosted product.
-
-- Default runtime is **UIDL** using npm `uidl-runtime` in this framework's
-  `apps/workspace-control`. Build with `npm ci && npm run build` in that directory.
-- Build lookup prefers `WS_UIDL_DIST`, then `apps/workspace-control/dist`, then a legacy
-  companion under `projects/**/apps/workspace-control/dist`. If no build exists, it
-  **falls back** to the stdlib vanilla UI. Force vanilla with `ws web --runtime vanilla`.
-- The UI supports Light, Dark, and System themes. See
-  [`apps/workspace-control/README.md`](../apps/workspace-control/README.md) for development
-  and browser tests. The server accepts loopback hosts and same-origin browser requests.
-- The process prints a URL with `?token=`. Opening `/` without the query also works: the
-  server injects the token into the companion HTML so it redirects to `/?token=...`. The
-  token is per-process, loopback-only, and is not written to disk.
-- APIs under `/api/` still require `Authorization: Bearer <token>`.
-- For AI-assisted workspace interaction and LLM chat, use `ws web --agent` (ADR-0019) or
-  the standalone `ws chat` (also `ws web --runtime agent-control`). Both run Agent-Control,
-  connecting multi-provider LLMs to the workspace via `ws` tooling.
-- **`ws web --agent`** starts two processes that live and die together: the Python control
-  plane on an internal loopback port with an internal token the browser never receives, and
-  the agent host as the browser-facing server. The agent host is resolved by
-  `WS_AGENT_HOST_DIR`, else the registry key `agent-control` - never a fixed checkout path.
-  It receives `WS_CONTROL_URL`, `WS_CONTROL_TOKEN`, `WS_DESK_DIST`, `WS_AGENT_MODE`, `HOST`,
-  and `PORT`; serving the desk and proxying the control-plane API is the host's job.
+The previous local web control subsystem (`apps/workspace-control` and `ws web`) has been
+removed from the framework to be redesigned from scratch. Standalone companion interaction
+remains accessible via `ws chat`.
 
 ## Open your editor at the workspace root, not at `projects/<x>`
 
