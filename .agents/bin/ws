@@ -1537,7 +1537,26 @@ cmd_task() {
       fi
       task_project "$key"
       python3 "$helper" status "$CONTEXT_DIR" "$key" "$id" "$status" ${5:+"$5"} ;;
-    *) die 'usage: ws task list|add|status <project-key> ...' ;;
+    block|unblock)
+      local usage="usage: ws task $sub <project-key> <task-id>$([ "$sub" = block ] && printf ' "why"') [--revision <rev>]"
+      local key="${1:-}" id="${2:-}" reason="" revision="-"
+      [ -n "$key" ] && [ -n "$id" ] || die "$usage"
+      shift 2
+      if [ "$sub" = block ]; then
+        [ $# -ge 1 ] || die "$usage"
+        reason="$1"; shift
+      fi
+      if [ $# -gt 0 ]; then
+        [ $# -eq 2 ] && [ "$1" = "--revision" ] && [ -n "$2" ] || die "$usage"
+        revision="$2"
+      fi
+      task_project "$key"
+      if [ "$sub" = block ]; then
+        python3 "$helper" block "$CONTEXT_DIR" "$key" "$id" "$revision" "$reason"
+      else
+        python3 "$helper" unblock "$CONTEXT_DIR" "$key" "$id" "$revision"
+      fi ;;
+    *) die 'usage: ws task list|add|status|block|unblock <project-key> ...' ;;
   esac
 }
 
@@ -4188,7 +4207,7 @@ ws — engineering workspace CLI
   ws run <key> "title"             create a new run under .agents/runs/<key>/
   ws log <key> "milestone"         append one row to the project log
   ws note <key> "title" [body|-]   write a project note (notes/<date>-<slug>.md); - reads stdin
-  ws task list|add|status <key> ... operator tasks (tasks/<key>/); status takes --revision
+  ws task list|add|status|block|unblock <key> ... operator tasks (tasks/<key>/); --revision
   ws plan show|status <key> <run> . a run's plan rows; owner only, --operator for the person
   ws sync                          pull the workspace, report product repo state
   ws route [--project k] "task"    show which skills apply (pass --project to skip other clients)
