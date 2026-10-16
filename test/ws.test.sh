@@ -1409,6 +1409,36 @@ check_fails "an unknown priority is refused" ws task add api "x" --priority extr
 check_fails "an unknown project is refused" ws task add nosuch "x"
 check_fails "an empty title is refused" ws task add api "   "
 
+section "run plans"
+# A plan row changes only through its run's owner - or the person that owner is, at the
+# desk, with --operator - and the run rules hold: one row in progress, a reason for a
+# blocked or dropped row, and a refused change when the plan moved since it was read.
+RUNP="$(ws run api "plan edits" 2>&1 | grep -o 'context/runs/api/[^ ]*' | head -1)"
+PRUN="$(basename "$RUNP")"
+PLANF="$WS/$RUNP/plan.md"
+printf '# Plan\n\n| # | Task | Status | Notes |\n|---|---|---|---|\n| 1 | Write the parser | `pending` | |\n| 2 | Wire the route | `pending` | |\n' > "$PLANF"
+check "the owner starts a row" ws plan status api "$PRUN" 1 in_progress
+contains "$PLANF" '| 1 | Write the parser | `in_progress` |' "the row shows its new status"
+check_fails "a second row in progress is refused" ws plan status api "$PRUN" 2 in_progress
+check_fails "blocked without a reason is refused" ws plan status api "$PRUN" 2 blocked
+check "blocked with a reason" ws plan status api "$PRUN" 2 blocked --notes "waits on the API"
+contains "$PLANF" '| 2 | Wire the route | `blocked` | waits on the API |' "the reason is in Notes"
+OUT="$(ws plan status api "$PRUN" 1 done 2>&1)"
+REV="$(printf '%s' "$OUT" | awk '{print $5}')"
+printf '%s' "$OUT" | grep -q "^plan $PRUN 1 done mtime:" \
+  && ok "ws plan status prints run, row, status, and revision" || bad "ws plan status prints run, row, status, and revision" "$OUT"
+check_fails "a stale revision is refused" ws plan status api "$PRUN" 1 pending --revision "mtime:1:size:1"
+check "the revision just read is accepted" ws plan status api "$PRUN" 1 pending --revision "$REV"
+check_fails "another tool of the same person is refused" env WS_AGENT=othertool "$WS/.agents/bin/ws" plan status api "$PRUN" 1 done
+check "the same person as operator" env WS_AGENT=othertool "$WS/.agents/bin/ws" plan status api "$PRUN" 1 done --operator
+check_fails "another person, even as operator" env WS_USER=someone "$WS/.agents/bin/ws" plan status api "$PRUN" 1 pending --operator
+check_fails "an unknown row is refused" ws plan status api "$PRUN" 9 done
+check_fails "an unknown status is refused" ws plan status api "$PRUN" 1 finished
+check_fails "an invalid run id is refused" ws plan status api "../x" 1 done
+SHOW="$(ws plan show api "$PRUN" 2>&1)"
+printf '%s' "$SHOW" | grep -q "^1	done	Write the parser" \
+  && ok "ws plan show lists row, status, task" || bad "ws plan show lists row, status, task" "$SHOW"
+
 section "log and route"
 # Preserve an existing Current focus so parallel agents cannot stomp it.
 sed -i.bak 's/^- \*\*Current focus:\*\*.*/- **Current focus:** keep this line/' \
