@@ -1444,7 +1444,8 @@ section "ws chat starts the desk and its Agent-Brain gateway"
 # endpoint names when it is down, and stop that gateway when the desk stops.
 FAKEHOST="$TMP/fake-agent-control"
 mkdir -p "$FAKEHOST/node_modules" "$FAKEHOST/dist" "$FAKEHOST/src"
-printf '{"name":"fake-host","private":true,"scripts":{"start":"echo HOST_STARTED","build":"echo HOST_BUILT && touch dist/index.html"}}\n' > "$FAKEHOST/package.json"
+# The host runs for a moment, like a real server: the gateway it outlives must get going first.
+printf '{"name":"fake-host","private":true,"scripts":{"start":"sleep 1 && echo HOST_STARTED","build":"echo HOST_BUILT && touch dist/index.html"}}\n' > "$FAKEHOST/package.json"
 touch "$FAKEHOST/index.html" "$FAKEHOST/src/app.tsx"
 sleep 1; touch "$FAKEHOST/dist/index.html"
 FAKEBIN="$TMP/fake-brain-bin"; mkdir -p "$FAKEBIN"
