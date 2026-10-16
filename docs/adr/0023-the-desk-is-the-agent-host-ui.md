@@ -84,7 +84,8 @@ The desk is the default UI of the agent host, and it lives in the host's reposit
 
 - [x] ADR-0012 marked superseded; ADR-0019 notes the single-process layout
 - [x] Desk phase 1 in the host: floor, menu and assistant drawers, read-only API
-- [ ] `ws hooks` emits activity events the floor can show for external agents
+- [x] `ws hooks` emits activity events the floor can show for external agents
+  (`.local/agent/activity/`, `ws agent activity`; see docs/workspace-layout.md)
 - [ ] `ws note` and `ws task` (or retire `.agents/bin/ws_tasks.py`, which has no caller)
 - [ ] Compatibility fixtures for the files the host reads (registry, runs, open clocks)
 - [ ] `ws chat` resolves an installed host instead of a checkout path

@@ -1,10 +1,17 @@
 {
   "$comment": [
-    "Opt-in hooks. Install with `ws hooks install`, remove with `ws hooks remove`.",
+    "Opt-in hooks. Install with `ws hooks install`, remove with `ws hooks remove`. Both merge:",
+    "only commands that run .agents/bin/ws or its helpers are touched; your own settings",
+    "(permissions, other hooks) stay as they are.",
+    "",
     "They record AGENT working hours automatically, so the numbers do not depend on",
     "anyone remembering. Human hours stay manual on purpose: `ws clock in/out`.",
     "`ws agent auto` never fails and records nothing when it cannot tell which",
     "project the session belongs to - an hour on the wrong project is worse than none.",
+    "",
+    "The activity hooks tell the desk what this session is doing (reading, typing,",
+    "running, waiting for you) - a tool name at most, never its input or a prompt",
+    "(ADR-0023). They call the Python helper directly to keep each tool call fast.",
     "",
     "PreCompact and SessionStart(compact) keep this session's run and memory",
     "continuous across a compaction: checkpoint locally before the transcript is folded,",
@@ -17,13 +24,44 @@
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": ".agents/bin/ws agent auto in || true" }
+          { "type": "command", "command": ".agents/bin/ws agent auto in || true" },
+          { "type": "command", "command": "python3 .agents/bin/ws_activity.py hook . || true" }
         ]
       },
       {
         "matcher": "compact",
         "hooks": [
           { "type": "command", "command": ".agents/bin/ws session compact-reminder || true" }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python3 .agents/bin/ws_activity.py hook . || true" }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "python3 .agents/bin/ws_activity.py hook . || true" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "python3 .agents/bin/ws_activity.py hook . || true" }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python3 .agents/bin/ws_activity.py hook . || true" }
         ]
       }
     ],
@@ -38,7 +76,15 @@
       {
         "hooks": [
           { "type": "command", "command": ".agents/bin/ws checkpoint || true" },
-          { "type": "command", "command": ".agents/bin/ws agent auto out || true" }
+          { "type": "command", "command": ".agents/bin/ws agent auto out || true" },
+          { "type": "command", "command": "python3 .agents/bin/ws_activity.py hook . || true" }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python3 .agents/bin/ws_activity.py hook . || true" }
         ]
       }
     ]
