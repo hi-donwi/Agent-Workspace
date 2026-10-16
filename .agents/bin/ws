@@ -1976,7 +1976,8 @@ cmd_agent() {
     clean) shift; agent_clean "$@" ;;
     status) clock_status ;;
     auto) shift; agent_auto "${1:-}" ;;
-    *) die "usage: ws agent [in <key> [note] | start <key> [note] | stop [note] | clean [--apply] [--idle-hours <n>] | out [note] | recover [--all] [--dry-run] [--end <iso>] | status | auto in|out]" ;;
+    activity) shift; agent_activity "$@" ;;
+    *) die "usage: ws agent [in <key> [note] | start <key> [note] | stop [note] | clean [--apply] [--idle-hours <n>] | out [note] | recover [--all] [--dry-run] [--end <iso>] | status | auto in|out | activity <state> [detail]|off]" ;;
   esac
 }
 
@@ -2356,18 +2357,11 @@ PY
 # exit interrupts someone's session. So this never fails, and when it cannot work
 # out which project the work belongs to it records nothing — an hour on the wrong
 # project is worse than an hour on none.
-agent_auto() {
-  local action="${1:-}"
-  case "$action" in in|out) ;; *) return 0 ;; esac
-
-  if [ "$action" = out ]; then
-    [ -f "$(open_file agent)" ] && clock_out agent "auto" >/dev/null 2>&1
-    return 0
-  fi
-
-  [ -f "$(open_file agent)" ] && return 0
-  mkdir -p "$WORKS" 2>/dev/null || return 0
-
+# The project an unattended hook may attribute this session's work to: the session's
+# bind, else the longest registry folder containing the working directory, else
+# `default_project`. Prints nothing when none of them says - an hour or a pose on the
+# wrong project is worse than none.
+auto_project_key() {
   # A bound session has already said which project this conversation is about,
   # and it is the only signal that survives the documented workflow: everyone is
   # told to open the editor at the workspace root, where the directory walk below
@@ -2400,11 +2394,47 @@ agent_auto() {
     done < <(reg_rows 2>/dev/null)
   fi
   [ -n "$key" ] || key="$(conf_get default_project)"
+  printf '%s' "$key"
+}
+
+agent_auto() {
+  local action="${1:-}"
+  case "$action" in in|out) ;; *) return 0 ;; esac
+
+  if [ "$action" = out ]; then
+    [ -f "$(open_file agent)" ] && clock_out agent "auto" >/dev/null 2>&1
+    return 0
+  fi
+
+  [ -f "$(open_file agent)" ] && return 0
+  mkdir -p "$WORKS" 2>/dev/null || return 0
+
+  local key; key="$(auto_project_key)"
   [ -n "$key" ] || return 0
   [ -d "$MEM/$key" ] || return 0
 
   clock_in agent "$key" "auto" >/dev/null 2>&1 || true
   return 0
+}
+
+# What this session is doing right now, for the desk (ADR-0023). One record per
+# session in .local/agent/activity/, replaced on every call; names only, never
+# content. `--hook` is the Claude Code hook path: it reads the event on stdin and
+# never fails. Other agents call `ws agent activity <state> [detail]` themselves.
+ACTIVITY_STATES="idle working thinking reading typing running learning waiting warning"
+agent_activity() {
+  local helper="$ROOT/.agents/bin/ws_activity.py"
+  case "${1:-}" in
+    --hook) python3 "$helper" hook "$ROOT" || true; return 0 ;;
+    off)    python3 "$helper" off "$ROOT" "$(session_id)"; return 0 ;;
+    ""|-h|--help) die "usage: ws agent activity <${ACTIVITY_STATES// /|}> [detail] | off" ;;
+  esac
+  local state="$1"; shift
+  case " $ACTIVITY_STATES " in *" $state "*) ;; *) die "unknown activity state '$state' (one of: $ACTIVITY_STATES)" ;; esac
+  local key; key="$(auto_project_key)"
+  [ -n "$key" ] || die "no project for this session - run ws session bind <key> first"
+  python3 "$helper" set "$ROOT" "$(session_id)" "$key" "$(agent_id)" "$state" "$*" >/dev/null
+  c_grn "-> activity $state on $key"
 }
 
 # Net hours per day: overlapping sessions are merged, so two agents running at
@@ -3963,6 +3993,7 @@ ws — engineering workspace CLI
   ws agent in|out|status            AGENT working hours - never summed with human
   ws agent start <key> [note]       worktree + clock-in + session bind for one parallel agent
   ws agent stop [note]              clock-out and drop this session's lock
+  ws agent activity <state>|off     what this session is doing, for the desk
   ws agent clean [--apply] [--idle-hours N]
                                     list (or remove) idle, clean agent worktrees
   ws hours [--month M] [--project k|--client c] [--rollup]   report both, side by side

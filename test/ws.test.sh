@@ -1294,14 +1294,53 @@ printf '{"permissions":{"allow":["Bash(echo hi)"]},"hooks":{"Stop":[{"hooks":[{"
 check "install merges into an existing settings file" ws hooks install
 contains "$SET" "Bash(echo hi)" "install keeps the operator's permissions"
 contains "$SET" "echo mine" "install keeps the operator's own hooks"
+contains "$SET" "ws_activity.py hook" "install wires the activity hook"
 check "a second install refreshes" ws hooks install
 equals "$(grep -o 'ws agent auto in' "$SET" | wc -l | tr -d ' ')" "1" "a refresh does not duplicate our hooks"
+STATUS="$(ws hooks status 2>&1)"
+printf '%s' "$STATUS" | grep -q 'agent activity hooks: installed' \
+  && ok "status reports the activity hooks" || bad "status reports the activity hooks" "$STATUS"
 check "remove takes only ours out" ws hooks remove
 exists "$SET" "the file stays while it holds the operator's settings"
 lacks "$SET" "ws agent auto" "remove takes the clock hooks out"
+lacks "$SET" "ws_activity.py" "remove takes the activity hooks out"
 contains "$SET" "Bash(echo hi)" "remove keeps the permissions"
 contains "$SET" "echo mine" "remove keeps the operator's own hooks"
 rm -f "$SET"
+
+section "agent activity for the desk"
+# The desk shows what each agent is doing from one small record per session. It holds
+# names only, and a hook that cannot use an event must exit 0 and write nothing.
+ACT="$WS/.local/agent/activity"
+check_fails "activity without a project is refused" env WS_SESSION_ID=actnone "$WS/.agents/bin/ws" agent activity reading
+WS_SESSION_ID=actsess check "a session binds for activity" ws session bind api
+WS_SESSION_ID=actsess check "ws agent activity records a state" ws agent activity reading Read
+exists "$ACT/actsess.json" "one record per session"
+contains "$ACT/actsess.json" '"state": "reading"' "the record holds the state"
+contains "$ACT/actsess.json" '"project": "api"' "the record holds the bound project"
+WS_SESSION_ID=actsess check_fails "an unknown state is refused" ws agent activity dancing
+WS_SESSION_ID=actsess check "ws agent activity off" ws agent activity off
+not_exists "$ACT/actsess.json" "off removes the record"
+
+hook() { (cd "$WS" && printf '%s' "$2" | env CLAUDE_CODE_SESSION_ID="$1" python3 "$WS/.agents/bin/ws_activity.py" hook .); }
+WS_SESSION_ID=hooksess check "a hook session binds" ws session bind api
+check "a tool call is a pose" hook hooksess '{"hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"new_string":"SECRET-INPUT"}}'
+contains "$ACT/hooksess.json" '"state": "typing"' "Edit is typing"
+contains "$ACT/hooksess.json" '"detail": "Edit"' "the detail is the tool name"
+lacks "$ACT/hooksess.json" "SECRET-INPUT" "a tool's input never reaches the record"
+check "a notification raises a hand" hook hooksess '{"hook_event_name":"Notification","message":"Claude needs your permission to use Bash"}'
+contains "$ACT/hooksess.json" '"state": "waiting"' "a notification is waiting"
+check "a prompt is thinking" hook hooksess '{"hook_event_name":"UserPromptSubmit","prompt":"PRIVATE-PROMPT"}'
+lacks "$ACT/hooksess.json" "PRIVATE-PROMPT" "a prompt never reaches the record"
+check "malformed input is ignored, not an error" hook hooksess 'not json'
+contains "$ACT/hooksess.json" '"state": "thinking"' "malformed input leaves the record alone"
+check "session end" hook hooksess '{"hook_event_name":"SessionEnd"}'
+not_exists "$ACT/hooksess.json" "session end removes the record"
+check "an unbound session at the root" hook loosesess '{"hook_event_name":"PreToolUse","tool_name":"Read"}'
+not_exists "$ACT/loosesess.json" "no project, no record"
+check "an unbound session inside a product repo" hook cwdsess "{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Read\",\"cwd\":\"$PROD\"}"
+contains "$ACT/cwdsess.json" '"project": "api"' "the project comes from the registry folder"
+WS_SESSION_ID=actsess ws session clear >/dev/null 2>&1; WS_SESSION_ID=hooksess ws session clear >/dev/null 2>&1
 
 section "log and route"
 # Preserve an existing Current focus so parallel agents cannot stomp it.

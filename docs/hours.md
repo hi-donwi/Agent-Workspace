@@ -65,7 +65,8 @@ the wrong project is worse than an hour on none.
 Hooks run commands by themselves, so they are opt-in: the repository ships
 `.claude/settings.json.example` and installing is a deliberate act. Install and remove
 both merge: they touch only commands that run `.agents/bin/ws` or its helpers, so the
-operator's own permissions and hooks in the same file survive. Human hours stay
+operator's own permissions and hooks in the same file survive. The same install adds the
+desk's activity hooks (see [workspace-layout.md](workspace-layout.md#the-desk)). Human hours stay
 manual on purpose — only the person at the keyboard knows when they actually started.
 
 ## `ws usage` — a third, optional, read-only axis

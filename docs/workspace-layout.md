@@ -55,6 +55,29 @@ menu drawer and an assistant drawer - is the agent host's UI and lives in Agent-
 (ADR-0023). `ws chat` starts it on loopback. The host reads workspace records read-only and
 changes them only through `ws`.
 
+### Agent activity
+
+What each agent session is doing reaches the desk as one record per session,
+`.local/agent/activity/<session>.json`, replaced on every change and removed when the
+session ends:
+
+```json
+{"version": 1, "session": "<session id>", "project": "<key>", "tool": "claude",
+ "state": "reading", "detail": "Read", "at": "2026-10-16T17:40:00+07:00"}
+```
+
+`state` is one of `idle`, `working`, `thinking`, `reading`, `typing`, `running`,
+`learning`, `waiting` (a human is needed), or `warning`. `detail` is a tool name or a
+short system message, never a tool's input, a prompt, or output. The project comes from
+the session's bind, its open clock, the registry folder holding the working directory,
+then `default_project`; without one, nothing is written.
+
+- Claude Code reports by itself once `ws hooks install` has added the activity hooks.
+  They call `.agents/bin/ws_activity.py` directly so each tool call pays one Python
+  start-up, not a `ws` run, and they never fail.
+- Any other agent reports with `ws agent activity <state> [detail]`, and
+  `ws agent activity off` when it stops.
+
 ## Open your editor at the workspace root, not at `projects/<x>`
 
 Agents discover rules by walking up the directory tree. Opening the workspace root makes
