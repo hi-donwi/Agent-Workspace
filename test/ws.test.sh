@@ -1257,6 +1257,20 @@ exists "$WS/.claude/settings.json" "settings.json is written"
 contains "$WS/.claude/settings.json" "ws agent auto" "it wires the auto clock"
 contains "$WS/.claude/settings.json" "checkpoint --no-publish" "compaction checkpoint never publishes"
 contains "$WS/.claude/settings.json" "ws checkpoint || true" "stop checkpoint uses the publication policy"
+# Every turn ends with `auto out` on Stop, so the clock must open on every prompt, not
+# once per session - or every turn after the first goes unrecorded. Session start is
+# not a turn: the time until the first prompt is spent waiting for a person.
+hook_has() { python3 - "$WS/.claude/settings.json" "$1" "$2" <<'PY'
+import json, sys
+settings, event, needle = sys.argv[1:]
+groups = json.load(open(settings)).get("hooks", {}).get(event, [])
+sys.exit(0 if any(needle in h.get("command", "") for g in groups for h in g.get("hooks", [])) else 1)
+PY
+}
+check "each prompt clocks in" hook_has UserPromptSubmit "ws agent auto in"
+check "each turn clocks out" hook_has Stop "ws agent auto out"
+check "the session end clocks out" hook_has SessionEnd "ws agent auto out"
+check_fails "session start does not clock in" hook_has SessionStart "ws agent auto in"
 
 check "auto out is a no-op when nothing is running" ws agent auto out
 check "auto in from the root records nothing without a default" ws agent auto in
