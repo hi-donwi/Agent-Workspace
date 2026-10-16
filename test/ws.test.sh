@@ -1287,6 +1287,22 @@ WS_SESSION_ID=clockbind check "session clear" ws session clear
 check "ws hooks remove" ws hooks remove
 not_exists "$WS/.claude/settings.json" "the hooks are removed again"
 
+# settings.json also holds the operator's own permissions and hooks. An install used
+# to copy the example over it and throw those away; it must merge, and so must remove.
+SET="$WS/.claude/settings.json"
+printf '{"permissions":{"allow":["Bash(echo hi)"]},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo mine"}]}]}}\n' > "$SET"
+check "install merges into an existing settings file" ws hooks install
+contains "$SET" "Bash(echo hi)" "install keeps the operator's permissions"
+contains "$SET" "echo mine" "install keeps the operator's own hooks"
+check "a second install refreshes" ws hooks install
+equals "$(grep -o 'ws agent auto in' "$SET" | wc -l | tr -d ' ')" "1" "a refresh does not duplicate our hooks"
+check "remove takes only ours out" ws hooks remove
+exists "$SET" "the file stays while it holds the operator's settings"
+lacks "$SET" "ws agent auto" "remove takes the clock hooks out"
+contains "$SET" "Bash(echo hi)" "remove keeps the permissions"
+contains "$SET" "echo mine" "remove keeps the operator's own hooks"
+rm -f "$SET"
+
 section "log and route"
 # Preserve an existing Current focus so parallel agents cannot stomp it.
 sed -i.bak 's/^- \*\*Current focus:\*\*.*/- **Current focus:** keep this line/' \

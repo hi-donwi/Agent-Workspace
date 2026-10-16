@@ -51,7 +51,7 @@ Agent hours that depend on an agent remembering are agent hours that go missing.
 Code can keep them itself:
 
 ```bash
-ws hooks install     # writes .claude/settings.json; ws hooks remove undoes it
+ws hooks install     # merges into .claude/settings.json; ws hooks remove takes them out again
 ```
 
 It clocks in on session start and out on stop, against this session's bind first, then
@@ -63,7 +63,9 @@ blocks a session, and when none of the three answers, it records **nothing**. An
 the wrong project is worse than an hour on none.
 
 Hooks run commands by themselves, so they are opt-in: the repository ships
-`.claude/settings.json.example` and installing is a deliberate act. Human hours stay
+`.claude/settings.json.example` and installing is a deliberate act. Install and remove
+both merge: they touch only commands that run `.agents/bin/ws` or its helpers, so the
+operator's own permissions and hooks in the same file survive. Human hours stay
 manual on purpose — only the person at the keyboard knows when they actually started.
 
 ## `ws usage` — a third, optional, read-only axis
