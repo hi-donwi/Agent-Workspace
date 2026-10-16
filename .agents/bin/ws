@@ -3646,10 +3646,14 @@ cmd_guard() {
 # uncommitted on one machine, invisible to every other.
 # Open agent clocks of other sessions on <key>. Clock files are one JSON line each.
 other_agents_on() {
-  local key="$1" mine f n=0
+  local key="$1" mine f n=0 session
   mine="$(open_file agent)"
+  session="$(session_id)"
   for f in "$WORKS"/.open-agent-*.json; do
     [ -f "$f" ] && [ "$f" != "$mine" ] || continue
+    # One session can hold two clocks - `ws agent start` under its tool name, the hook
+    # under the editor's - and it is still one agent, not another one mid-edit.
+    case "$f" in *"-$session.json") continue ;; esac
     grep -qF "\"project\":\"$key\"" "$f" && n=$((n + 1))
   done
   printf '%s' "$n"
@@ -3686,6 +3690,8 @@ cmd_checkpoint() {
       c_dim "  an abandoned clock counts too - ws agent recover closes it"
     else
       paths+=("memory/projects/$key")
+      # Operator tasks belong to the project like its memory, under the same guard.
+      [ -d "$CONTEXT_DIR/tasks/$key" ] && paths+=("tasks/$key")
     fi
   fi
   # This agent's runs, narrowed to the ones this session created when it recorded any.

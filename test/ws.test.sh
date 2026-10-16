@@ -1860,6 +1860,21 @@ WS_SESSION_ID=cpa check "with no other agent on the project, memory is checkpoin
 CP="$(git -C "$WS/context" show --name-only --format= HEAD)"
 printf '%s' "$CP" | grep -q 'memory/projects/otherp/active.md' \
   && ok "the memory file is in that checkpoint" || bad "the memory file is in that checkpoint" "$CP"
+# One session can hold two clocks - one from `ws agent start` under its tool name, one
+# from the editor hook under the editor's - and it is still one agent.
+WS_SESSION_ID=cpa WS_AGENT=editorhook ws agent in otherp "hook clock" >/dev/null 2>&1
+printf '\nSAME_SESSION_EDIT\n' >> "$WS/context/memory/projects/otherp/active.md"
+WS_SESSION_ID=cpa check "a checkpoint with a second clock of the same session" ws checkpoint otherp -m "same session"
+CP="$(git -C "$WS/context" show --name-only --format= HEAD)"
+printf '%s' "$CP" | grep -q 'memory/projects/otherp/active.md' \
+  && ok "this session's own second clock does not hold memory back" || bad "this session's own second clock does not hold memory back" "$CP"
+WS_SESSION_ID=cpa WS_AGENT=editorhook ws agent out >/dev/null 2>&1
+# Operator tasks are the project's like its memory, so they are checkpointed with it.
+WS_SESSION_ID=cpa ws task add otherp "Checkpoint me" >/dev/null 2>&1
+WS_SESSION_ID=cpa check "a checkpoint after adding a task" ws checkpoint otherp -m "tasks"
+CP="$(git -C "$WS/context" show --name-only --format= HEAD)"
+printf '%s' "$CP" | grep -q 'tasks/otherp/task_checkpoint_me.md' \
+  && ok "operator tasks are in the checkpoint" || bad "operator tasks are in the checkpoint" "$CP"
 
 section "hard rules reach every agent"
 # One block, repeated in every tool's entry file: a copy that drifts is a rule
