@@ -540,11 +540,33 @@ def set_status(source: TaskSource, project: str, task_id: str, status: str, expe
     return write_task_document(source, project, replace(task, status=status, updated_at=_now()), expected_revision=task.revision)
 
 
+REASON_MAX = 200
+
+
+def set_blocked(source: TaskSource, project: str, task_id: str, reason: str | None, expected_revision: str | None = None) -> TaskRecord:
+    """Marks a task blocked with `reason`, or unblocks it when `reason` is None."""
+    task = next((t for t in project_tasks(source, project) if t.id == task_id), None)
+    if task is None:
+        raise TaskError(f"no task '{task_id}' in {project}")
+    if expected_revision is not None and expected_revision != task.revision:
+        raise TaskConflict("revision mismatch: the task changed since it was read")
+    if reason is not None:
+        reason = " ".join(reason.split())
+        if not reason:
+            raise TaskError("a blocked task says why")
+        if len(reason) > REASON_MAX:
+            raise TaskError(f"the reason is longer than {REASON_MAX} characters")
+    updated = replace(task, blocked=reason is not None, blocked_reason=reason or "", updated_at=_now())
+    return write_task_document(source, project, updated, expected_revision=task.revision)
+
+
 USAGE = """usage:
   ws_tasks.py scan <source-id> <source-root>
   ws_tasks.py list <context-root> <project>
   ws_tasks.py add <context-root> <project> <title> <priority> <owner>     body on stdin
-  ws_tasks.py status <context-root> <project> <task-id> <status> [<revision>]"""
+  ws_tasks.py status <context-root> <project> <task-id> <status> [<revision>]
+  ws_tasks.py block <context-root> <project> <task-id> <revision|-> <reason>
+  ws_tasks.py unblock <context-root> <project> <task-id> <revision|->"""
 
 
 def main(argv: list[str]) -> int:
@@ -555,7 +577,8 @@ def main(argv: list[str]) -> int:
         return 0
     if len(argv) == 3 and argv[0] == "list":
         for task in project_tasks(load_source("context", argv[1]), argv[2]):
-            print(f"{task.id}\t{task.status}\t{task.priority}\t{task.title}")
+            blocked = f"\t[blocked] {task.blocked_reason}" if task.blocked else ""
+            print(f"{task.id}\t{task.status}\t{task.priority}\t{task.title}{blocked}")
         return 0
     if len(argv) == 6 and argv[0] == "add":
         record = create_task(load_source("context", argv[1]), argv[2], argv[3], argv[4], argv[5], sys.stdin.read())
@@ -565,6 +588,12 @@ def main(argv: list[str]) -> int:
         revision = argv[5] if len(argv) == 6 else None
         record = set_status(load_source("context", argv[1]), argv[2], argv[3], argv[4], revision)
         print(f"task {record.id} {record.status} {record.revision}")
+        return 0
+    if len(argv) in (5, 6) and argv[0] in ("block", "unblock") and (argv[0] == "block") == (len(argv) == 6):
+        revision = None if argv[4] == "-" else argv[4]
+        reason = argv[5] if argv[0] == "block" else None
+        record = set_blocked(load_source("context", argv[1]), argv[2], argv[3], reason, revision)
+        print(f"task {record.id} {'blocked' if record.blocked else 'unblocked'} {record.revision}")
         return 0
     print(USAGE, file=sys.stderr)
     return 2

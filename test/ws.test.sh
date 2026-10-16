@@ -1408,6 +1408,17 @@ check_fails "an unknown task is refused" ws task status api task_nope done
 check_fails "an unknown priority is refused" ws task add api "x" --priority extreme
 check_fails "an unknown project is refused" ws task add nosuch "x"
 check_fails "an empty title is refused" ws task add api "   "
+# A blocker is part of the task, with its reason, so the desk can show what holds what.
+check_fails "blocking without a reason is refused" ws task block api task_write_the_export "  "
+check "a task is blocked with a reason" ws task block api task_write_the_export "waits on the vendor API"
+contains "$TASKS/task_write_the_export.md" "blocked: true" "the task is marked blocked"
+contains "$TASKS/task_write_the_export.md" 'blocked_reason: "waits on the vendor API"' "the reason is kept"
+LIST="$(ws task list api 2>&1)"
+printf '%s' "$LIST" | grep -q "task_write_the_export.*\[blocked\] waits on the vendor API" \
+  && ok "ws task list shows the blocker" || bad "ws task list shows the blocker" "$LIST"
+check_fails "a stale revision cannot unblock" ws task unblock api task_write_the_export --revision "mtime:1:size:1"
+check "unblocking" ws task unblock api task_write_the_export
+contains "$TASKS/task_write_the_export.md" "blocked: false" "the task is free again"
 
 section "run plans"
 # A plan row changes only through its run's owner - or the person that owner is, at the
