@@ -3357,27 +3357,28 @@ PY
 # a command that fires on every session.
 cmd_hooks() {
   local src="$ROOT/.claude/settings.json.example" dst="$ROOT/.claude/settings.json"
+  local helper="$ROOT/.agents/bin/ws_hooks.py"
   case "${1:-status}" in
     status)
-      if [ -f "$dst" ] && grep -q 'ws agent auto' "$dst" 2>/dev/null; then
-        c_grn "agent clock hooks: installed"
-      else
-        c_dim "agent clock hooks: not installed - run: ws hooks install"
-      fi ;;
+      local found; found="$(python3 "$helper" status "$dst" 2>/dev/null || true)"
+      case " $found " in
+        *" clock "*) c_grn "agent clock hooks: installed" ;;
+        *) c_dim "agent clock hooks: not installed - run: ws hooks install" ;;
+      esac
+      case " $found " in
+        *" activity "*) c_grn "agent activity hooks: installed" ;;
+        *) c_dim "agent activity hooks: not installed - run: ws hooks install" ;;
+      esac ;;
     install)
       [ -f "$src" ] || die "no .claude/settings.json.example in this workspace"
-      if [ -f "$dst" ] && ! grep -q 'ws agent auto' "$dst" 2>/dev/null; then
-        c_ylw "! .claude/settings.json exists and is not ours - left untouched"
-        c_dim "  merge the hooks by hand from: ${src#$ROOT/}"
-        return 0
-      fi
-      mkdir -p "$(dirname "$dst")"; cp "$src" "$dst"
-      c_grn "-> agent clock hooks installed"
-      c_dim "   Claude Code now clocks agent time in and out by itself" ;;
+      # A merge, not a copy: the operator's own settings (permissions, other hooks)
+      # live in the same file and must survive an install or a refresh.
+      python3 "$helper" install "$src" "$dst" || die "could not merge hooks into ${dst#$ROOT/}"
+      c_grn "-> agent hooks installed (merged into ${dst#$ROOT/})"
+      c_dim "   Claude Code now runs the hooks in ${src#$ROOT/}" ;;
     remove)
-      if [ -f "$dst" ] && grep -q 'ws agent auto' "$dst" 2>/dev/null; then
-        rm -f "$dst"; c_grn "-> agent clock hooks removed"
-      else c_dim "- nothing of ours to remove"; fi ;;
+      python3 "$helper" remove "$dst" || die "could not remove hooks from ${dst#$ROOT/}"
+      c_grn "-> agent hooks removed" ;;
     *) die "usage: ws hooks [status|install|remove]" ;;
   esac
 }
@@ -3968,7 +3969,7 @@ ws — engineering workspace CLI
   ws usage [--month M] [--project k|--client c]  token usage, from a separate optional tool
   ws chat [--dev] [--port N]        launch Agent-Control AI assistant
   ws ide                           copy the shared VS Code defaults into this clone
-  ws hooks [status|install|remove]  clock agent time automatically in Claude Code
+  ws hooks [status|install|remove]  Claude Code hooks, merged into .claude/settings.json
   ws guard [status|install|remove]  framework hooks that refuse commits/pushes naming a client
   ws checkpoint [<key>] [-m msg] [--publish|--no-publish]
                                     commit context work; auto mode may publish safely
