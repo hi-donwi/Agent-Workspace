@@ -1439,6 +1439,37 @@ SHOW="$(ws plan show api "$PRUN" 2>&1)"
 printf '%s' "$SHOW" | grep -q "^1	done	Write the parser" \
   && ok "ws plan show lists row, status, task" || bad "ws plan show lists row, status, task" "$SHOW"
 
+section "ws chat starts the desk and its Agent-Brain gateway"
+# One command for the desk: rebuild when the UI changed, start the gateway the brain
+# endpoint names when it is down, and stop that gateway when the desk stops.
+FAKEHOST="$TMP/fake-agent-control"
+mkdir -p "$FAKEHOST/node_modules" "$FAKEHOST/dist" "$FAKEHOST/src"
+printf '{"name":"fake-host","private":true,"scripts":{"start":"echo HOST_STARTED","build":"echo HOST_BUILT && touch dist/index.html"}}\n' > "$FAKEHOST/package.json"
+touch "$FAKEHOST/index.html" "$FAKEHOST/src/app.tsx"
+sleep 1; touch "$FAKEHOST/dist/index.html"
+FAKEBIN="$TMP/fake-brain-bin"; mkdir -p "$FAKEBIN"
+printf '#!/bin/sh\necho "$@" > "$BRAIN_ARGS"\necho $$ > "$BRAIN_PID"\nexec sleep 30\n' > "$FAKEBIN/brain"; chmod +x "$FAKEBIN/brain"
+mkdir -p "$WS/.local/agent"
+printf '{"endpoints":{"brain":{"protocol":"openai-chat","baseUrl":"http://127.0.0.1:59871/v1","models":["m"]}}}\n' > "$WS/.local/agent/endpoints.json"
+chat() { (cd "$WS" && WS_AGENT_CONTROL_DIR="$FAKEHOST" BRAIN_ARGS="$TMP/brain.args" BRAIN_PID="$TMP/brain.pid" PATH="$FAKEBIN:$PATH" "$WS/.agents/bin/ws" chat "$@" 2>&1); }
+if command -v node >/dev/null && command -v npm >/dev/null; then
+  OUT="$(chat)"
+  printf '%s' "$OUT" | grep -q HOST_STARTED && ok "ws chat starts the agent host" || bad "ws chat starts the agent host" "$OUT"
+  printf '%s' "$OUT" | grep -q HOST_BUILT && bad "a current build is not rebuilt" "$OUT" || ok "a current build is not rebuilt"
+  contains "$TMP/brain.args" "serve --cloud-only --port 59871" "the gateway starts on the brain endpoint's port"
+  sleep 1
+  kill -0 "$(cat "$TMP/brain.pid")" 2>/dev/null && bad "the gateway stops with the desk" || ok "the gateway stops with the desk"
+  rm -f "$TMP/brain.args"
+  OUT="$(chat --no-brain)"
+  not_exists "$TMP/brain.args" "--no-brain leaves the gateway alone"
+  sleep 1; touch "$FAKEHOST/src/app.tsx"
+  OUT="$(chat --no-brain)"
+  printf '%s' "$OUT" | grep -q HOST_BUILT && ok "a changed UI source triggers a rebuild" || bad "a changed UI source triggers a rebuild" "$OUT"
+else
+  ok "ws chat cases skipped: node and npm are not installed"
+fi
+rm -f "$WS/.local/agent/endpoints.json"
+
 section "log and route"
 # Preserve an existing Current focus so parallel agents cannot stomp it.
 sed -i.bak 's/^- \*\*Current focus:\*\*.*/- **Current focus:** keep this line/' \

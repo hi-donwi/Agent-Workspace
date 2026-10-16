@@ -513,30 +513,56 @@ context_switch() {
 
 # ─────────────────────────────────────────────────────────────── chat / agent-control
 # AI-powered workspace assistant and control web UI.
+# The loopback port of an Agent-Brain gateway the agent host is configured to use: the
+# `brain` endpoint in .local/agent/endpoints.json. Prints nothing when there is none.
+chat_brain_port() {
+  local f="$ROOT/.local/agent/endpoints.json"
+  [ -f "$f" ] || return 0
+  python3 - "$f" <<'PY' 2>/dev/null || true
+import json, sys, urllib.parse
+endpoint = (json.load(open(sys.argv[1])).get("endpoints") or {}).get("brain") or {}
+url = urllib.parse.urlparse(endpoint.get("baseUrl", ""))
+if url.hostname in ("127.0.0.1", "localhost", "::1") and url.port:
+    print(url.port)
+PY
+}
+
+# One command for the desk: install and build the agent host when needed, start the
+# Agent-Brain gateway its `brain` endpoint points at (and stop it with the desk), then run
+# the host on loopback.
 cmd_chat() {
-  local dev=0 port="" build=0 host="127.0.0.1"
+  local dev=0 port="" build=0 host="127.0.0.1" brain=auto
+  local usage="usage: ws chat [--dev] [--port N] [--host H] [--build] [--brain|--no-brain]"
   while [ $# -gt 0 ]; do
     case "$1" in
       --dev) dev=1; shift ;;
       --build) build=1; shift ;;
+      --brain) brain=on; shift ;;
+      --no-brain) brain=off; shift ;;
       --port) port="${2:-}"; [ -n "$port" ] || die "--port requires a value"; shift 2 ;;
       --host) host="${2:-}"; [ -n "$host" ] || die "--host requires a value"; shift 2 ;;
       --help|-h)
         cat <<'HELP'
-ws chat — AI-powered workspace assistant and control interface
+ws chat — the desk: Agent-Control on loopback, with its Agent-Brain gateway
 
 Usage:
   ws chat [options]
 
 Options:
-  --dev       run in Vite + Node dev mode with hot module reloading
-  --port N    specify port (default: 3141)
-  --host H    specify host (default: 127.0.0.1)
-  --build     rebuild frontend assets before starting
+  --dev        run in Vite + Node dev mode with hot module reloading
+  --port N     specify port (default: 3141)
+  --host H     specify host (default: 127.0.0.1)
+  --build      rebuild the UI even when it looks current
+  --brain      start an Agent-Brain gateway (port 52140 unless an endpoint names one)
+  --no-brain   do not start the Agent-Brain gateway
+
+The UI is rebuilt when its sources are newer than the build. When the `brain` endpoint in
+.local/agent/endpoints.json points at a loopback gateway that is not running, `brain serve
+--cloud-only` is started on its port and stopped when the desk stops.
 HELP
         return 0
         ;;
-      *) die "usage: ws chat [--dev] [--port N] [--host H] [--build]" ;;
+      *) die "$usage" ;;
     esac
   done
 
@@ -549,20 +575,53 @@ HELP
       ctrl_dir="$ROOT/projects/donwi/public/Agent-Control"
     fi
   fi
-
   [ -n "$ctrl_dir" ] && [ -d "$ctrl_dir" ] || die "agent-control not found. Register it in registry.tsv or set WS_AGENT_CONTROL_DIR"
 
   command -v node >/dev/null || die "node is required to run agent-control (Node.js >= 22)"
-  command -v npm >/dev/null || die "npm is required to run agent-control"
+  # The host's own package manager: its lockfile says which.
+  local pm=npm
+  if [ -f "$ctrl_dir/pnpm-lock.yaml" ]; then
+    if command -v pnpm >/dev/null; then pm=pnpm
+    elif command -v corepack >/dev/null; then pm="corepack pnpm"
+    else die "agent-control uses pnpm: install it, or enable corepack"; fi
+  fi
+  command -v "${pm%% *}" >/dev/null || die "$pm is required to run agent-control"
 
   if [ ! -d "$ctrl_dir/node_modules" ]; then
     c_grn "-> installing dependencies in agent-control..."
-    (cd "$ctrl_dir" && npm install) || die "failed to install dependencies"
+    if [ "$pm" = npm ]; then (cd "$ctrl_dir" && npm install) || die "failed to install dependencies"
+    else (cd "$ctrl_dir" && $pm install --frozen-lockfile) || die "failed to install dependencies"; fi
   fi
 
-  if [ "$build" = 1 ] || { [ "$dev" = 0 ] && [ ! -f "$ctrl_dir/dist/index.html" ]; }; then
-    c_grn "-> building agent-control assets..."
-    (cd "$ctrl_dir" && npm run build) || die "build failed"
+  if [ "$dev" = 0 ]; then
+    local stale=""
+    [ -f "$ctrl_dir/dist/index.html" ] && stale="$(find "$ctrl_dir/src" "$ctrl_dir/index.html" -newer "$ctrl_dir/dist/index.html" -print 2>/dev/null | head -1)"
+    if [ "$build" = 1 ] || [ ! -f "$ctrl_dir/dist/index.html" ] || [ -n "$stale" ]; then
+      c_grn "-> building agent-control assets..."
+      (cd "$ctrl_dir" && $pm run build) || die "build failed"
+    fi
+  fi
+
+  # The gateway is a child of this command only when this command started it.
+  local brain_port="" brain_pid=""
+  if [ "$brain" != off ]; then
+    brain_port="$(chat_brain_port)"
+    [ "$brain" = on ] && [ -z "$brain_port" ] && brain_port=52140
+  fi
+  if [ -n "$brain_port" ]; then
+    if curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$brain_port/healthz"; then
+      c_dim "Agent-Brain gateway already running on port $brain_port"
+    elif command -v brain >/dev/null; then
+      c_grn "-> starting the Agent-Brain gateway: brain serve --cloud-only --port $brain_port"
+      mkdir -p "$ROOT/.local/agent"
+      brain serve --cloud-only --port "$brain_port" > "$ROOT/.local/agent/brain-serve.log" 2>&1 &
+      brain_pid=$!
+      # The PID is written into the trap: the local variable is gone by the time ws exits.
+      trap "kill $brain_pid 2>/dev/null" EXIT
+      trap 'exit 130' INT TERM
+    else
+      c_ylw "! the brain endpoint is configured, but the brain command is not on PATH - chats through it will fail"
+    fi
   fi
 
   c_grn "-> launching Agent-Control..."
@@ -571,9 +630,9 @@ HELP
   [ -n "$host" ] && export HOST="$host"
 
   if [ "$dev" = 1 ]; then
-    (cd "$ctrl_dir" && npm run dev)
+    (cd "$ctrl_dir" && $pm run dev)
   else
-    (cd "$ctrl_dir" && npm start)
+    (cd "$ctrl_dir" && $pm start)
   fi
 }
 
@@ -4145,7 +4204,7 @@ ws — engineering workspace CLI
                                     list (or remove) idle, clean agent worktrees
   ws hours [--month M] [--project k|--client c] [--rollup]   report both, side by side
   ws usage [--month M] [--project k|--client c]  token usage, from a separate optional tool
-  ws chat [--dev] [--port N]        launch Agent-Control AI assistant
+  ws chat [--dev] [--port N] [--no-brain]  the desk (Agent-Control) and its Agent-Brain gateway
   ws ide                           copy the shared VS Code defaults into this clone
   ws hooks [status|install|remove]  Claude Code hooks, merged into .claude/settings.json
   ws guard [status|install|remove]  framework hooks that refuse commits/pushes naming a client
