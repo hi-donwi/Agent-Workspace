@@ -54,7 +54,9 @@ Code can keep them itself:
 ws hooks install     # merges into .claude/settings.json; ws hooks remove takes them out again
 ```
 
-It clocks in on session start and out on stop, against this session's bind first, then
+It clocks in when a prompt is submitted and out when the turn stops or the session ends,
+so the minutes a session sits waiting for its person are not agent time. It attributes them
+to this session's bind first, then
 the product repo the working directory is in, then `workspace.conf`'s `default_project`.
 The bind comes first because §4 tells everyone to open the editor at the workspace root,
 where the directory is inside no product repo at all — without it the hook would record
