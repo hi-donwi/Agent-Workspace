@@ -153,6 +153,7 @@ ws skills available                        # what the skills repository offers
 ws skills add code-review                  # take one, pinned to a commit
 ws run <project-key> "task title"          # start a run (multi-session work)
 ws log <project-key> "milestone"           # append to the project log
+ws note <project-key> "title" "body"       # keep a project note (body - reads stdin)
 ws clock in <project-key> "what you'll do" # human hours
 ws agent in <project-key> "what it'll do"  # agent hours, counted separately
 ws hours --month 2026-09                   # both, side by side

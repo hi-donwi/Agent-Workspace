@@ -60,6 +60,7 @@ that is free or expensive.
 | `runs/<key>/<run>/*` | One owner per run | Only the owner edits `brief`/`plan`/`progress`/`decisions`/`handoff` |
 | `runs/<key>/<run>/contributors/<id>.md` | One file per agent | A parallel agent writes only its own file |
 | `memory/projects/<key>/log.md` | Append-only | Use `ws log <key> "milestone"`. Merges by union — both entries survive |
+| `memory/projects/<key>/notes/<date>-<slug>.md` | One file per note | Use `ws note <key> "title" ["body" \| -]`. A new note never overwrites another (`-2`, `-3`, … on a clash); edit your own notes only |
 | `context/registry.tsv` | Append-only | One row per project. Merges by union; `ws doctor` catches duplicate keys |
 | `memory/projects/index.md` | Shared, rare | Re-read, then add your row. Never rewrite rows you did not create |
 | `memory/projects/<key>/decisions.md` | Shared, rare | Same. A conflict here means two people changed the same fact — resolve it by reading both sides |

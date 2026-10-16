@@ -1356,6 +1356,29 @@ check "an unbound session inside a product repo" hook cwdsess "{\"hook_event_nam
 contains "$ACT/cwdsess.json" '"project": "api"' "the project comes from the registry folder"
 WS_SESSION_ID=actsess ws session clear >/dev/null 2>&1; WS_SESSION_ID=hooksess ws session clear >/dev/null 2>&1
 
+section "notes"
+# A note is the one thing the desk writes first, so its file name, its content, and its
+# refusals are fixed here; the desk only ever calls this command.
+NOTES="$WS/context/memory/projects/api/notes"
+TODAY="$(date +%F)"
+OUT="$(ws note api "First idea" "Try a CSV first." 2>&1)"
+exists "$NOTES/$TODAY-first-idea.md" "ws note writes notes/<date>-<slug>.md"
+printf '%s' "$OUT" | grep -q "^note context/memory/projects/api/notes/$TODAY-first-idea.md$" \
+  && ok "it prints the note's path" || bad "it prints the note's path" "$OUT"
+contains "$NOTES/$TODAY-first-idea.md" "# First idea" "the title is the heading"
+contains "$NOTES/$TODAY-first-idea.md" "Try a CSV first." "the body follows"
+contains "$NOTES/$TODAY-first-idea.md" "<!-- ws note " "who and when stay out of the rendered note"
+check "the same title again" ws note api "First idea" "second"
+exists "$NOTES/$TODAY-first-idea-2.md" "a second note never overwrites the first"
+check "a body from stdin" sh -c 'printf "line one\nline two\n" | "$1" note api "Multi line" -' _ "$WS/.agents/bin/ws"
+contains "$NOTES/$TODAY-multi-line.md" "line two" "stdin keeps every line"
+check "a title is one line" ws note api "$(printf 'Split\ntitle')"
+contains "$NOTES/$TODAY-split-title.md" "# Split title" "line breaks in a title become spaces"
+check_fails "an unknown project is refused" ws note nosuch "x"
+check_fails "an invalid key is refused" ws note "../api" "x"
+check_fails "an empty title is refused" ws note api "   "
+check_fails "a fourth argument is refused" ws note api "t" "b" "extra"
+
 section "log and route"
 # Preserve an existing Current focus so parallel agents cannot stomp it.
 sed -i.bak 's/^- \*\*Current focus:\*\*.*/- **Current focus:** keep this line/' \
