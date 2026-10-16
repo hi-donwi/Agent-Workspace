@@ -48,11 +48,12 @@ the code it then clones. An unreachable skills source is a warning, not a failur
 machine on a bad network still ends up with its repositories, and `ws doctor` keeps
 reporting the missing skills until someone syncs them.
 
-## Local web control
+## The desk
 
-The previous local web control subsystem (`apps/workspace-control` and `ws web`) has been
-removed from the framework to be redesigned from scratch. Standalone companion interaction
-remains accessible via `ws chat`.
+The framework has no web UI. The desk - a floor of clients, projects, and agents with a
+menu drawer and an assistant drawer - is the agent host's UI and lives in Agent-Control
+(ADR-0023). `ws chat` starts it on loopback. The host reads workspace records read-only and
+changes them only through `ws`.
 
 ## Open your editor at the workspace root, not at `projects/<x>`
 

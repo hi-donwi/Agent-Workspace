@@ -1,7 +1,7 @@
 # ADR-0012: Framework-owned web control using the published UIDL runtime
 
 - **Date:** 2026-09-21
-- **Status:** Superseded — web control subsystem removed from framework for redesign
+- **Status:** Superseded by ADR-0023 — the desk is the agent host's UI, outside the framework
 - **Deciders:** Workspace maintainer (requested npm UIDL redesign)
 - **Project:** workspace
 
