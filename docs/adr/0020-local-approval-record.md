@@ -34,7 +34,7 @@ governs those, through protected branches and environments.
 How each ADR-0017 requirement is met:
 
 1. **Identity.** The approver is the operator holding the desk's session cookie on
-   loopback (ADR-0019). That is the OS user who started `ws web`, recorded as the human
+   loopback (ADR-0019). That is the OS user who started the host (`ws chat`, ADR-0023), recorded as the human
    ID that `ws` already uses for clocks. Agent processes never receive the cookie or the
    internal control token.
 2. **Binding.** A request has a random ID. It names the project key, agent session ID,

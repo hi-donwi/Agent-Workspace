@@ -1,7 +1,8 @@
 # ADR-0019: Agent host beside the control plane
 
 - **Date:** 2026-10-02
-- **Status:** Accepted
+- **Status:** Accepted; the two-process layout (§1, §4) is revised by ADR-0023 - the host is
+  the only process and serves the desk itself
 - **Deciders:** Workspace maintainer
 - **Project:** workspace
 

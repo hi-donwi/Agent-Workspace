@@ -46,9 +46,6 @@
 Thumbs.db
 __pycache__/
 node_modules/
-/apps/workspace-control/dist/
-/apps/workspace-control/test-results/
-/apps/workspace-control/playwright-report/
 *.py[cod]
 .idea/
 *.iml
