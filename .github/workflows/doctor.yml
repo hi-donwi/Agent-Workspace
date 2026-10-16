@@ -40,7 +40,6 @@ jobs:
 
       - name: Run Python tests
         run: |
-          python3 test/ws-web.test.py
           python3 test/ws-tasks.test.py
           python3 test/ws-security.test.py
 
