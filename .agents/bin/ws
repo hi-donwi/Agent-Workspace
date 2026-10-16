@@ -1434,6 +1434,54 @@ cmd_note() {
   printf 'note %s\n' "${file#$ROOT/}"
 }
 
+# ─────────────────────────────────────────────────────────────── task
+# Operator tasks: <context>/tasks/<key>/task_<slug>.md, schema 1 (ws_tasks.py). They are
+# separate from a run's plan rows, which only the run's owner edits. A status change may
+# carry the revision the caller read; it is refused when the file changed since.
+task_project() {
+  validate_key "$1"
+  [ -d "$MEM/$1" ] || die "project '$1' has no memory - is the key right?"
+}
+
+cmd_task() {
+  local helper="$ROOT/.agents/bin/ws_tasks.py" sub="${1:-}"
+  shift || true
+  case "$sub" in
+    list)
+      [ $# -eq 1 ] || die 'usage: ws task list <project-key>'
+      task_project "$1"
+      python3 "$helper" list "$CONTEXT_DIR" "$1" ;;
+    add)
+      local usage='usage: ws task add <project-key> "title" [--priority low|normal|high|urgent] [-]'
+      [ $# -ge 2 ] || die "$usage"
+      local key="$1" title="$2" priority=normal stdin=0
+      shift 2
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --priority) [ -n "${2:-}" ] || die "$usage"; priority="$2"; shift 2 ;;
+          -) stdin=1; shift ;;
+          *) die "$usage" ;;
+        esac
+      done
+      task_project "$key"
+      if [ "$stdin" = 1 ]; then
+        python3 "$helper" add "$CONTEXT_DIR" "$key" "$title" "$priority" "$(owner_id)"
+      else
+        python3 "$helper" add "$CONTEXT_DIR" "$key" "$title" "$priority" "$(owner_id)" < /dev/null
+      fi ;;
+    status)
+      local usage='usage: ws task status <project-key> <task-id> <status> [--revision <rev>]'
+      [ $# -eq 3 ] || [ $# -eq 5 ] || die "$usage"
+      local key="$1" id="$2" status="$3"
+      if [ $# -eq 5 ]; then
+        [ "$4" = "--revision" ] && [ -n "$5" ] || die "$usage"
+      fi
+      task_project "$key"
+      python3 "$helper" status "$CONTEXT_DIR" "$key" "$id" "$status" ${5:+"$5"} ;;
+    *) die 'usage: ws task list|add|status <project-key> ...' ;;
+  esac
+}
+
 # ─────────────────────────────────────────────────────────────── sync
 # Pulling before editing shared memory is the single biggest conflict reducer.
 # Product repos are only reported on, never touched: rebasing someone else's
@@ -4018,6 +4066,7 @@ ws — engineering workspace CLI
   ws run <key> "title"             create a new run under .agents/runs/<key>/
   ws log <key> "milestone"         append one row to the project log
   ws note <key> "title" [body|-]   write a project note (notes/<date>-<slug>.md); - reads stdin
+  ws task list|add|status <key> ... operator tasks (tasks/<key>/); status takes --revision
   ws sync                          pull the workspace, report product repo state
   ws route [--project k] "task"    show which skills apply (pass --project to skip other clients)
   ws session bind <key> [--run id] bind this agent session to one project; writes a context pack
@@ -4101,6 +4150,7 @@ case "${1:-help}" in
   chat|ai|control) shift; cmd_chat "$@" ;;
   log) shift; cmd_log "$@" ;;
   note) shift; cmd_note "$@" ;;
+  task) shift; cmd_task "$@" ;;
   sync) shift; cmd_sync "$@" ;;
   route) shift; cmd_route "$@" ;;
   skills) shift; cmd_skills "$@" ;;
