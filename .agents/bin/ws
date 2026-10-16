@@ -1399,6 +1399,41 @@ cmd_log() {
   c_grn "-> appended to $f"
 }
 
+# ─────────────────────────────────────────────────────────────── note
+# A note is a small Markdown file a person or an agent keeps about one project:
+#   <context>/memory/projects/<key>/notes/<YYYY-MM-DD>-<slug>.md
+# Title as the heading, the body under it, and who and when as an HTML comment on the
+# last line, so a rendered note shows only what was written. A body of `-` is read from
+# stdin: that is how the desk sends a multi-line note without putting it in an argument.
+NOTE_TITLE_MAX=120
+NOTE_BODY_MAX=65536
+cmd_note() {
+  local usage='usage: ws note <project-key> "title" ["body" | -]'
+  [ $# -ge 2 ] && [ $# -le 3 ] || die "$usage"
+  local key="$1" title="$2" body="${3:-}"
+  validate_key "$key"
+  [ -d "$MEM/$key" ] || die "project '$key' has no memory - is the key right?"
+  title="$(printf '%s' "$title" | tr '\r\n\t' '   ' | sed -E 's/  +/ /g; s/^ //; s/ $//')"
+  [ -n "$title" ] || die "a note needs a title"
+  [ "${#title}" -le "$NOTE_TITLE_MAX" ] || die "the title is longer than $NOTE_TITLE_MAX characters"
+  [ "$body" = "-" ] && body="$(cat)"
+  [ "$(printf '%s' "$body" | wc -c | tr -d ' ')" -le "$NOTE_BODY_MAX" ] || die "the body is larger than $NOTE_BODY_MAX bytes"
+
+  local dir="$MEM/$key/notes" base file n=1
+  base="$(date +%F)-$(slug "$title")"
+  [ "$base" != "$(date +%F)-" ] || base="$(date +%F)-note"
+  mkdir -p "$dir"
+  file="$dir/$base.md"
+  # noclobber makes the claim atomic: two notes with one title in one day never collide.
+  until ( set -C; : > "$file" ) 2>/dev/null; do n=$((n+1)); file="$dir/$base-$n.md"; done
+  {
+    printf '# %s\n' "$title"
+    [ -n "$body" ] && printf '\n%s\n' "$body"
+    printf '\n<!-- ws note %s %s -->\n' "$(now_iso)" "$(owner_id)"
+  } > "$file"
+  printf 'note %s\n' "${file#$ROOT/}"
+}
+
 # ─────────────────────────────────────────────────────────────── sync
 # Pulling before editing shared memory is the single biggest conflict reducer.
 # Product repos are only reported on, never touched: rebasing someone else's
@@ -3982,6 +4017,7 @@ ws — engineering workspace CLI
   ws unlink <key>                  remove the pointer
   ws run <key> "title"             create a new run under .agents/runs/<key>/
   ws log <key> "milestone"         append one row to the project log
+  ws note <key> "title" [body|-]   write a project note (notes/<date>-<slug>.md); - reads stdin
   ws sync                          pull the workspace, report product repo state
   ws route [--project k] "task"    show which skills apply (pass --project to skip other clients)
   ws session bind <key> [--run id] bind this agent session to one project; writes a context pack
@@ -4064,6 +4100,7 @@ case "${1:-help}" in
   usage) shift; cmd_usage "$@" ;;
   chat|ai|control) shift; cmd_chat "$@" ;;
   log) shift; cmd_log "$@" ;;
+  note) shift; cmd_note "$@" ;;
   sync) shift; cmd_sync "$@" ;;
   route) shift; cmd_route "$@" ;;
   skills) shift; cmd_skills "$@" ;;
