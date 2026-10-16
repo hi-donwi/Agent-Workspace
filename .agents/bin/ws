@@ -2921,7 +2921,9 @@ identifier_alternation() {
 # context/: it is ignored, so git never checks it out there. What must know every
 # private name - the guard - borrows the primary clone's registry.
 adopt_primary_context() {
-  [ -d "$CONTEXT_DIR" ] && return 0
+  # A context is a repository with a registry. An empty folder - one a hook made by
+  # running ws inside a worktree - must not stand in for it, or the guard checks nothing.
+  [ -d "$CONTEXT_DIR" ] && { [ -f "$CONTEXT_DIR/registry.tsv" ] || [ -e "$CONTEXT_DIR/.git" ]; } && return 0
   local common primary name
   common="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 0
   primary="$(dirname "$common")"

@@ -2000,6 +2000,10 @@ WT="$WS/.local/worktrees/workspace/guard"
 git -C "$WS" worktree add -q -b guard-wt "$WT" HEAD 2>/dev/null
 printf 'acme in a worktree\n' > "$WT/wt-bad.md"; git -C "$WT" add wt-bad.md
 check_fails "the guard in a framework worktree still knows every client" git -C "$WT" commit -qm "docs: wt"
+# A hook run inside the worktree can leave an empty context/ there; it must not hide the
+# primary's registry from the guard.
+mkdir -p "$WT/context/works"
+check_fails "an empty context folder in a worktree does not switch the guard off" git -C "$WT" commit -qm "docs: wt again"
 git -C "$WS" worktree remove --force "$WT"; git -C "$WS" branch -q -D guard-wt
 
 # Doctor reports what the guard cannot see from inside git.
