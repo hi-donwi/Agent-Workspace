@@ -1379,6 +1379,36 @@ check_fails "an invalid key is refused" ws note "../api" "x"
 check_fails "an empty title is refused" ws note api "   "
 check_fails "a fourth argument is refused" ws note api "t" "b" "extra"
 
+section "operator tasks"
+# The desk's second write. A task is the operator's, not a run's: a run's plan rows stay
+# with its owner. A status change carries the revision the desk read, so two editors
+# cannot silently overwrite each other.
+TASKS="$WS/context/tasks/api"
+OUT="$(ws task add api "Write the export" --priority high 2>&1)"
+printf '%s' "$OUT" | grep -q '^task task_write_the_export backlog mtime:' \
+  && ok "ws task add prints the id, status, and revision" || bad "ws task add prints the id, status, and revision" "$OUT"
+exists "$TASKS/task_write_the_export.md" "the task is a file under tasks/<key>/"
+contains "$TASKS/task_write_the_export.md" "priority: high" "the priority is kept"
+contains "$TASKS/task_write_the_export.md" "status: backlog" "a new task starts in backlog"
+check "the same title again" ws task add api "Write the export"
+exists "$TASKS/task_write_the_export_2.md" "a second task never overwrites the first"
+check "a body from stdin" sh -c 'printf "Details here\n" | "$1" task add api "With body" -' _ "$WS/.agents/bin/ws"
+contains "$TASKS/task_with_body.md" "Details here" "stdin becomes the body"
+LIST="$(ws task list api 2>&1)"
+printf '%s' "$LIST" | grep -q "task_write_the_export	backlog	high	Write the export" \
+  && ok "ws task list shows id, status, priority, title" || bad "ws task list shows id, status, priority, title" "$LIST"
+REV="$(printf '%s' "$OUT" | awk '{print $4}')"
+check "a status change with the revision it read" ws task status api task_write_the_export in_progress --revision "$REV"
+contains "$TASKS/task_write_the_export.md" "status: in_progress" "the status changed"
+check_fails "a stale revision is refused" ws task status api task_write_the_export done --revision "$REV"
+contains "$TASKS/task_write_the_export.md" "status: in_progress" "a refused change leaves the task alone"
+check "a status change without a revision" ws task status api task_write_the_export done
+check_fails "an unknown status is refused" ws task status api task_write_the_export finished
+check_fails "an unknown task is refused" ws task status api task_nope done
+check_fails "an unknown priority is refused" ws task add api "x" --priority extreme
+check_fails "an unknown project is refused" ws task add nosuch "x"
+check_fails "an empty title is refused" ws task add api "   "
+
 section "log and route"
 # Preserve an existing Current focus so parallel agents cannot stomp it.
 sed -i.bak 's/^- \*\*Current focus:\*\*.*/- **Current focus:** keep this line/' \

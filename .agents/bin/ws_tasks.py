@@ -7,7 +7,8 @@ explicit, and reject malformed or ambiguous records before any UI writes are add
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -485,14 +486,88 @@ def _task_to_dict(task: TaskRecord) -> dict[str, object]:
     return data
 
 
+TITLE_MAX = 120
+
+
+def _now() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def project_tasks(source: TaskSource, project: str) -> list[TaskRecord]:
+    if not PROJECT_RE.fullmatch(project):
+        raise TaskError("invalid project key")
+    tasks, _ = load_tasks(source)
+    return sorted((task for task in tasks if task.project == project), key=lambda task: task.id)
+
+
+def create_task(source: TaskSource, project: str, title: str, priority: str, owner: str, body: str = "") -> TaskRecord:
+    """A new task in `backlog`, with an id from its title that no other task in the source has."""
+    title = " ".join(title.split())
+    if not title:
+        raise TaskError("a task needs a title")
+    if len(title) > TITLE_MAX:
+        raise TaskError(f"the title is longer than {TITLE_MAX} characters")
+    if priority not in TASK_PRIORITIES:
+        raise TaskError(f"unknown priority '{priority}' (one of: {', '.join(sorted(TASK_PRIORITIES))})")
+    if not PROJECT_RE.fullmatch(project):
+        raise TaskError("invalid project key")
+    slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")[:40].strip("_") or "task"
+    taken = {task.id for task in load_tasks(source)[0]}
+    base = task_id = f"task_{slug}"
+    suffix = 2
+    while task_id in taken or (source.root / "tasks" / project / f"{task_id}.md").exists():
+        task_id = f"{base}_{suffix}"
+        suffix += 1
+    stamp = _now()
+    record = TaskRecord(
+        source=source.id, path="", revision="", schema_version=1, id=task_id, project=project,
+        title=title, status="backlog", priority=priority, owner=owner or "unassigned",
+        labels=(), acceptance_criteria=(), related_plans=(), related_runs=(), git_links=(),
+        blocked=False, blocked_reason="", created_at=stamp, updated_at=stamp, body=body.strip(),
+    )
+    return write_task_document(source, project, record)
+
+
+def set_status(source: TaskSource, project: str, task_id: str, status: str, expected_revision: str | None = None) -> TaskRecord:
+    """Moves a task to `status`. With `expected_revision`, refuses when the file changed since."""
+    if status not in TASK_STATUSES:
+        raise TaskError(f"unknown status '{status}' (one of: {', '.join(sorted(TASK_STATUSES))})")
+    task = next((t for t in project_tasks(source, project) if t.id == task_id), None)
+    if task is None:
+        raise TaskError(f"no task '{task_id}' in {project}")
+    if expected_revision is not None and expected_revision != task.revision:
+        raise TaskConflict("revision mismatch: the task changed since it was read")
+    return write_task_document(source, project, replace(task, status=status, updated_at=_now()), expected_revision=task.revision)
+
+
+USAGE = """usage:
+  ws_tasks.py scan <source-id> <source-root>
+  ws_tasks.py list <context-root> <project>
+  ws_tasks.py add <context-root> <project> <title> <priority> <owner>     body on stdin
+  ws_tasks.py status <context-root> <project> <task-id> <status> [<revision>]"""
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) != 3 or argv[0] != "scan":
-        print("usage: ws_tasks.py scan <source-id> <source-root>", file=sys.stderr)
-        return 2
-    source = load_source(argv[1], argv[2])
-    tasks, legacy = load_tasks(source)
-    print(to_json(tasks, legacy), end="")
-    return 0
+    if len(argv) == 3 and argv[0] == "scan":
+        source = load_source(argv[1], argv[2])
+        tasks, legacy = load_tasks(source)
+        print(to_json(tasks, legacy), end="")
+        return 0
+    if len(argv) == 3 and argv[0] == "list":
+        for task in project_tasks(load_source("context", argv[1]), argv[2]):
+            print(f"{task.id}\t{task.status}\t{task.priority}\t{task.title}")
+        return 0
+    if len(argv) == 6 and argv[0] == "add":
+        record = create_task(load_source("context", argv[1]), argv[2], argv[3], argv[4], argv[5], sys.stdin.read())
+        print(f"task {record.id} {record.status} {record.revision}")
+        return 0
+    if len(argv) in (5, 6) and argv[0] == "status":
+        revision = argv[5] if len(argv) == 6 else None
+        record = set_status(load_source("context", argv[1]), argv[2], argv[3], argv[4], revision)
+        print(f"task {record.id} {record.status} {record.revision}")
+        return 0
+    print(USAGE, file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":
