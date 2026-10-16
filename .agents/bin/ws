@@ -1482,6 +1482,61 @@ cmd_task() {
   esac
 }
 
+# ─────────────────────────────────────────────────────────────── plan
+# A run's plan rows, changed through ws so the run rules hold (AGENTS.md §6): only the
+# run's owner - or, with --operator, the person that owner is, at the desk - changes a
+# row; one row in_progress; blocked and dropped rows say why (ws_plan.py).
+plan_file() {
+  validate_key "$1"
+  [[ "$2" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]] || die "invalid run id: $2"
+  [ -f "$RUNS/$1/$2/plan.md" ] || die "no run $2 in $1"
+  printf '%s' "$RUNS/$1/$2/plan.md"
+}
+
+# "<human> <tool>" from the run brief's "- **Owner:** <human> (<tool>)" line.
+run_owner() {
+  sed -n 's/^- \*\*Owner:\*\* \([^ ]*\) (\([^)]*\)).*/\1 \2/p' "$1/brief.md" 2>/dev/null | head -1
+}
+
+cmd_plan() {
+  local helper="$ROOT/.agents/bin/ws_plan.py" sub="${1:-}"
+  shift || true
+  case "$sub" in
+    show)
+      [ $# -eq 2 ] || die 'usage: ws plan show <project-key> <run-id>'
+      local shown; shown="$(plan_file "$1" "$2")"
+      python3 "$helper" show "$shown" ;;
+    status)
+      local usage='usage: ws plan status <project-key> <run-id> <row> <status> [--notes "why"] [--revision <rev>] [--operator]'
+      [ $# -ge 4 ] || die "$usage"
+      local key="$1" run="$2" row="$3" status="$4" notes="" has_notes=0 revision="-" operator=0
+      shift 4
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --notes) [ $# -ge 2 ] || die "$usage"; notes="$2"; has_notes=1; shift 2 ;;
+          --revision) [ -n "${2:-}" ] || die "$usage"; revision="$2"; shift 2 ;;
+          --operator) operator=1; shift ;;
+          *) die "$usage" ;;
+        esac
+      done
+      local file owner human tool out
+      file="$(plan_file "$key" "$run")"
+      owner="$(run_owner "$(dirname "$file")")"
+      [ -n "$owner" ] || die "run $run has no Owner line in its brief"
+      human="${owner% *}"; tool="${owner#* }"
+      if [ "$human" != "$(human_id)" ] || { [ "$operator" = 0 ] && [ "$tool" != "$(agent_id)" ]; }; then
+        die "run $run belongs to $human ($tool) - only its owner changes its plan"
+      fi
+      if [ "$has_notes" = 1 ]; then
+        out="$(python3 "$helper" status "$file" "$row" "$status" "$revision" "$notes")"
+      else
+        out="$(python3 "$helper" status "$file" "$row" "$status" "$revision")"
+      fi
+      printf 'plan %s %s\n' "$run" "$out" ;;
+    *) die 'usage: ws plan show|status <project-key> <run-id> ...' ;;
+  esac
+}
+
 # ─────────────────────────────────────────────────────────────── sync
 # Pulling before editing shared memory is the single biggest conflict reducer.
 # Product repos are only reported on, never touched: rebasing someone else's
@@ -4073,6 +4128,7 @@ ws — engineering workspace CLI
   ws log <key> "milestone"         append one row to the project log
   ws note <key> "title" [body|-]   write a project note (notes/<date>-<slug>.md); - reads stdin
   ws task list|add|status <key> ... operator tasks (tasks/<key>/); status takes --revision
+  ws plan show|status <key> <run> . a run's plan rows; owner only, --operator for the person
   ws sync                          pull the workspace, report product repo state
   ws route [--project k] "task"    show which skills apply (pass --project to skip other clients)
   ws session bind <key> [--run id] bind this agent session to one project; writes a context pack
@@ -4157,6 +4213,7 @@ case "${1:-help}" in
   log) shift; cmd_log "$@" ;;
   note) shift; cmd_note "$@" ;;
   task) shift; cmd_task "$@" ;;
+  plan) shift; cmd_plan "$@" ;;
   sync) shift; cmd_sync "$@" ;;
   route) shift; cmd_route "$@" ;;
   skills) shift; cmd_skills "$@" ;;

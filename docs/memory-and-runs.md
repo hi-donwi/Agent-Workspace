@@ -57,7 +57,7 @@ that is free or expensive.
 
 | File | Concurrency | Rule |
 |---|---|---|
-| `runs/<key>/<run>/*` | One owner per run | Only the owner edits `brief`/`plan`/`progress`/`decisions`/`handoff` |
+| `runs/<key>/<run>/*` | One owner per run | Only the owner edits `brief`/`plan`/`progress`/`decisions`/`handoff`. `ws plan status <key> <run> <row> <status>` changes a plan row with that check, one row `in_progress`, a reason for `blocked`/`dropped`, and an optional `--revision`; the person who owns the run may use `--operator` from another tool (the desk) |
 | `runs/<key>/<run>/contributors/<id>.md` | One file per agent | A parallel agent writes only its own file |
 | `memory/projects/<key>/log.md` | Append-only | Use `ws log <key> "milestone"`. Merges by union — both entries survive |
 | `memory/projects/<key>/notes/<date>-<slug>.md` | One file per note | Use `ws note <key> "title" ["body" \| -]`. A new note never overwrites another (`-2`, `-3`, … on a clash); edit your own notes only |
