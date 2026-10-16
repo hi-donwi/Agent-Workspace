@@ -164,6 +164,24 @@ printf '%s' "$OUT" | grep -q "private-local" \
 printf '%s' "$OUT" | grep -q "primary clone" \
   && ok "doctor warns that the primary clone is a shared HEAD" \
   || bad "doctor warns that the primary clone is a shared HEAD" "$OUT"
+printf '%s' "$OUT" | grep -q "GB free" \
+  && bad "doctor --ci skips the local disk check" "$OUT" \
+  || ok "doctor --ci skips the local disk check"
+# A full disk stops agents mid-run (no swap, failed installs), so doctor says so
+# before it happens. The threshold is per machine: min_free_disk_gb.
+cp "$WS/workspace.conf" "$TMP/workspace.conf.keep"
+printf 'min_free_disk_gb = 999999999\n' >> "$WS/workspace.conf"
+DISK_OUT="$(ws doctor 2>&1 || true)"
+printf '%s' "$DISK_OUT" | grep -q "below min_free_disk_gb" \
+  && ok "doctor warns when free disk is below min_free_disk_gb" \
+  || bad "doctor warns when free disk is below min_free_disk_gb" "$DISK_OUT"
+printf 'min_free_disk_gb = 0\n' > "$TMP/disk.conf"
+cat "$TMP/workspace.conf.keep" "$TMP/disk.conf" > "$WS/workspace.conf"
+DISK_OUT="$(ws doctor 2>&1 || true)"
+printf '%s' "$DISK_OUT" | grep -q "ok .* GB free on the workspace volume" \
+  && ok "doctor reports free disk above the threshold" \
+  || bad "doctor reports free disk above the threshold" "$DISK_OUT"
+cp "$TMP/workspace.conf.keep" "$WS/workspace.conf"
 WHERE_ERR="$(ws where 2>&1 >/dev/null)"
 printf '%s' "$WHERE_ERR" | grep -q "primary clone" \
   && ok "ws where notes a primary clone on stderr" \
@@ -750,6 +768,39 @@ WS_SESSION_ID=wt1 check "ws agent stop drops the lock and clocks out" ws agent s
 not_exists "$gdir/ws-agent-sessions/wt1.lock" "session lock is removed"
 [ -e "$WS/.local/worktrees/api/wt1" ] && ok "worktree is kept after stop" \
   || bad "worktree is kept after stop"
+
+# Stopped sessions leave their worktrees behind, each with its own dependencies and
+# build output. `ws agent clean` removes only the ones git itself calls clean, and
+# never one a live session, uncommitted work, or a branchless commit still needs.
+WT="$WS/.local/worktrees/api"
+CLEAN_OUT="$(ws agent clean 2>&1)"
+printf '%s' "$CLEAN_OUT" | grep -q "api/wt1 (used 0h ago)" \
+  && ok "ws agent clean keeps a worktree used inside the idle window" \
+  || bad "ws agent clean keeps a worktree used inside the idle window" "$CLEAN_OUT"
+CLEAN_OUT="$(ws agent clean --idle-hours 0 2>&1)"
+printf '%s' "$CLEAN_OUT" | grep -q "clean .local/worktrees/api/wt1" \
+  && ok "ws agent clean lists an idle clean worktree" \
+  || bad "ws agent clean lists an idle clean worktree" "$CLEAN_OUT"
+exists "$WT/wt1/.git" "ws agent clean without --apply removes nothing"
+WS_SESSION_ID=wt2 ws agent start api "dirty" >/dev/null 2>&1
+printf 'draft\n' > "$WT/wt2/scratch.txt"
+WS_SESSION_ID=wt2 ws agent stop >/dev/null 2>&1
+WS_SESSION_ID=wt3 ws agent start api "live" >/dev/null 2>&1
+WS_SESSION_ID=wt4 ws agent start api "branchless" >/dev/null 2>&1
+git -C "$WT/wt4" checkout -q --detach
+git -C "$WT/wt4" commit -q --allow-empty -m "commit on no branch"
+WS_SESSION_ID=wt4 ws agent stop >/dev/null 2>&1
+check "ws agent clean --apply removes idle clean worktrees" \
+  ws agent clean --apply --idle-hours 0
+not_exists "$WT/wt1" "the idle clean worktree is removed"
+[ -n "$(git -C "$PROD" branch --list 'agent-wt1-*')" ] && ok "its branch survives the worktree" \
+  || bad "its branch survives the worktree"
+exists "$WT/wt2/scratch.txt" "a worktree with untracked work is kept"
+exists "$WT/wt3/.git" "a worktree with a live session lock is kept"
+exists "$WT/wt4/.git" "a worktree whose HEAD is on no branch is kept"
+check_fails "ws agent clean refuses a non-numeric idle window" \
+  ws agent clean --idle-hours soon
+WS_SESSION_ID=wt3 ws agent stop >/dev/null 2>&1
 
 section "session bind (attention isolation)"
 # Git worktrees isolate HEAD. Session bind isolates what the agent is allowed

@@ -2096,9 +2096,10 @@ cmd_agent() {
     recover) shift; clock_recover agent "$@" ;;
     start) shift; agent_start "$@" ;;
     stop) shift; agent_stop "$@" ;;
+    clean) shift; agent_clean "$@" ;;
     status) clock_status ;;
     auto) shift; agent_auto "${1:-}" ;;
-    *) die "usage: ws agent [in <key> [note] | start <key> [note] | stop [note] | out [note] | recover [--all] [--dry-run] [--end <iso>] | status | auto in|out]" ;;
+    *) die "usage: ws agent [in <key> [note] | start <key> [note] | stop [note] | clean [--apply] [--idle-hours <n>] | out [note] | recover [--all] [--dry-run] [--end <iso>] | status | auto in|out]" ;;
   esac
 }
 
@@ -2183,7 +2184,80 @@ agent_stop() {
     [ -f "$gdir/ws-agent-sessions/$session.lock" ] && rm -f "$gdir/ws-agent-sessions/$session.lock"
   fi
   c_grn "-> agent stop (session $session); worktree kept under .local/worktrees/"
-  c_dim "  remove it later with: git worktree remove <path>"
+  c_dim "  remove idle clean worktrees with: ws agent clean (lists), ws agent clean --apply"
+}
+
+# Newest modification time (epoch seconds) among the files that exist; 0 if none.
+newest_mtime() {
+  local f m newest=0
+  for f in "$@"; do
+    [ -e "$f" ] || continue
+    m="$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null)" || continue
+    [ "${m:-0}" -gt "$newest" ] && newest="$m"
+  done
+  printf '%s' "$newest"
+}
+
+# Stopped sessions leave their worktrees under .local/worktrees/, each with its own
+# dependencies and build output; a week of parallel agents fills a laptop disk. Only a
+# worktree git itself calls clean is removed: no session lock, idle for --idle-hours,
+# nothing modified or untracked, and HEAD reachable from a branch. Ignored files go
+# with it, exactly as `git worktree remove` treats them.
+agent_clean() {
+  local apply=0 idle; idle="$(conf_get worktree_idle_hours 24)"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --apply) apply=1 ;;
+      --idle-hours) shift; idle="${1:-}" ;;
+      *) die "usage: ws agent clean [--apply] [--idle-hours <n>]" ;;
+    esac
+    shift
+  done
+  case "$idle" in ''|*[!0-9]*) die "--idle-hours takes a whole number of hours" ;; esac
+
+  local base="$ROOT/.local/worktrees"
+  [ -d "$base" ] || { c_dim "no worktrees under .local/worktrees/"; return 0; }
+  local now wt rel cdir gdir primary last age state kb total=0 count=0
+  now="$(date +%s)"
+  for wt in "$base"/*/*/; do
+    wt="${wt%/}"
+    [ -f "$wt/.git" ] || continue
+    rel="${wt#"$ROOT"/}"
+    cdir="$(agent_git_dir "$wt")" || cdir=""
+    gdir="$(git -C "$wt" rev-parse --path-format=absolute --git-dir 2>/dev/null)" || gdir=""
+    if [ -z "$cdir" ] || [ -z "$gdir" ]; then c_ylw "  ! $rel is not a readable worktree"; continue; fi
+    last="$(newest_mtime "$gdir/index" "$gdir/HEAD" "$gdir/logs/HEAD")"
+    age=$(( (now - last) / 3600 ))
+    if [ -f "$cdir/ws-agent-sessions/$(basename "$wt").lock" ]; then state="active session"
+    elif [ "$age" -lt "$idle" ]; then state="used ${age}h ago"
+    elif [ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]; then state="uncommitted or untracked files"
+    # Not `git branch --contains`: on a detached HEAD it lists "(HEAD detached ...)".
+    elif [ -z "$(git -C "$wt" for-each-ref --count=1 --contains HEAD refs/heads refs/remotes 2>/dev/null)" ]; then
+      state="HEAD is on no branch"
+    else state=clean
+    fi
+    if [ "$state" != clean ]; then c_dim "  keep  $rel ($state)"; continue; fi
+    kb="$(du -sk "$wt" 2>/dev/null | cut -f1)" || true; kb="${kb:-0}"
+    if [ "$apply" = 0 ]; then
+      echo "  clean $rel ($((kb / 1024)) MB)"
+    else
+      primary="$(git -C "$wt" worktree list --porcelain | sed -n '1s/^worktree //p')" || primary=""
+      if git -C "$primary" worktree remove "$wt" 2>/dev/null; then
+        c_grn "  removed $rel ($((kb / 1024)) MB)"
+        rmdir "$(dirname "$wt")" 2>/dev/null || true
+      else
+        c_ylw "  ! git refused to remove $rel (locked or changed) - inspect it"; continue
+      fi
+    fi
+    total=$((total + kb)); count=$((count + 1))
+  done
+  if [ "$apply" = 1 ]; then
+    c_grn "-> removed $count idle worktree(s), $((total / 1024)) MB"
+  elif [ "$count" -gt 0 ]; then
+    c_grn "-> $count idle clean worktree(s), $((total / 1024)) MB; remove with: ws agent clean --apply"
+  else
+    c_dim "no idle clean worktrees (idle window ${idle}h)"
+  fi
 }
 
 # ─────────────────────────────────────────────────────────────── session bind
@@ -2868,6 +2942,24 @@ cmd_doctor() {
       c_dim "  Java not required (java pack is not enabled)"
     fi
     command -v git >/dev/null && c_grn "ok git $(git --version | awk '{print $3}')" || { c_red "x git"; fail=1; }
+    echo
+
+    # A full disk stops agents mid-run: installs fail and the OS cannot grow swap.
+    echo "-- Disk --"
+    local min_free free_kb wts
+    min_free="$(conf_get min_free_disk_gb 20)"
+    case "$min_free" in ''|*[!0-9]*) min_free=20 ;; esac
+    free_kb="$(df -Pk "$ROOT" 2>/dev/null | awk 'NR==2 {print $4}')" || free_kb=""
+    if [ -n "$free_kb" ]; then
+      if [ "$free_kb" -lt $((min_free * 1048576)) ]; then
+        c_ylw "! $((free_kb / 1048576)) GB free on the workspace volume, below min_free_disk_gb ($min_free)"
+        c_dim "    idle agent worktrees: ws agent clean, then ws agent clean --apply"
+      else
+        c_grn "ok $((free_kb / 1048576)) GB free on the workspace volume"
+      fi
+    fi
+    wts="$(count_files "$ROOT/.local/worktrees" -mindepth 3 -maxdepth 3 -name .git)"
+    [ "${wts:-0}" = "0" ] || c_dim "    $wts agent worktree(s) under .local/worktrees/ (ws agent clean lists the idle ones)"
     echo
   fi
 
@@ -3993,6 +4085,8 @@ ws — engineering workspace CLI
   ws agent in|out|status            AGENT working hours - never summed with human
   ws agent start <key> [note]       worktree + clock-in + session bind for one parallel agent
   ws agent stop [note]              clock-out and drop this session's lock
+  ws agent clean [--apply] [--idle-hours N]
+                                    list (or remove) idle, clean agent worktrees
   ws hours [--month M] [--project k|--client c] [--rollup]   report both, side by side
   ws usage [--month M] [--project k|--client c]  token usage, from a separate optional tool
   ws chat [--dev] [--port N]        launch Agent-Control AI assistant
