@@ -12,8 +12,11 @@ hold the code, and belong to the client.
 context/
 ├── registry.tsv              projects: key, CLIENT, folder, remote, description
 ├── clients/<client>/         what holds across every one of one client's projects
-│   ├── client.md               who they are, contract, stakeholders
+│   ├── client.md               who they are, working agreement, stakeholder roles
 │   ├── decisions.md            decisions that apply to all their projects
+│   ├── log.md                  interactions: meetings, calls, agreements (ws client log)
+│   ├── contacts.md             RESTRICTED: names and contact details - desk only
+│   ├── commercial.md           RESTRICTED: rates, contract, invoices - desk only
 │   ├── skills/<domain>/        their domain glossary and business rules
 │   ├── tasks/                  work that belongs to the client, not one project (ws task ... @<client>)
 │   └── docs/                   their proposals, kick-off notes, client-specific ADRs
@@ -25,6 +28,14 @@ context/
 ├── works/{human,agent}/<key>/  hours; reports can group `--client`
 └── docs/adr/                 decisions about this workspace itself
 ```
+
+## Restricted client records
+
+`contacts.md` and `commercial.md` hold personal and financial data (ADR-0024). They live in
+`context/` with everything else about the client, and the desk shows them, but no `ws`
+command prints them, the session pack never lists them, and the MCP server never returns
+them - so they cannot reach a remote model. `ws client show` reports only that they exist.
+Never copy their contents into memory, runs, notes, or a prompt.
 
 ## Alert thresholds
 

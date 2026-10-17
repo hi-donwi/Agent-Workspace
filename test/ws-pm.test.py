@@ -10,7 +10,7 @@ from pathlib import Path
 SOURCE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SOURCE / ".agents/bin"))
 
-from ws_pm import active_alerts, compute_alerts, snooze, thresholds, today  # noqa: E402
+from ws_pm import active_alerts, client_dossier, compute_alerts, interactions, log_interaction, snooze, thresholds, today  # noqa: E402
 
 NOW = datetime.fromisoformat("2026-10-17T10:00:00+07:00")
 
@@ -136,6 +136,53 @@ class Alerts(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("overdue:api:task_late", result.stdout, command)
 
+
+
+class ClientDossier(unittest.TestCase):
+    """What may be read about a client, and what never leaves the desk (ADR-0024)."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="ws-pm-client-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.context = self.root / "context"
+        acme = self.context / "clients" / "acme"
+        (acme / "tasks").mkdir(parents=True)
+        (self.context / "tasks" / "api").mkdir(parents=True)
+        (self.context / "registry.tsv").write_text("key\tclient\tgroup\tfolder\napi\tacme\t-\tp/api\nweb\tbeta\t-\tp/web\n")
+        (acme / "client.md").write_text("# acme — client\n\n- **Full name:** Acme Logistics\n- **Engaged since:** 2025-03-01\n\n"
+                                        "## What they are\n\nA logistics firm.\n\n## Working agreement\n\nReports on Friday.\n")
+        (acme / "contacts.md").write_text("RESTRICTED_CONTACT_CANARY +62 812 0000 0000\n")
+        (acme / "commercial.md").write_text("RESTRICTED_RATE_CANARY 100 per hour\n")
+        (self.context / "tasks/api/task_late.md").write_text(task_doc("task_late", "api", "Late", extra="due: 2026-10-15\n"))
+        (acme / "tasks/task_report.md").write_text(task_doc("task_report", "@acme", "Send the report", extra="due: 2026-10-20\n"))
+
+    def test_the_dossier_carries_profile_work_and_interactions_but_never_restricted_records(self):
+        log_interaction(self.context, "acme", "Call: agreed phase 2 scope", actor="dw-cli")
+        dossier = client_dossier(self.context, self.root, "acme", NOW)
+        self.assertEqual(dossier["profile"]["fields"]["Full name"], "Acme Logistics")
+        self.assertEqual(dossier["profile"]["working_agreement"], "Reports on Friday.")
+        self.assertEqual(dossier["projects"], [{"key": "api", "open": 1, "overdue": 1}])
+        self.assertEqual([t["id"] for t in dossier["tasks"]], ["task_report"])
+        self.assertEqual((dossier["open"], dossier["overdue"]), (2, 1))
+        self.assertEqual(dossier["interactions"][0]["text"], "Call: agreed phase 2 scope")
+        self.assertEqual(dossier["restricted"], {"contacts": True, "commercial": True})
+        dumped = json.dumps(dossier)
+        self.assertNotIn("RESTRICTED_CONTACT_CANARY", dumped)
+        self.assertNotIn("RESTRICTED_RATE_CANARY", dumped)
+        script = str(SOURCE / ".agents/bin/ws_pm.py")
+        for extra in ([], ["--json"]):
+            out = subprocess.run([sys.executable, script, "client", str(self.context), str(self.root), "acme", *extra, "--now", NOW.isoformat()],
+                                 text=True, capture_output=True)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertNotIn("CANARY", out.stdout)
+
+    def test_the_interaction_log_is_append_only_and_newest_first(self):
+        log_interaction(self.context, "acme", "First", actor="dw")
+        log_interaction(self.context, "acme", "Second", actor="dw")
+        self.assertEqual([e["text"] for e in interactions(self.context, "acme")], ["Second", "First"])
+        with self.assertRaisesRegex(Exception, "no client"):
+            log_interaction(self.context, "nosuch", "x", actor="dw")
 
 if __name__ == "__main__":
     unittest.main()

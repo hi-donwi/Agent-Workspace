@@ -230,6 +230,8 @@ contains "$WS/context/registry.tsv" "client" "the registry header has a client c
 check "ws client new registers a client" ws client new acme
 exists "$WS/context/clients/acme/client.md" "client.md is scaffolded"
 exists "$WS/context/clients/acme/decisions.md" "decisions.md is scaffolded"
+exists "$WS/context/clients/acme/contacts.md" "contacts.md is scaffolded, restricted"
+exists "$WS/context/clients/acme/commercial.md" "commercial.md is scaffolded, restricted"
 check_fails "a second client with the same key refuses" ws client new acme
 check_fails "ws new refuses an unknown client" ws new orphan projects/x --client no-such-client
 not_exists "$WS/context/memory/projects/orphan" "nothing was registered for the rejected project"
@@ -1521,6 +1523,22 @@ ws alerts --all --json 2>&1 | grep -q 'overdue:api:task_late_report' \
   && ok "--all shows snoozed alerts" || bad "--all shows snoozed alerts" "$(ws alerts --all --json 2>&1)"
 check_fails "a malformed alert id is refused" ws alerts snooze "not an id" --for 1d
 check_fails "a snooze needs a length or --off" ws alerts snooze overdue:api:task_late_report
+# A client's dossier, and records that never reach an agent (ADR-0024).
+check "an interaction is logged" ws client log acme "Call: agreed the phase 2 scope"
+contains "$WS/context/clients/acme/log.md" "agreed the phase 2 scope" "the log is the client's"
+check_fails "an interaction for an unknown client is refused" ws client log nosuch "x"
+printf 'RESTRICTED_CONTACT_CANARY\n' >> "$WS/context/clients/acme/contacts.md"
+printf 'RESTRICTED_RATE_CANARY\n' >> "$WS/context/clients/acme/commercial.md"
+DOSSIER="$(ws client show acme --json 2>&1)"
+printf '%s' "$DOSSIER" | grep -q '"contacts": true' && printf '%s' "$DOSSIER" | grep -q 'agreed the phase 2 scope' \
+  && ok "ws client show carries the log and says which restricted records exist" || bad "ws client show carries the log and says which restricted records exist" "$DOSSIER"
+! printf '%s' "$DOSSIER$(ws client show acme 2>&1)" | grep -q 'CANARY' \
+  && ok "ws client show never prints a restricted record" || bad "ws client show never prints a restricted record" "$DOSSIER"
+WS_SESSION_ID=restricted ws session bind api >/dev/null 2>&1
+lacks "$WS/.local/sessions/restricted/pack.json" "clients/acme/contacts.md" "the session pack never lists contacts.md"
+lacks "$WS/.local/sessions/restricted/pack.json" "clients/acme/commercial.md" "the session pack never lists commercial.md"
+lacks "$WS/.local/sessions/restricted/pack.json" "CANARY" "the session pack carries no restricted record"
+lacks "$WS/.local/sessions/restricted/CONTEXT.md" "CANARY" "CONTEXT.md carries no restricted record"
 
 section "run plans"
 # A plan row changes only through its run's owner - or the person that owner is, at the

@@ -119,7 +119,7 @@ the session pack, and an MCP server all go through that one implementation.
 - [x] Client-level tasks (`@<client>`), `ws remind`, recurrence
 - [x] `ws today`, `ws alerts`, `context/pm.json`
 - [x] Milestones (progress from children; `ws task list --kind milestone`)
-- [ ] `ws client show|log`, restricted records
+- [x] `ws client show|log`, restricted records (scaffolded by `ws client new`)
 - [ ] Work digest in the session pack
 - [ ] `ws mcp`
 - [ ] The desk: Today, Missions board, Backlog, Timeline, Clients, Inbox

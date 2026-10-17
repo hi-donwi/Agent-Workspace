@@ -17,7 +17,7 @@ import re
 import sys
 import tempfile
 
-from ws_tasks import TaskError, TaskRecord, activity, load_source, load_tasks, registry_clients, task_json
+from ws_tasks import ACTIVITY_RE, TaskError, TaskRecord, activity, load_source, load_tasks, registry_clients, task_json
 
 DEFAULTS = {
     "stale_days": 5,
@@ -241,6 +241,94 @@ def today(context_root: str | Path, workspace_root: str | Path, now: datetime, *
     }
 
 
+# ── Client dossier (ADR-0024) ─────────────────────────────────────────────────────────
+# What an operator or an agent may read about a client. contacts.md and commercial.md are
+# restricted: only whether they exist is reported, never a word of what they say.
+RESTRICTED = ("contacts", "commercial")
+FIELD_RE = re.compile(r"- \*\*([^*]+):\*\*[ \t]*(.*)")
+CLIENT_KEY_RE = re.compile(r"[a-z0-9][a-z0-9_-]*")
+
+
+def _client_dir(context_root: str | Path, client: str) -> Path:
+    if not CLIENT_KEY_RE.fullmatch(client):
+        raise TaskError(f"invalid client key '{client}'")
+    folder = Path(context_root) / "clients" / client
+    if not (folder / "client.md").is_file():
+        raise TaskError(f"no client '{client}'")
+    return folder
+
+
+def _section(text: str, heading: str) -> str:
+    lines = text.splitlines()
+    try:
+        start = next(i for i, line in enumerate(lines) if line.strip().lower() == f"## {heading}".lower())
+    except StopIteration:
+        return ""
+    body = []
+    for line in lines[start + 1:]:
+        if line.startswith("## "):
+            break
+        body.append(line)
+    return "\n".join(body).strip()
+
+
+def interactions(context_root: str | Path, client: str) -> list[dict[str, str]]:
+    """The client's interaction log, newest first."""
+    path = _client_dir(context_root, client) / "log.md"
+    if not path.is_file():
+        return []
+    found = [m for m in (ACTIVITY_RE.fullmatch(line.strip()) for line in path.read_text(encoding="utf-8").splitlines()) if m]
+    return [{"at": m.group(1), "actor": m.group(2), "text": m.group(3)} for m in reversed(found)]
+
+
+def log_interaction(context_root: str | Path, client: str, text: str, actor: str = "") -> str:
+    """Appends one line to clients/<c>/log.md - a meeting, a call, an agreement."""
+    text = " ".join(text.split())
+    if not text:
+        raise TaskError("an interaction needs text")
+    if len(text) > 1000:
+        raise TaskError("the entry is longer than 1000 characters")
+    path = _client_dir(context_root, client) / "log.md"
+    who = re.sub(r"\s+", "-", (actor or os.environ.get("WS_TASK_ACTOR", "") or "unknown").strip())
+    stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    if not path.exists():
+        path.write_text(f"# {client} — interactions\n\nAppend-only: `ws client log {client} \"what happened\"`. "
+                        "Never write contact details or commercial terms here.\n\n", encoding="utf-8")
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(f"- {stamp} {who}: {text}\n")
+    return stamp
+
+
+def client_dossier(context_root: str | Path, workspace_root: str | Path, client: str, now: datetime) -> dict[str, object]:
+    """Profile, projects, open work, alerts, and interactions - never the restricted records."""
+    folder = _client_dir(context_root, client)
+    text = (folder / "client.md").read_text(encoding="utf-8")
+    title = next((line[2:].strip() for line in text.splitlines() if line.startswith("# ")), client)
+    fields = {m.group(1).strip(): m.group(2).strip() for m in (FIELD_RE.fullmatch(line.strip()) for line in text.splitlines()) if m}
+    source = load_source("context", context_root)
+    owners = registry_clients(source)
+    tasks = load_tasks(source)[0]
+    today_ = now.date().isoformat()
+    open_tasks = [t for t in tasks if t.status != "done" and (t.client == client or owners.get(t.project) == client)]
+    projects = [
+        {"key": key, "open": sum(1 for t in open_tasks if t.project == key),
+         "overdue": sum(1 for t in open_tasks if t.project == key and t.due and t.due < today_)}
+        for key, owner in sorted(owners.items()) if owner == client
+    ]
+    return {
+        "client": client,
+        "profile": {"title": title, "fields": fields, "about": _section(text, "What they are"),
+                    "working_agreement": _section(text, "Working agreement"), "stakeholders": _section(text, "Stakeholders")},
+        "projects": projects,
+        "tasks": [task_json(t, owners) for t in sorted(open_tasks, key=lambda t: (t.due or "9999", t.id)) if t.client == client],
+        "open": len(open_tasks),
+        "overdue": sum(1 for t in open_tasks if t.due and t.due < today_),
+        "alerts": len(active_alerts(context_root, workspace_root, now, client=client)),
+        "interactions": interactions(context_root, client)[:10],
+        "restricted": {name: (folder / f"{name}.md").is_file() for name in RESTRICTED},
+    }
+
+
 def _until(spec: str, now: datetime) -> datetime:
     match = SNOOZE_FOR.fullmatch(spec)
     if match:
@@ -271,6 +359,16 @@ def main(argv: list[str]) -> int:
         p.add_argument("--now")
         if name == "alerts":
             p.add_argument("--all", action="store_true", help="include snoozed alerts")
+    p = sub.add_parser("client")
+    p.add_argument("context_root")
+    p.add_argument("workspace_root")
+    p.add_argument("client")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--now")
+    p = sub.add_parser("client-log")
+    p.add_argument("context_root")
+    p.add_argument("client")
+    p.add_argument("text")
     p = sub.add_parser("snooze")
     p.add_argument("workspace_root")
     p.add_argument("alert_id")
@@ -278,10 +376,36 @@ def main(argv: list[str]) -> int:
     p.add_argument("--off", action="store_true")
     p.add_argument("--now")
     opts = parser.parse_args(argv)
-    now = _moment(opts.now) if opts.now else datetime.now().astimezone()
+    now = _moment(opts.now) if getattr(opts, "now", None) else datetime.now().astimezone()
     if now is None:
         raise TaskError("invalid --now")
 
+    if opts.command == "client-log":
+        stamp = log_interaction(opts.context_root, opts.client, opts.text)
+        print(f"logged {opts.client} {stamp}")
+        return 0
+    if opts.command == "client":
+        dossier = client_dossier(opts.context_root, opts.workspace_root, opts.client, now)
+        if opts.json:
+            print(json.dumps(dossier, indent=2, sort_keys=True))
+            return 0
+        profile = dossier["profile"]
+        print(f"{profile['title']}")  # type: ignore[index]
+        for name, value in profile["fields"].items():  # type: ignore[index]
+            if value:
+                print(f"  {name}: {value}")
+        print(f"  open work: {dossier['open']} ({dossier['overdue']} overdue) · alerts: {dossier['alerts']}")
+        for project in dossier["projects"]:  # type: ignore[union-attr]
+            print(f"  project {project['key']}: {project['open']} open, {project['overdue']} overdue")
+        for task in dossier["tasks"]:  # type: ignore[union-attr]
+            due = f" (due {task['due']})" if task["due"] else ""
+            print(f"  task {task['id']}: {task['title']}{due} [{task['status']}]")
+        for entry in dossier["interactions"]:  # type: ignore[union-attr]
+            print(f"  {entry['at'][:16]} {entry['actor']}: {entry['text']}")
+        kept = [name for name, present in dossier["restricted"].items() if present]  # type: ignore[union-attr]
+        if kept:
+            print(f"  restricted, desk only: {', '.join(name + '.md' for name in kept)}")
+        return 0
     if opts.command == "snooze":
         if opts.off == bool(opts.spec):
             raise TaskError("usage: ws alerts snooze <alert-id> --for 1h|1d|1w|\"YYYY-MM-DD HH:MM\", or --off")
