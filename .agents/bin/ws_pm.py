@@ -329,6 +329,67 @@ def client_dossier(context_root: str | Path, workspace_root: str | Path, client:
     }
 
 
+# ── Work digest for a session pack (ADR-0024) ─────────────────────────────────────────
+DIGEST_LIMIT = 5
+
+
+def _line(task: TaskRecord, everything: list[TaskRecord]) -> str:
+    bits = []
+    if task.assignee:
+        bits.append(task.assignee)
+    if task.priority in ("high", "urgent"):
+        bits.append(task.priority)
+    if task.due:
+        bits.append(f"due {task.due}")
+    items = task_json(task)["checklist"]
+    if items:
+        bits.append(f"{sum(1 for i in items if i['done'])}/{len(items)} checklist")  # type: ignore[union-attr]
+    if task.kind == "milestone":
+        children = [t for t in everything if t.parent == task.id]
+        bits.append(f"{sum(1 for t in children if t.status == 'done')}/{len(children)} done")
+    if task.blocked:
+        bits.append(f"blocked: {task.blocked_reason}")
+    detail = f" ({', '.join(bits)})" if bits else ""
+    return f"- `{task.id}` {task.title}{detail}"
+
+
+def digest(context_root: str | Path, workspace_root: str | Path, project: str, now: datetime) -> str:
+    """The bound project's work, and its client's own, for CONTEXT.md - nothing of any other
+    client, and no restricted record. Short: five per group, the rest by count."""
+    source = load_source("context", context_root)
+    owners = registry_clients(source)
+    client = owners.get(project, "")
+    everything = load_tasks(source)[0]
+    mine = [t for t in everything if t.status != "done" and (t.project == project or (client and t.client == client))]
+    soon = (now.date() + timedelta(days=7)).isoformat()
+    groups = [
+        ("In progress", [t for t in mine if t.project == project and t.status == "in_progress"]),
+        ("In review", [t for t in mine if t.project == project and t.status == "review"]),
+        ("Ready", [t for t in mine if t.project == project and t.status == "ready"]),
+        ("Blocked", [t for t in mine if t.project == project and t.blocked]),
+        ("Due within 7 days or overdue", [t for t in mine if t.project == project and t.due and t.due <= soon]),
+        ("Milestones", [t for t in mine if t.project == project and t.kind == "milestone"]),
+    ]
+    if client:
+        groups.append((f"Client `{client}`'s own open work", [t for t in mine if t.client == client]))
+    lines = [f"## Work for {project}", "",
+             f"Generated at bind, {now.isoformat(timespec='minutes')}. Live: `ws today --scope {project}`, "
+             f"`ws task list {project} --json`, `ws task show {project} <task-id>`."]
+    for title, tasks in groups:
+        if not tasks:
+            continue
+        ordered = sorted(tasks, key=lambda t: (t.rank == 0, t.rank, t.due or "9999", t.id))
+        lines += ["", f"{title}:"] + [_line(t, everything) for t in ordered[:DIGEST_LIMIT]]
+        if len(ordered) > DIGEST_LIMIT:
+            lines.append(f"- ... and {len(ordered) - DIGEST_LIMIT} more")
+    waiting = [a for a in active_alerts(context_root, workspace_root, now, scope=project) if a.kind in ("approval", "agent")]
+    if waiting:
+        lines += ["", f"Waiting for a person: {len(waiting)} ({', '.join(a.title for a in waiting[:3])})"]
+    backlog = sum(1 for t in mine if t.project == project and t.status == "backlog")
+    lines += ["", f"Open in {project}: {sum(1 for t in mine if t.project == project)} ({backlog} in backlog)."]
+    return "\n".join(lines) + "\n"
+
+
 def _until(spec: str, now: datetime) -> datetime:
     match = SNOOZE_FOR.fullmatch(spec)
     if match:
@@ -365,6 +426,11 @@ def main(argv: list[str]) -> int:
     p.add_argument("client")
     p.add_argument("--json", action="store_true")
     p.add_argument("--now")
+    p = sub.add_parser("digest")
+    p.add_argument("context_root")
+    p.add_argument("workspace_root")
+    p.add_argument("project")
+    p.add_argument("--now")
     p = sub.add_parser("client-log")
     p.add_argument("context_root")
     p.add_argument("client")
@@ -380,6 +446,9 @@ def main(argv: list[str]) -> int:
     if now is None:
         raise TaskError("invalid --now")
 
+    if opts.command == "digest":
+        print(digest(opts.context_root, opts.workspace_root, opts.project, now), end="")
+        return 0
     if opts.command == "client-log":
         stamp = log_interaction(opts.context_root, opts.client, opts.text)
         print(f"logged {opts.client} {stamp}")
