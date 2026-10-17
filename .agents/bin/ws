@@ -1549,7 +1549,7 @@ cmd_task() {
   export WS_TASK_ACTOR="$(owner_id)"
   case "$sub" in
     list)
-      local usage='usage: ws task list <project-key>|@<client>|--all [--json] [--status S]... [--assignee A] [--label L] [--due-before YYYY-MM-DD] [--client C]'
+      local usage='usage: ws task list <project-key>|@<client>|--all [--json] [--status S]... [--assignee A] [--label L] [--due-before YYYY-MM-DD] [--client C] [--kind task|milestone|reminder]'
       [ $# -ge 1 ] || die "$usage"
       [ "$1" = "--all" ] || task_project "$1"
       python3 "$helper" list "$CONTEXT_DIR" "$@" ;;

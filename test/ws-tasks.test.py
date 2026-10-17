@@ -397,5 +397,32 @@ class ClientTasksAndReminders(unittest.TestCase):
         nxt = [t for t in list_tasks(self.source, "@acme") if t.status == "backlog"]
         self.assertEqual([t.due for t in nxt], ["2026-02-28"])
 
+
+class Milestones(unittest.TestCase):
+    """A milestone is a task of kind milestone; its progress comes from its children (ADR-0024)."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="ws-tasks-milestone-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name) / "context"
+        (self.root / "tasks" / "api").mkdir(parents=True)
+        self.source = load_source("context", self.root)
+
+    def test_progress_counts_the_children_that_are_done(self):
+        release = create_task(self.source, "api", "Release one", "normal", "dw", kind="milestone", due="2026-11-30", actor="x")
+        first = create_task(self.source, "api", "Importer", "normal", "dw", parent=release.id, actor="x")
+        create_task(self.source, "api", "Exporter", "normal", "dw", parent=release.id, actor="x")
+        set_status(self.source, "api", first.id, "done", actor="x")
+        script = str(SOURCE / ".agents/bin/ws_tasks.py")
+        listed = subprocess.run([sys.executable, script, "list", str(self.root), "--all", "--kind", "milestone", "--json"],
+                                text=True, capture_output=True)
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        import json as _json
+        tasks = _json.loads(listed.stdout)["tasks"]
+        self.assertEqual([t["id"] for t in tasks], [release.id])
+        self.assertEqual(tasks[0]["progress"], {"done": 1, "total": 2})
+        shown = subprocess.run([sys.executable, script, "show", str(self.root), "api", release.id], text=True, capture_output=True)
+        self.assertIn("progress: 1/2 done", shown.stdout)
+
 if __name__ == "__main__":
     unittest.main()
