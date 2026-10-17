@@ -1541,6 +1541,12 @@ lacks "$WS/.local/sessions/restricted/pack.json" "CANARY" "the session pack carr
 lacks "$WS/.local/sessions/restricted/CONTEXT.md" "CANARY" "CONTEXT.md carries no restricted record"
 contains "$WS/.local/sessions/restricted/CONTEXT.md" "## Work for api" "CONTEXT.md carries the project's work digest"
 contains "$WS/.local/sessions/restricted/CONTEXT.md" "Send the monthly report" "the digest names the client's own open work"
+# Agents reach the same records over MCP, within their scope (ADR-0024).
+MCP="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"pm_list_tasks","arguments":{}}}' \
+  | ws mcp --project api 2>&1)"
+printf '%s' "$MCP" | grep -q '"serverInfo": {"name": "workspace"' && printf '%s' "$MCP" | grep -q 'task_ship_the_importer' \
+  && ok "ws mcp answers an MCP client with the project's tasks" || bad "ws mcp answers an MCP client with the project's tasks" "$MCP"
 
 section "run plans"
 # A plan row changes only through its run's owner - or the person that owner is, at the
