@@ -460,6 +460,51 @@ check_fails "ws verify rejects a product-owned contract" \
   ws verify api --contract "$PROD/inside-contract.json"
 rm -f "$PROD/inside-contract.json"
 
+# An agent's worktree is verified where the agent's change is, not in the primary checkout.
+VT="$WS/.local/worktrees/api/vt1"
+git -C "$PROD" worktree add -q -b ws-verify-vt1 "$VT"
+: > "$VT/only-in-worktree.txt"
+cat > "$WS/.local/agent/contracts/worktree.json" <<'JSON'
+{
+  "schema_version": 1,
+  "name": "runs where the change is",
+  "commands": [{"id": "sees-the-worktree", "command": "test -f only-in-worktree.txt", "timeout_seconds": 10}]
+}
+JSON
+check "ws verify --worktree runs the contract in the agent worktree" \
+  ws verify api --worktree "$VT" --contract "$WS/.local/agent/contracts/worktree.json" --json
+check_fails "the same contract fails in the primary checkout" \
+  ws verify api --contract "$WS/.local/agent/contracts/worktree.json"
+check_fails "ws verify --worktree refuses the primary checkout" \
+  ws verify api --worktree "$PROD" --contract "$WS/.local/agent/contracts/worktree.json"
+mkdir -p "$WS/.local/worktrees/api/plain"
+check_fails "ws verify --worktree refuses a folder that is not a worktree of the project" \
+  ws verify api --worktree "$WS/.local/worktrees/api/plain" --contract "$WS/.local/agent/contracts/worktree.json"
+mkdir -p "$WS/.local/worktrees/other"
+git init -q "$WS/.local/worktrees/api/foreign"
+check_fails "ws verify --worktree refuses another repository under the project's worktrees" \
+  ws verify api --worktree "$WS/.local/worktrees/api/foreign" --contract "$WS/.local/agent/contracts/worktree.json"
+check_fails "ws verify --worktree refuses a path that climbs out of the project's worktrees" \
+  ws verify api --worktree "$WS/.local/worktrees/api/../other" --contract "$WS/.local/agent/contracts/worktree.json"
+printf '{"schema_version":1,"commands":[{"id":"x","command":"true"}]}' > "$VT/inside-contract.json"
+check_fails "ws verify --worktree rejects a contract inside the worktree" \
+  ws verify api --worktree "$VT" --contract "$VT/inside-contract.json"
+for case in "$PROD|lives under .local/worktrees/api/" \
+            "$WS/.local/worktrees/api/foreign|not a worktree of api" \
+            "$WS/.local/worktrees/api/../other|lives under .local/worktrees/api/" \
+            "$VT|contract must not live inside"; do
+  target="${case%%|*}"; reason="${case#*|}"
+  contract="$WS/.local/agent/contracts/worktree.json"
+  [ "$target" = "$VT" ] && contract="$VT/inside-contract.json"
+  OUT="$(ws verify api --worktree "$target" --contract "$contract" 2>&1 || true)"
+  printf '%s' "$OUT" | grep -q -- "$reason" \
+    && ok "ws verify --worktree says why: $reason" \
+    || bad "ws verify --worktree says why: $reason" "$OUT"
+done
+git -C "$PROD" worktree remove --force "$VT"
+git -C "$PROD" branch -q -D ws-verify-vt1
+rm -rf "$WS/.local/worktrees/api/plain" "$WS/.local/worktrees/api/foreign" "$WS/.local/worktrees/other"
+
 section "ws policy: risk-based autonomy"
 mkdir -p "$WS/.local/agent/policies"
 cat > "$WS/.local/agent/policies/api.json" <<'JSON'
