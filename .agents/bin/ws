@@ -1497,9 +1497,27 @@ cmd_note() {
 # Operator tasks: <context>/tasks/<key>/task_<slug>.md, schema 2 (ws_tasks.py, ADR-0024). They are
 # separate from a run's plan rows, which only the run's owner edits. A status change may
 # carry the revision the caller read; it is refused when the file changed since.
+# A task's scope: a project key, or @<client> for work that belongs to the client itself
+# (ADR-0024), kept under <context>/clients/<client>/tasks/.
 task_project() {
-  validate_key "$1"
-  [ -d "$MEM/$1" ] || die "project '$1' has no memory - is the key right?"
+  case "$1" in
+    @*)
+      validate_key "${1#@}"
+      [ -f "$CONTEXT_DIR/clients/${1#@}/client.md" ] || die "no client '${1#@}' - is the key right?" ;;
+    *)
+      validate_key "$1"
+      [ -d "$MEM/$1" ] || die "project '$1' has no memory - is the key right?" ;;
+  esac
+}
+
+# A reminder is a task of kind reminder, due on its day, surfacing at its time.
+cmd_remind() {
+  local usage='usage: ws remind <project-key>|@<client> "text" --at "YYYY-MM-DD HH:MM" [--recur daily|weekly|monthly]'
+  [ $# -ge 4 ] || die "$usage"
+  local scope="$1" text="$2"
+  shift 2
+  task_project "$scope"
+  WS_TASK_ACTOR="$(owner_id)" python3 "$ROOT/.agents/bin/ws_tasks.py" remind "$CONTEXT_DIR" "$scope" "$text" "$(owner_id)" "$@" < /dev/null
 }
 
 cmd_task() {
@@ -1509,7 +1527,7 @@ cmd_task() {
   export WS_TASK_ACTOR="$(owner_id)"
   case "$sub" in
     list)
-      local usage='usage: ws task list <project-key>|--all [--json] [--status S]... [--assignee A] [--label L] [--due-before YYYY-MM-DD]'
+      local usage='usage: ws task list <project-key>|@<client>|--all [--json] [--status S]... [--assignee A] [--label L] [--due-before YYYY-MM-DD] [--client C]'
       [ $# -ge 1 ] || die "$usage"
       [ "$1" = "--all" ] || task_project "$1"
       python3 "$helper" list "$CONTEXT_DIR" "$@" ;;
@@ -3845,6 +3863,12 @@ cmd_checkpoint() {
       paths+=("memory/projects/$key")
       # Operator tasks belong to the project like its memory, under the same guard.
       [ -d "$CONTEXT_DIR/tasks/$key" ] && paths+=("tasks/$key")
+      # So do the client's own tasks (ADR-0024): checkpointed with any of its projects.
+      local client_key
+      client_key="$(reg_get "$key" | cut -f2)"
+      if [ -n "$client_key" ] && [ "$client_key" != "-" ] && [ -d "$CONTEXT_DIR/clients/$client_key/tasks" ]; then
+        paths+=("clients/$client_key/tasks")
+      fi
     fi
   fi
   # This agent's runs, narrowed to the ones this session created when it recorded any.
@@ -4251,7 +4275,8 @@ ws — engineering workspace CLI
   ws run <key> "title"             create a new run under .agents/runs/<key>/
   ws log <key> "milestone"         append one row to the project log
   ws note <key> "title" [body|-]   write a project note (notes/<date>-<slug>.md); - reads stdin
-  ws task list|add|show|edit|comment|check|status|block|unblock <key> ... operator tasks; --json, --revision
+  ws task list|add|show|edit|comment|check|status|block|unblock <key>|@<client> ... tasks; --json, --revision
+  ws remind <key>|@<client> "text" --at "YYYY-MM-DD HH:MM" [--recur weekly]  a reminder task
   ws plan show|status <key> <run> . a run's plan rows; owner only, --operator for the person
   ws sync                          pull the workspace, report product repo state
   ws route [--project k] "task"    show which skills apply (pass --project to skip other clients)
@@ -4337,6 +4362,7 @@ case "${1:-help}" in
   log) shift; cmd_log "$@" ;;
   note) shift; cmd_note "$@" ;;
   task) shift; cmd_task "$@" ;;
+  remind) shift; cmd_remind "$@" ;;
   plan) shift; cmd_plan "$@" ;;
   sync) shift; cmd_sync "$@" ;;
   route) shift; cmd_route "$@" ;;
