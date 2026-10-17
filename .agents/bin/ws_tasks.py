@@ -6,9 +6,10 @@ explicit, and reject malformed or ambiguous records before any UI writes are add
 """
 
 from __future__ import annotations
+import argparse
 
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import date, datetime
 import json
 import os
 from pathlib import Path
@@ -20,6 +21,12 @@ from typing import Iterable
 
 TASK_STATUSES = {"backlog", "ready", "in_progress", "review", "done"}
 TASK_PRIORITIES = {"low", "normal", "high", "urgent"}
+# Schema version 2 (ADR-0024): project management fields, all optional.
+TASK_KINDS = {"task", "milestone", "reminder"}
+TASK_RECURS = {"daily", "weekly", "monthly"}
+ASSIGNEE_RE = re.compile(r"(agent:)?[a-z0-9][a-z0-9_.-]*")
+DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+SCHEMA_VERSIONS = {1, 2}
 PROJECT_RE = re.compile(r"[a-z0-9][a-z0-9_-]*")
 TASK_ID_RE = re.compile(r"task_[a-z0-9][a-z0-9_-]*")
 SHA_RE = re.compile(r"[0-9a-f]{7,40}")
@@ -61,6 +68,15 @@ class TaskRecord:
     created_at: str
     updated_at: str
     body: str
+    kind: str = "task"
+    client: str = ""
+    due: str = ""
+    remind_at: str = ""
+    recur: str = ""
+    assignee: str = ""
+    rank: int = 0
+    parent: str = ""
+    depends_on: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -120,7 +136,7 @@ def load_tasks(source: TaskSource) -> tuple[list[TaskRecord], list[LegacyCandida
 def parse_task_document(source: str, path: str, revision: str, text: str) -> TaskRecord:
     metadata, body = _split_frontmatter(text)
     schema_version = _int_field(metadata, "schema_version", required=True)
-    if schema_version != 1:
+    if schema_version not in SCHEMA_VERSIONS:
         raise TaskError("unsupported task schema_version")
     task_id = _string_field(metadata, "id", required=True)
     if not TASK_ID_RE.fullmatch(task_id):
@@ -169,7 +185,63 @@ def parse_task_document(source: str, path: str, revision: str, text: str) -> Tas
         created_at=_string_field(metadata, "created_at", required=True),
         updated_at=_string_field(metadata, "updated_at", required=True),
         body=body.strip(),
+        **_v2_fields(metadata),
     )
+
+
+def _v2_fields(metadata: dict[str, object]) -> dict[str, object]:
+    """The schema version 2 fields, validated; a version 1 document has none of them."""
+    fields = {
+        "kind": _string_field(metadata, "kind", default="task"),
+        "client": _string_field(metadata, "client", default=""),
+        "due": _string_field(metadata, "due", default=""),
+        "remind_at": _string_field(metadata, "remind_at", default=""),
+        "recur": _string_field(metadata, "recur", default=""),
+        "assignee": _string_field(metadata, "assignee", default=""),
+        "rank": _int_field(metadata, "rank", default=0),
+        "parent": _string_field(metadata, "parent", default=""),
+        "depends_on": tuple(_string_list(metadata, "depends_on")),
+    }
+    _check_v2(fields)
+    return fields
+
+
+def _check_v2(fields: dict[str, object]) -> None:
+    if fields["kind"] not in TASK_KINDS:
+        raise TaskError(f"invalid kind '{fields['kind']}' (one of: {', '.join(sorted(TASK_KINDS))})")
+    if fields["client"] and not _is_key(str(fields["client"])):
+        raise TaskError("invalid client key")
+    if fields["due"]:
+        _check_date(str(fields["due"]), "due")
+    if fields["remind_at"]:
+        _check_moment(str(fields["remind_at"]))
+    if fields["recur"] and fields["recur"] not in TASK_RECURS:
+        raise TaskError(f"invalid recur '{fields['recur']}' (one of: {', '.join(sorted(TASK_RECURS))})")
+    if fields["assignee"] and not ASSIGNEE_RE.fullmatch(str(fields["assignee"])):
+        raise TaskError(f"invalid assignee '{fields['assignee']}' (a key, or agent:<tool>)")
+    if fields["parent"] and not TASK_ID_RE.fullmatch(str(fields["parent"])):
+        raise TaskError(f"invalid parent '{fields['parent']}'")
+    for ref in fields["depends_on"]:  # type: ignore[union-attr]
+        if not TASK_ID_RE.fullmatch(ref):
+            raise TaskError(f"invalid depends_on entry '{ref}'")
+
+
+def _check_date(value: str, name: str) -> None:
+    try:
+        if not DATE_RE.fullmatch(value):
+            raise ValueError
+        date.fromisoformat(value)
+    except ValueError:
+        raise TaskError(f"invalid {name} '{value}' (YYYY-MM-DD)") from None
+
+
+def _check_moment(value: str) -> None:
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        raise TaskError(f"invalid remind_at '{value}'") from None
+    if moment.tzinfo is None:
+        raise TaskError("remind_at needs a time zone offset")
 
 
 def parse_legacy_candidates(source: str, path: str, revision: str, text: str) -> list[LegacyCandidate]:
@@ -183,8 +255,10 @@ def parse_legacy_candidates(source: str, path: str, revision: str, text: str) ->
  
  
 def serialize_task_document(task: TaskRecord) -> str:
-    if task.schema_version != 1:
+    """Always writes schema version 2, so an older `ws` refuses the file instead of dropping fields."""
+    if task.schema_version not in SCHEMA_VERSIONS:
         raise TaskError("unsupported task schema_version")
+    _check_v2({name: getattr(task, name) for name in ("kind", "client", "due", "remind_at", "recur", "assignee", "rank", "parent", "depends_on")})
     if not TASK_ID_RE.fullmatch(task.id):
         raise TaskError("invalid task id")
     if not PROJECT_RE.fullmatch(task.project):
@@ -208,7 +282,7 @@ def serialize_task_document(task: TaskRecord) -> str:
 
     lines = [
         "---",
-        f"schema_version: {task.schema_version}",
+        "schema_version: 2",
         f"id: {task.id}",
         f"project: {task.project}",
         f"title: {task.title.strip()}",
@@ -238,6 +312,17 @@ def serialize_task_document(task: TaskRecord) -> str:
     else:
         lines.append("blocked: false")
         lines.append('blocked_reason: ""')
+    # Version 2 fields, written only when set so a plain task stays short.
+    for name in ("kind", "client", "due", "remind_at", "recur", "assignee", "parent"):
+        value = getattr(task, name)
+        if value and not (name == "kind" and value == "task"):
+            lines.append(f"{name}: {value}")
+    if task.rank:
+        lines.append(f"rank: {task.rank}")
+    if task.depends_on:
+        lines.append("depends_on:")
+        for ref in task.depends_on:
+            lines.append(f"  - {ref}")
     lines.append(f"created_at: {task.created_at}")
     lines.append(f"updated_at: {task.updated_at}")
     lines.append("---")
@@ -306,29 +391,7 @@ def write_task_document(
                 pass
         raise
 
-    new_rev = _revision(target_path)
-    return TaskRecord(
-        source=source.id,
-        path=relative_path,
-        revision=new_rev,
-        schema_version=task.schema_version,
-        id=task.id,
-        project=task.project,
-        title=task.title,
-        status=task.status,
-        priority=task.priority,
-        owner=task.owner,
-        labels=task.labels,
-        acceptance_criteria=task.acceptance_criteria,
-        related_plans=task.related_plans,
-        related_runs=task.related_runs,
-        git_links=task.git_links,
-        blocked=task.blocked,
-        blocked_reason=task.blocked_reason,
-        created_at=task.created_at,
-        updated_at=task.updated_at,
-        body=task.body,
-    )
+    return replace(task, source=source.id, path=relative_path, revision=_revision(target_path), schema_version=2)
 
 
 def to_json(tasks: Iterable[TaskRecord], legacy: Iterable[LegacyCandidate]) -> str:
@@ -483,6 +546,7 @@ def _task_to_dict(task: TaskRecord) -> dict[str, object]:
     data["related_plans"] = list(task.related_plans)
     data["related_runs"] = list(task.related_runs)
     data["git_links"] = [link.__dict__ for link in task.git_links]
+    data["depends_on"] = list(task.depends_on)
     return data
 
 
@@ -500,7 +564,25 @@ def project_tasks(source: TaskSource, project: str) -> list[TaskRecord]:
     return sorted((task for task in tasks if task.project == project), key=lambda task: task.id)
 
 
-def create_task(source: TaskSource, project: str, title: str, priority: str, owner: str, body: str = "") -> TaskRecord:
+def create_task(
+    source: TaskSource,
+    project: str,
+    title: str,
+    priority: str,
+    owner: str,
+    body: str = "",
+    *,
+    kind: str = "task",
+    due: str = "",
+    assignee: str = "",
+    labels: Iterable[str] = (),
+    parent: str = "",
+    remind_at: str = "",
+    recur: str = "",
+    rank: int = 0,
+    depends_on: Iterable[str] = (),
+    actor: str = "",
+) -> TaskRecord:
     """A new task in `backlog`, with an id from its title that no other task in the source has."""
     title = " ".join(title.split())
     if not title:
@@ -511,8 +593,16 @@ def create_task(source: TaskSource, project: str, title: str, priority: str, own
         raise TaskError(f"unknown priority '{priority}' (one of: {', '.join(sorted(TASK_PRIORITIES))})")
     if not PROJECT_RE.fullmatch(project):
         raise TaskError("invalid project key")
+    labels = tuple(labels)
+    for label in labels:
+        if not _is_key(label):
+            raise TaskError(f"invalid label '{label}'")
+    existing = load_tasks(source)[0]
+    for ref in (parent, *depends_on):
+        if ref:
+            _require(existing, ref)
     slug = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")[:40].strip("_") or "task"
-    taken = {task.id for task in load_tasks(source)[0]}
+    taken = {task.id for task in existing}
     base = task_id = f"task_{slug}"
     suffix = 2
     while task_id in taken or (source.root / "tasks" / project / f"{task_id}.md").exists():
@@ -520,53 +610,327 @@ def create_task(source: TaskSource, project: str, title: str, priority: str, own
         suffix += 1
     stamp = _now()
     record = TaskRecord(
-        source=source.id, path="", revision="", schema_version=1, id=task_id, project=project,
+        source=source.id, path="", revision="", schema_version=2, id=task_id, project=project,
         title=title, status="backlog", priority=priority, owner=owner or "unassigned",
-        labels=(), acceptance_criteria=(), related_plans=(), related_runs=(), git_links=(),
-        blocked=False, blocked_reason="", created_at=stamp, updated_at=stamp, body=body.strip(),
+        labels=labels, acceptance_criteria=(), related_plans=(), related_runs=(), git_links=(),
+        blocked=False, blocked_reason="", created_at=stamp, updated_at=stamp,
+        body=_with_activity(body.strip(), actor, "created"),
+        kind=kind, due=due, assignee=assignee, parent=parent,
+        remind_at=_moment(remind_at) if remind_at else "", recur=recur, rank=rank, depends_on=tuple(depends_on),
     )
     return write_task_document(source, project, record)
 
 
-def set_status(source: TaskSource, project: str, task_id: str, status: str, expected_revision: str | None = None) -> TaskRecord:
+def set_status(source: TaskSource, project: str, task_id: str, status: str, expected_revision: str | None = None, *, actor: str = "") -> TaskRecord:
     """Moves a task to `status`. With `expected_revision`, refuses when the file changed since."""
     if status not in TASK_STATUSES:
         raise TaskError(f"unknown status '{status}' (one of: {', '.join(sorted(TASK_STATUSES))})")
-    task = next((t for t in project_tasks(source, project) if t.id == task_id), None)
-    if task is None:
-        raise TaskError(f"no task '{task_id}' in {project}")
-    if expected_revision is not None and expected_revision != task.revision:
-        raise TaskConflict("revision mismatch: the task changed since it was read")
-    return write_task_document(source, project, replace(task, status=status, updated_at=_now()), expected_revision=task.revision)
+    task = _task(source, project, task_id, expected_revision)
+    body = task.body if status == task.status else _with_activity(task.body, actor, f"status {task.status} -> {status}")
+    return write_task_document(source, project, replace(task, status=status, body=body, updated_at=_now()), expected_revision=task.revision)
 
 
 REASON_MAX = 200
 
 
-def set_blocked(source: TaskSource, project: str, task_id: str, reason: str | None, expected_revision: str | None = None) -> TaskRecord:
+def set_blocked(source: TaskSource, project: str, task_id: str, reason: str | None, expected_revision: str | None = None, *, actor: str = "") -> TaskRecord:
     """Marks a task blocked with `reason`, or unblocks it when `reason` is None."""
-    task = next((t for t in project_tasks(source, project) if t.id == task_id), None)
-    if task is None:
-        raise TaskError(f"no task '{task_id}' in {project}")
-    if expected_revision is not None and expected_revision != task.revision:
-        raise TaskConflict("revision mismatch: the task changed since it was read")
+    task = _task(source, project, task_id, expected_revision)
     if reason is not None:
         reason = " ".join(reason.split())
         if not reason:
             raise TaskError("a blocked task says why")
         if len(reason) > REASON_MAX:
             raise TaskError(f"the reason is longer than {REASON_MAX} characters")
-    updated = replace(task, blocked=reason is not None, blocked_reason=reason or "", updated_at=_now())
+    note = f"blocked: {reason}" if reason is not None else "unblocked"
+    updated = replace(task, blocked=reason is not None, blocked_reason=reason or "", body=_with_activity(task.body, actor, note), updated_at=_now())
     return write_task_document(source, project, updated, expected_revision=task.revision)
+
+
+# ── Activity and checklist, kept in the task body (ADR-0024) ──────────────────────────
+
+ACTIVITY_HEADING = "## Activity"
+ACTIVITY_RE = re.compile(r"- (\S+) (\S+): (.*)")
+CHECK_RE = re.compile(r"- \[([ xX])\] (.+)")
+TEXT_MAX = 1000
+
+
+def _actor(actor: str) -> str:
+    name = actor or os.environ.get("WS_TASK_ACTOR", "") or "unknown"
+    return re.sub(r"\s+", "-", name.strip()) or "unknown"
+
+
+def _split_body(body: str) -> tuple[str, list[str]]:
+    lines = body.split("\n")
+    if ACTIVITY_HEADING not in lines:
+        return body.strip(), []
+    at = lines.index(ACTIVITY_HEADING)
+    return "\n".join(lines[:at]).strip(), [line for line in lines[at + 1:] if line.strip()]
+
+
+def _join_body(description: str, activity: list[str]) -> str:
+    parts = [description.strip()] if description.strip() else []
+    if activity:
+        parts.append(ACTIVITY_HEADING + "\n" + "\n".join(activity))
+    return "\n\n".join(parts)
+
+
+def _with_activity(body: str, actor: str, text: str) -> str:
+    description, activity = _split_body(body)
+    activity.append(f"- {_now()} {_actor(actor)}: {' '.join(text.split())}")
+    return _join_body(description, activity)
+
+
+def checklist(body: str) -> list[dict[str, object]]:
+    description, _ = _split_body(body)
+    items = []
+    for line in description.splitlines():
+        match = CHECK_RE.fullmatch(line.strip())
+        if match:
+            items.append({"n": len(items) + 1, "done": match.group(1) != " ", "text": match.group(2).strip()})
+    return items
+
+
+def activity(body: str) -> list[dict[str, str]]:
+    return [
+        {"at": m.group(1), "actor": m.group(2), "text": m.group(3)}
+        for m in (ACTIVITY_RE.fullmatch(line.strip()) for line in _split_body(body)[1]) if m
+    ]
+
+
+def _moment(value: str) -> str:
+    """A reminder time: ISO 8601, or "YYYY-MM-DD HH:MM" in local time; stored with its offset."""
+    try:
+        moment = datetime.fromisoformat(value.strip().replace(" ", "T"))
+    except ValueError:
+        raise TaskError(f"invalid remind_at '{value}' (YYYY-MM-DD HH:MM)") from None
+    return (moment if moment.tzinfo else moment.astimezone()).isoformat(timespec="minutes")
+
+
+def _task(source: TaskSource, project: str, task_id: str, expected_revision: str | None) -> TaskRecord:
+    task = next((t for t in project_tasks(source, project) if t.id == task_id), None)
+    if task is None:
+        raise TaskError(f"no task '{task_id}' in {project}")
+    if expected_revision is not None and expected_revision != task.revision:
+        raise TaskConflict("revision mismatch: the task changed since it was read")
+    return task
+
+
+def _require(tasks: Iterable[TaskRecord], task_id: str) -> TaskRecord:
+    found = next((t for t in tasks if t.id == task_id), None)
+    if found is None:
+        raise TaskError(f"no task '{task_id}'")
+    return found
+
+
+SCALARS = ("title", "priority", "due", "assignee", "parent", "remind_at", "recur", "kind", "rank")
+
+
+def edit_task(source: TaskSource, project: str, task_id: str, changes: dict[str, object],
+              expected_revision: str | None = None, *, actor: str = "") -> TaskRecord:
+    """Changes fields; `none` clears a scalar. Every change is written to the task's activity."""
+    task = _task(source, project, task_id, expected_revision)
+    updates: dict[str, object] = {}
+    notes: list[str] = []
+    for name in SCALARS:
+        if changes.get(name) is None:
+            continue
+        value = changes[name]
+        if name == "rank":
+            value = int(value)  # type: ignore[arg-type]
+        elif value == "none":
+            value = "task" if name == "kind" else ""
+        elif name == "title":
+            value = " ".join(str(value).split())
+            if not value or len(value) > TITLE_MAX:
+                raise TaskError(f"a title has 1 to {TITLE_MAX} characters")
+        elif name == "priority" and value not in TASK_PRIORITIES:
+            raise TaskError(f"unknown priority '{value}' (one of: {', '.join(sorted(TASK_PRIORITIES))})")
+        elif name == "remind_at":
+            value = _moment(str(value))
+        elif name == "parent":
+            if value == task_id:
+                raise TaskError("a task cannot be its own parent")
+            _require(load_tasks(source)[0], str(value))
+        if getattr(task, name) != value:
+            updates[name] = value
+            notes.append(f"{name} {value}" if value not in ("", 0) else f"{name} cleared")
+    labels = list(task.labels)
+    for label in changes.get("labels_add") or []:
+        if not _is_key(str(label)):
+            raise TaskError(f"invalid label '{label}'")
+        if label not in labels:
+            labels.append(str(label))
+            notes.append(f"+label {label}")
+    for label in changes.get("labels_rm") or []:
+        if label in labels:
+            labels.remove(str(label))
+            notes.append(f"-label {label}")
+    if tuple(labels) != task.labels:
+        updates["labels"] = tuple(labels)
+    depends = changes.get("depends")
+    if depends is not None:
+        refs = () if list(depends) == ["none"] else tuple(str(ref) for ref in depends)  # type: ignore[arg-type]
+        existing = load_tasks(source)[0]
+        for ref in refs:
+            if ref == task_id:
+                raise TaskError("a task cannot depend on itself")
+            _require(existing, ref)
+        if refs != task.depends_on:
+            updates["depends_on"] = refs
+            notes.append(f"depends on {', '.join(refs) or 'nothing'}")
+    accept = [" ".join(str(a).split()) for a in changes.get("accept_add") or [] if str(a).strip()]
+    if accept:
+        updates["acceptance_criteria"] = task.acceptance_criteria + tuple(accept)
+        notes.append(f"+{len(accept)} acceptance criteria")
+    body = task.body
+    items = [" ".join(str(i).split()) for i in changes.get("check_add") or [] if str(i).strip()]
+    if items:
+        description, log = _split_body(body)
+        description = "\n".join(filter(None, [description, *(f"- [ ] {item}" for item in items)]))
+        body = _join_body(description, log)
+        notes.append(f"+{len(items)} checklist")
+    if not notes:
+        raise TaskError("nothing to change")
+    updated = replace(task, **updates, body=_with_activity(body, actor, "set " + "; ".join(notes)), updated_at=_now())
+    return write_task_document(source, project, updated, expected_revision=task.revision)
+
+
+def comment_task(source: TaskSource, project: str, task_id: str, text: str,
+                 expected_revision: str | None = None, *, actor: str = "") -> TaskRecord:
+    text = " ".join(text.split())
+    if not text:
+        raise TaskError("a comment needs text")
+    if len(text) > TEXT_MAX:
+        raise TaskError(f"the comment is longer than {TEXT_MAX} characters")
+    task = _task(source, project, task_id, expected_revision)
+    updated = replace(task, body=_with_activity(task.body, actor, text), updated_at=_now())
+    return write_task_document(source, project, updated, expected_revision=task.revision)
+
+
+def check_item(source: TaskSource, project: str, task_id: str, n: int,
+               expected_revision: str | None = None, *, actor: str = "") -> TaskRecord:
+    """Toggles checklist item `n` (from 1)."""
+    task = _task(source, project, task_id, expected_revision)
+    description, log = _split_body(task.body)
+    lines = description.split("\n")
+    seen = 0
+    for index, line in enumerate(lines):
+        match = CHECK_RE.fullmatch(line.strip())
+        if not match:
+            continue
+        seen += 1
+        if seen == n:
+            done = match.group(1) == " "
+            lines[index] = f"- [{'x' if done else ' '}] {match.group(2).strip()}"
+            body = _with_activity(_join_body("\n".join(lines), log), actor, f"{'checked' if done else 'unchecked'}: {match.group(2).strip()}")
+            return write_task_document(source, project, replace(task, body=body, updated_at=_now()), expected_revision=task.revision)
+    raise TaskError(f"no checklist item {n} (the task has {seen})")
+
+
+def list_tasks(source: TaskSource, project: str | None = None, *, status: Iterable[str] = (), assignee: str = "",
+               label: str = "", due_before: str = "") -> list[TaskRecord]:
+    """Tasks of one project or of all, ranked first (lower rank earlier), then by id."""
+    if project is not None and not PROJECT_RE.fullmatch(project):
+        raise TaskError("invalid project key")
+    if due_before:
+        _check_date(due_before, "due-before")
+    statuses = set(status)
+    found = [
+        task for task in load_tasks(source)[0]
+        if (project is None or task.project == project)
+        and (not statuses or task.status in statuses)
+        and (not assignee or task.assignee == assignee)
+        and (not label or label in task.labels)
+        and (not due_before or (task.due and task.due <= due_before))
+    ]
+    return sorted(found, key=lambda t: (t.project, t.rank == 0, t.rank, t.id))
+
+
+def task_json(task: TaskRecord) -> dict[str, object]:
+    """A task for agents and the desk: its fields, the description, checklist, and activity."""
+    data = _task_to_dict(task)
+    data["description"] = _split_body(task.body)[0]
+    data["checklist"] = checklist(task.body)
+    data["activity"] = activity(task.body)
+    return data
 
 
 USAGE = """usage:
   ws_tasks.py scan <source-id> <source-root>
-  ws_tasks.py list <context-root> <project>
-  ws_tasks.py add <context-root> <project> <title> <priority> <owner>     body on stdin
+  ws_tasks.py list <context-root> <project>|--all [--json] [--status S]... [--assignee A] [--label L] [--due-before D]
+  ws_tasks.py add <context-root> <project> <title> <priority> <owner> [field options]     body on stdin
+  ws_tasks.py show <context-root> <project> <task-id> [--json]
+  ws_tasks.py edit <context-root> <project> <task-id> [field options] [--revision R]
+  ws_tasks.py comment <context-root> <project> <task-id> <text> [--revision R]
+  ws_tasks.py check <context-root> <project> <task-id> <n> [--revision R]
   ws_tasks.py status <context-root> <project> <task-id> <status> [<revision>]
   ws_tasks.py block <context-root> <project> <task-id> <revision|-> <reason>
-  ws_tasks.py unblock <context-root> <project> <task-id> <revision|->"""
+  ws_tasks.py unblock <context-root> <project> <task-id> <revision|->
+
+field options: --due D --assignee A --label L --parent ID --kind K --remind-at T --recur R
+  --rank N --depends ID; edit also takes --title, --priority, --label-rm, --check-add,
+  --accept-add, and `none` to clear a value"""
+
+
+def _options(prog: str, edit: bool = False) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog=prog, add_help=False)
+    parser.add_argument("--due")
+    parser.add_argument("--assignee")
+    parser.add_argument("--parent")
+    parser.add_argument("--kind")
+    parser.add_argument("--remind-at", dest="remind_at")
+    parser.add_argument("--recur")
+    parser.add_argument("--rank", type=int)
+    parser.add_argument("--depends", action="append")
+    if edit:
+        parser.add_argument("--title")
+        parser.add_argument("--priority")
+        parser.add_argument("--label-add", "--label", dest="labels_add", action="append")
+        parser.add_argument("--label-rm", dest="labels_rm", action="append")
+        parser.add_argument("--check-add", dest="check_add", action="append")
+        parser.add_argument("--accept-add", dest="accept_add", action="append")
+        parser.add_argument("--revision")
+    else:
+        parser.add_argument("--label", dest="labels", action="append")
+    return parser
+
+
+def _parse(parser: argparse.ArgumentParser, args: list[str]) -> argparse.Namespace:
+    try:
+        return parser.parse_args(args)
+    except SystemExit:
+        raise TaskError(f"invalid options for {parser.prog}") from None
+
+
+def _print_task(task: TaskRecord, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(task_json(task), indent=2, sort_keys=True))
+        return
+    data = task_json(task)
+    print(f"{task.id}  {task.title}")
+    for name in ("project", "client", "kind", "status", "priority", "assignee", "due", "remind_at", "recur", "parent", "rank"):
+        value = data.get(name)
+        if value not in ("", 0, None) and not (name == "kind" and value == "task"):
+            print(f"  {name}: {value}")
+    if task.blocked:
+        print(f"  blocked: {task.blocked_reason}")
+    if task.labels:
+        print(f"  labels: {', '.join(task.labels)}")
+    if task.depends_on:
+        print(f"  depends on: {', '.join(task.depends_on)}")
+    for item in data["checklist"]:  # type: ignore[union-attr]
+        print(f"  [{'x' if item['done'] else ' '}] {item['n']}. {item['text']}")
+    if data["description"]:
+        print("\n" + str(data["description"]))
+    for entry in data["activity"][-5:]:  # type: ignore[index]
+        print(f"  {entry['at']} {entry['actor']}: {entry['text']}")
+    print(f"  revision: {task.revision}")
+
+
+def _report(task: TaskRecord) -> int:
+    print(f"task {task.id} {task.status} {task.revision}")
+    return 0
 
 
 def main(argv: list[str]) -> int:
@@ -575,15 +939,58 @@ def main(argv: list[str]) -> int:
         tasks, legacy = load_tasks(source)
         print(to_json(tasks, legacy), end="")
         return 0
-    if len(argv) == 3 and argv[0] == "list":
-        for task in project_tasks(load_source("context", argv[1]), argv[2]):
+    if len(argv) == 3 and argv[0] == "list" and not argv[2].startswith("--"):
+        for task in list_tasks(load_source("context", argv[1]), argv[2]):
             blocked = f"\t[blocked] {task.blocked_reason}" if task.blocked else ""
             print(f"{task.id}\t{task.status}\t{task.priority}\t{task.title}{blocked}")
         return 0
-    if len(argv) == 6 and argv[0] == "add":
-        record = create_task(load_source("context", argv[1]), argv[2], argv[3], argv[4], argv[5], sys.stdin.read())
-        print(f"task {record.id} {record.status} {record.revision}")
+    if len(argv) >= 3 and argv[0] == "list":
+        parser = argparse.ArgumentParser(prog="ws task list", add_help=False)
+        parser.add_argument("--json", action="store_true")
+        parser.add_argument("--status", action="append", default=[])
+        parser.add_argument("--assignee", default="")
+        parser.add_argument("--label", default="")
+        parser.add_argument("--due-before", dest="due_before", default="")
+        project = None if argv[2] == "--all" else argv[2]
+        opts = _parse(parser, argv[3:])
+        found = list_tasks(load_source("context", argv[1]), project, status=opts.status, assignee=opts.assignee,
+                           label=opts.label, due_before=opts.due_before)
+        if opts.json:
+            print(json.dumps({"tasks": [task_json(task) for task in found]}, indent=2, sort_keys=True))
+        else:
+            for task in found:
+                due = f"\tdue {task.due}" if task.due else ""
+                print(f"{task.project}\t{task.id}\t{task.status}\t{task.priority}\t{task.title}{due}")
         return 0
+    if len(argv) >= 6 and argv[0] == "add":
+        opts = _parse(_options("ws task add"), argv[6:])
+        record = create_task(
+            load_source("context", argv[1]), argv[2], argv[3], argv[4], argv[5], sys.stdin.read(),
+            kind=opts.kind or "task", due=opts.due or "", assignee=opts.assignee or "", labels=opts.labels or (),
+            parent=opts.parent or "", remind_at=opts.remind_at or "", recur=opts.recur or "", rank=opts.rank or 0,
+            depends_on=opts.depends or (),
+        )
+        return _report(record)
+    if len(argv) in (4, 5) and argv[0] == "show":
+        if len(argv) == 5 and argv[4] != "--json":
+            raise TaskError("usage: ws task show <project-key> <task-id> [--json]")
+        _print_task(_task(load_source("context", argv[1]), argv[2], argv[3], None), len(argv) == 5)
+        return 0
+    if len(argv) >= 4 and argv[0] == "edit":
+        opts = _parse(_options("ws task edit", edit=True), argv[4:])
+        changes = {key: value for key, value in vars(opts).items() if key != "revision"}
+        changes["depends"] = changes.pop("depends", None)
+        return _report(edit_task(load_source("context", argv[1]), argv[2], argv[3], changes, opts.revision))
+    if len(argv) >= 5 and argv[0] in ("comment", "check"):
+        parser = argparse.ArgumentParser(prog=f"ws task {argv[0]}", add_help=False)
+        parser.add_argument("--revision")
+        opts = _parse(parser, argv[5:])
+        source = load_source("context", argv[1])
+        if argv[0] == "comment":
+            return _report(comment_task(source, argv[2], argv[3], argv[4], opts.revision))
+        if not argv[4].isdigit():
+            raise TaskError("a checklist item is a number, from 1")
+        return _report(check_item(source, argv[2], argv[3], int(argv[4]), opts.revision))
     if len(argv) in (5, 6) and argv[0] == "status":
         revision = argv[5] if len(argv) == 6 else None
         record = set_status(load_source("context", argv[1]), argv[2], argv[3], argv[4], revision)

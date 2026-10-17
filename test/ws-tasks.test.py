@@ -11,10 +11,17 @@ sys.path.insert(0, str(SOURCE / ".agents/bin"))
 from ws_tasks import (  # noqa: E402
     TaskConflict,
     TaskError,
+    check_item,
+    comment_task,
+    create_task,
+    edit_task,
+    list_tasks,
     load_source,
     load_tasks,
     parse_task_document,
     serialize_task_document,
+    set_status,
+    task_json,
     write_task_document,
 )
 
@@ -209,6 +216,122 @@ class TaskSourceParsing(unittest.TestCase):
         with self.assertRaisesRegex(TaskError, "not writable"):
             write_task_document(source, "workspace", task)
 
+
+
+V2_FIELDS = """kind: milestone
+due: 2026-10-31
+remind_at: 2026-10-30T09:00+07:00
+recur: weekly
+assignee: agent:claude-code
+rank: 3
+parent: task_parent
+depends_on:
+  - task_other
+"""
+
+
+class TaskSchemaVersion2(unittest.TestCase):
+    """Project management fields (ADR-0024): dates, reminders, ownership, order, structure."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="ws-tasks-v2-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name) / "context"
+        (self.root / "tasks" / "api").mkdir(parents=True)
+        self.source = load_source("context", self.root)
+
+    def v2(self, extra=V2_FIELDS):
+        return VALID_TASK.replace("schema_version: 1", "schema_version: 2").replace("blocked: false", extra + "blocked: false")
+
+    def test_parses_the_new_fields_and_keeps_them_through_a_round_trip(self):
+        task = parse_task_document("context", "tasks/workspace/task_demo_1.md", "r", self.v2())
+        self.assertEqual((task.kind, task.due, task.recur, task.assignee, task.rank, task.parent),
+                         ("milestone", "2026-10-31", "weekly", "agent:claude-code", 3, "task_parent"))
+        self.assertEqual(task.remind_at, "2026-10-30T09:00+07:00")
+        self.assertEqual(task.depends_on, ("task_other",))
+        again = parse_task_document("context", task.path, "r2", serialize_task_document(task))
+        for field in ("kind", "due", "remind_at", "recur", "assignee", "rank", "parent", "depends_on"):
+            self.assertEqual(getattr(again, field), getattr(task, field), field)
+
+    def test_a_version_1_task_is_read_and_written_back_as_version_2(self):
+        task = parse_task_document("context", "tasks/workspace/task_demo_1.md", "r", VALID_TASK)
+        self.assertEqual((task.kind, task.due, task.rank, task.depends_on), ("task", "", 0, ()))
+        self.assertIn("schema_version: 2", serialize_task_document(task))
+
+    def test_rejects_bad_values_for_the_new_fields(self):
+        cases = {
+            "due: 2026-02-30\n": "invalid due",
+            "kind: epic\n": "invalid kind",
+            "recur: hourly\n": "invalid recur",
+            "assignee: Some One\n": "invalid assignee",
+            "remind_at: 2026-10-30T09:00\n": "remind_at needs a time zone offset",
+            "parent: not-a-task\n": "invalid parent",
+        }
+        for extra, message in cases.items():
+            with self.assertRaisesRegex(TaskError, message, msg=extra):
+                parse_task_document("context", "tasks/workspace/x.md", "r", self.v2(extra))
+
+    def test_creates_a_task_with_fields_and_an_activity_line(self):
+        parent = create_task(self.source, "api", "Release 1", "normal", "dw-cli", kind="milestone", due="2026-11-01", actor="dw-cli")
+        task = create_task(self.source, "api", "Export CSV", "high", "dw-cli", due="2026-10-20",
+                           assignee="agent:claude-code", labels=("export",), parent=parent.id, actor="dw-cli")
+        self.assertEqual((task.due, task.assignee, task.labels, task.parent, task.schema_version),
+                         ("2026-10-20", "agent:claude-code", ("export",), parent.id, 2))
+        activity = task_json(task)["activity"]
+        self.assertEqual([(a["actor"], a["text"]) for a in activity], [("dw-cli", "created")])
+        with self.assertRaisesRegex(TaskError, "no task 'task_missing'"):
+            create_task(self.source, "api", "Orphan", "normal", "dw-cli", parent="task_missing", actor="dw-cli")
+
+    def test_edits_fields_with_the_revision_it_read_and_records_what_changed(self):
+        task = create_task(self.source, "api", "Export CSV", "normal", "dw-cli", actor="dw-cli")
+        edited = edit_task(self.source, "api", task.id, {"due": "2026-10-21", "priority": "urgent", "labels_add": ["export"],
+                                                          "check_add": ["Write the parser", "Stream rows"]},
+                           expected_revision=task.revision, actor="agent-claude")
+        self.assertEqual((edited.due, edited.priority, edited.labels), ("2026-10-21", "urgent", ("export",)))
+        data = task_json(edited)
+        self.assertEqual([c["text"] for c in data["checklist"]], ["Write the parser", "Stream rows"])
+        self.assertEqual(data["activity"][-1]["actor"], "agent-claude")
+        self.assertIn("due 2026-10-21", data["activity"][-1]["text"])
+        with self.assertRaisesRegex(TaskConflict, "revision mismatch"):
+            edit_task(self.source, "api", task.id, {"due": "none"}, expected_revision=task.revision, actor="x")
+        cleared = edit_task(self.source, "api", task.id, {"due": "none"}, actor="x")
+        self.assertEqual(cleared.due, "")
+
+    def test_comments_and_checklist_items_go_through_the_activity(self):
+        task = create_task(self.source, "api", "Export CSV", "normal", "dw-cli", actor="dw-cli")
+        task = edit_task(self.source, "api", task.id, {"check_add": ["Parser", "Rows"]}, actor="dw-cli")
+        task = check_item(self.source, "api", task.id, 2, actor="agent-claude")
+        task = comment_task(self.source, "api", task.id, "Rows stream in batches of 500.", actor="agent-claude")
+        data = task_json(task)
+        self.assertEqual([c["done"] for c in data["checklist"]], [False, True])
+        self.assertEqual([a["text"] for a in data["activity"]][-2:], ["checked: Rows", "Rows stream in batches of 500."])
+        with self.assertRaisesRegex(TaskError, "no checklist item 3"):
+            check_item(self.source, "api", task.id, 3, actor="x")
+
+    def test_a_status_change_is_recorded_in_the_activity(self):
+        task = create_task(self.source, "api", "Export CSV", "normal", "dw-cli", actor="dw-cli")
+        moved = set_status(self.source, "api", task.id, "in_progress", actor="agent-claude")
+        self.assertEqual(task_json(moved)["activity"][-1]["text"], "status backlog -> in_progress")
+
+    def test_lists_across_projects_with_filters(self):
+        (self.root / "tasks" / "web").mkdir()
+        create_task(self.source, "api", "Export CSV", "high", "dw-cli", due="2026-10-20", assignee="dw", actor="x")
+        create_task(self.source, "web", "Landing copy", "normal", "dw-cli", labels=("copy",), actor="x")
+        self.assertEqual([t.title for t in list_tasks(self.source)], ["Export CSV", "Landing copy"])
+        self.assertEqual([t.title for t in list_tasks(self.source, project="web")], ["Landing copy"])
+        self.assertEqual([t.title for t in list_tasks(self.source, assignee="dw")], ["Export CSV"])
+        self.assertEqual([t.title for t in list_tasks(self.source, label="copy")], ["Landing copy"])
+        self.assertEqual([t.title for t in list_tasks(self.source, due_before="2026-10-25")], ["Export CSV"])
+
+    def test_show_and_list_print_json_for_agents(self):
+        task = create_task(self.source, "api", "Export CSV", "high", "dw-cli", due="2026-10-20", actor="x")
+        script = str(SOURCE / ".agents/bin/ws_tasks.py")
+        shown = subprocess.run([sys.executable, script, "show", str(self.root), "api", task.id, "--json"], text=True, capture_output=True)
+        self.assertEqual(shown.returncode, 0, shown.stderr)
+        self.assertIn('"due": "2026-10-20"', shown.stdout)
+        listed = subprocess.run([sys.executable, script, "list", str(self.root), "--all", "--json"], text=True, capture_output=True)
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        self.assertIn(f'"id": "{task.id}"', listed.stdout)
 
 if __name__ == "__main__":
     unittest.main()

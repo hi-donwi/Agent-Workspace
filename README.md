@@ -156,6 +156,10 @@ ws log <project-key> "milestone"           # append to the project log
 ws note <project-key> "title" "body"       # keep a project note (body - reads stdin)
 ws task add <project-key> "title" --priority high   # an operator task, in backlog
 ws task status <project-key> <task-id> in_progress  # backlog|ready|in_progress|review|done
+ws task edit <project-key> <task-id> --due 2026-11-20 --assignee agent:claude   # fields; none clears
+ws task show <project-key> <task-id> --json        # fields, checklist, activity
+ws task list --all --due-before 2026-11-01 --json  # across projects, for the desk and agents
+ws task comment <project-key> <task-id> "text"     # appended to the task's activity
 ws plan status <project-key> <run-id> 2 done        # a run's plan row; owner only
 ws clock in <project-key> "what you'll do" # human hours
 ws agent in <project-key> "what it'll do"  # agent hours, counted separately

@@ -61,7 +61,7 @@ that is free or expensive.
 | `runs/<key>/<run>/contributors/<id>.md` | One file per agent | A parallel agent writes only its own file |
 | `memory/projects/<key>/log.md` | Append-only | Use `ws log <key> "milestone"`. Merges by union — both entries survive |
 | `memory/projects/<key>/notes/<date>-<slug>.md` | One file per note | Use `ws note <key> "title" ["body" \| -]`. A new note never overwrites another (`-2`, `-3`, … on a clash); edit your own notes only |
-| `tasks/<key>/task_<slug>.md` | One file per task | Use `ws task add` and `ws task status`. A status change may carry the revision you read (`--revision`) and is refused if the task changed since. These are operator tasks; a run's plan rows stay with the run's owner |
+| `tasks/<key>/task_<slug>.md` | One file per task | Use `ws task add`, `edit`, `status`, `block`, `comment`, and `check`. A change may carry the revision you read (`--revision`) and is refused if the task changed since; every change is appended to the task's activity with who made it (schema 2, ADR-0024). These are operator tasks; a run's plan rows stay with the run's owner |
 | `context/registry.tsv` | Append-only | One row per project. Merges by union; `ws doctor` catches duplicate keys |
 | `memory/projects/index.md` | Shared, rare | Re-read, then add your row. Never rewrite rows you did not create |
 | `memory/projects/<key>/decisions.md` | Shared, rare | Same. A conflict here means two people changed the same fact — resolve it by reading both sides |

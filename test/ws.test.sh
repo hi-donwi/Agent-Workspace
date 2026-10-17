@@ -1465,6 +1465,32 @@ check_fails "a stale revision cannot unblock" ws task unblock api task_write_the
 check "unblocking" ws task unblock api task_write_the_export
 contains "$TASKS/task_write_the_export.md" "blocked: false" "the task is free again"
 
+# Project management fields (ADR-0024): written as schema 2, every change in the activity.
+contains "$TASKS/task_write_the_export.md" "schema_version: 2" "a changed task is written as schema 2"
+contains "$TASKS/task_write_the_export.md" "status in_progress -> done" "the status change is in the activity"
+check "a milestone with a due date" ws task add api "Release one" --kind milestone --due 2026-11-30
+check "a task with a due date, an assignee, labels, and a parent" \
+  ws task add api "Ship the importer" --due 2026-11-20 --assignee agent:claude --label import --label data --parent task_release_one
+contains "$TASKS/task_ship_the_importer.md" "assignee: agent:claude" "the assignee is kept"
+contains "$TASKS/task_ship_the_importer.md" "parent: task_release_one" "the parent is kept"
+check_fails "a parent that does not exist is refused" ws task add api "Orphan" --parent task_nope
+check_fails "an invalid due date is refused" ws task add api "Bad date" --due 2026-02-30
+check "an edit sets fields and adds checklist items" \
+  ws task edit api task_ship_the_importer --priority urgent --due none --check-add "Parse rows" --check-add "Report errors"
+contains "$TASKS/task_ship_the_importer.md" "[ ] Report errors" "checklist items are in the body"
+check "a checklist item is checked by number" ws task check api task_ship_the_importer 2
+contains "$TASKS/task_ship_the_importer.md" "[x] Report errors" "the item is checked"
+check_fails "a checklist number past the end is refused" ws task check api task_ship_the_importer 9
+check "a comment" ws task comment api task_ship_the_importer "Rows arrive in batches"
+contains "$TASKS/task_ship_the_importer.md" "Rows arrive in batches" "the comment is in the activity"
+check_fails "an edit that changes nothing is refused" ws task edit api task_ship_the_importer --priority urgent
+SHOW="$(ws task show api task_ship_the_importer --json 2>&1)"
+printf '%s' "$SHOW" | grep -q '"priority": "urgent"' && printf '%s' "$SHOW" | grep -q '"text": "Rows arrive in batches"' \
+  && ok "ws task show --json carries fields and activity" || bad "ws task show --json carries fields and activity" "$SHOW"
+ALL="$(ws task list --all --label import --json 2>&1)"
+printf '%s' "$ALL" | grep -q '"id": "task_ship_the_importer"' && ! printf '%s' "$ALL" | grep -q '"id": "task_with_body"' \
+  && ok "ws task list --all filters across projects" || bad "ws task list --all filters across projects" "$ALL"
+
 section "run plans"
 # A plan row changes only through its run's owner - or the person that owner is, at the
 # desk, with --operator - and the run rules hold: one row in progress, a reason for a
