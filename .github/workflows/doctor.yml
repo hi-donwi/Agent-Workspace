@@ -41,6 +41,7 @@ jobs:
       - name: Run Python tests
         run: |
           python3 test/ws-tasks.test.py
+          python3 test/ws-pm.test.py
           python3 test/ws-security.test.py
 
   doctor:

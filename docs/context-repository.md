@@ -15,13 +15,29 @@ context/
 │   ├── client.md               who they are, contract, stakeholders
 │   ├── decisions.md            decisions that apply to all their projects
 │   ├── skills/<domain>/        their domain glossary and business rules
+│   ├── tasks/                  work that belongs to the client, not one project (ws task ... @<client>)
 │   └── docs/                   their proposals, kick-off notes, client-specific ADRs
 ├── memory/projects/<key>/    project.md · active.md · decisions.md · log.md (flat)
+├── tasks/<key>/              operator tasks, one file each (ws task, ADR-0024)
+├── pm.json                   alert thresholds for ws today and ws alerts (optional)
 ├── runs/<key>/<run>/         brief · plan · progress · decisions · evidence · handoff
 ├── skills/<name>/            domain skills shared across every client
 ├── works/{human,agent}/<key>/  hours; reports can group `--client`
 └── docs/adr/                 decisions about this workspace itself
 ```
+
+## Alert thresholds
+
+`ws today` and `ws alerts` compute what is overdue, due, waiting for someone, blocked, stale,
+or awaiting review from the records each time (ADR-0024). `pm.json` tunes when work counts as
+stalled; every key is optional and a missing file keeps the defaults:
+
+```json
+{ "schema_version": 1, "stale_days": 5, "blocked_days": 2, "review_days": 2,
+  "reminder_lead_minutes": 15, "agent_waiting_hours": 2 }
+```
+
+Snoozes are one operator's and stay in `.local/pm/` on their machine.
 
 ## Client vs. project
 

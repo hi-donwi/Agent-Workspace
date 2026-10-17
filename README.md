@@ -162,6 +162,8 @@ ws task list --all --due-before 2026-11-01 --json  # across projects, for the de
 ws task comment <project-key> <task-id> "text"     # appended to the task's activity
 ws task add @<client> "Send the report" --due 2026-10-31 --recur monthly  # the client's own work
 ws remind <project-key>|@<client> "Call" --at "2026-10-20 14:00"          # a reminder task
+ws today                                   # overdue, due today, waiting for you, in progress
+ws alerts --json | ws alerts snooze <id> --for 1d   # computed alerts; snoozes stay local
 ws plan status <project-key> <run-id> 2 done        # a run's plan row; owner only
 ws clock in <project-key> "what you'll do" # human hours
 ws agent in <project-key> "what it'll do"  # agent hours, counted separately
