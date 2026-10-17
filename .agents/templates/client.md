@@ -20,4 +20,9 @@ One paragraph: who they are, what industry, what the engagement covers.
 
 ## Stakeholders
 
-`[PENDING]` — names and roles.
+`[PENDING]` — roles only: who decides, who reviews, who pays. Names and contact details go in
+`contacts.md`, which is restricted and never reaches an agent (ADR-0024).
+
+## Working agreement
+
+Hours, channels, report rhythm, and anything an agent should respect when working for them.

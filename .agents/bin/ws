@@ -911,7 +911,17 @@ cmd_client() {
   case "${1:-list}" in
     new)  shift; client_new "$@" ;;
     list) client_list ;;
-    *) die "usage: ws client [new <key> | list]" ;;
+    show)
+      shift
+      [ $# -ge 1 ] || die "usage: ws client show <client> [--json]"
+      task_project "@$1"
+      python3 "$ROOT/.agents/bin/ws_pm.py" client "$CONTEXT_DIR" "$ROOT" "$@" ;;
+    log)
+      shift
+      [ $# -eq 2 ] || die 'usage: ws client log <client> "what happened"'
+      task_project "@$1"
+      WS_TASK_ACTOR="$(owner_id)" python3 "$ROOT/.agents/bin/ws_pm.py" client-log "$CONTEXT_DIR" "$1" "$2" ;;
+    *) die 'usage: ws client [new <key> | list | show <key> [--json] | log <key> "text"]' ;;
   esac
 }
 
@@ -935,6 +945,11 @@ client_new() {
   else
     printf '# %s - decisions\n' "$key" > "$dst/decisions.md"
   fi
+  # Restricted records (ADR-0024): never in a session pack, never sent to a model.
+  local restricted
+  for restricted in contacts commercial; do
+    [ -f "$TPL/client-$restricted.md" ] && sed "s|{{CLIENT}}|$key|g" "$TPL/client-$restricted.md" > "$dst/$restricted.md"
+  done
   c_grn "-> client '$key' created at ${dst#$ROOT/}"
   c_dim "   register a project against it with: ws new <key> <folder> --client $key"
 }
@@ -4300,6 +4315,7 @@ ws — engineering workspace CLI
   ws task list|add|show|edit|comment|check|status|block|unblock <key>|@<client> ... tasks; --json, --revision
   ws remind <key>|@<client> "text" --at "YYYY-MM-DD HH:MM" [--recur weekly]  a reminder task
   ws today [--json] [--scope S] [--client C]  overdue, due, waiting for you, in progress
+  ws client show <c> [--json] | log <c> "text"   a client's dossier; restricted records stay out
   ws alerts [--json] [--all] | snooze <id> --for 1d   computed alerts; snoozes stay local
   ws plan show|status <key> <run> . a run's plan rows; owner only, --operator for the person
   ws sync                          pull the workspace, report product repo state

@@ -164,6 +164,8 @@ ws task add @<client> "Send the report" --due 2026-10-31 --recur monthly  # the 
 ws remind <project-key>|@<client> "Call" --at "2026-10-20 14:00"          # a reminder task
 ws today                                   # overdue, due today, waiting for you, in progress
 ws alerts --json | ws alerts snooze <id> --for 1d   # computed alerts; snoozes stay local
+ws client show <client> [--json]            # profile, projects, open work, interactions
+ws client log <client> "Call: agreed scope" # the client's interaction log
 ws plan status <project-key> <run-id> 2 done        # a run's plan row; owner only
 ws clock in <project-key> "what you'll do" # human hours
 ws agent in <project-key> "what it'll do"  # agent hours, counted separately
