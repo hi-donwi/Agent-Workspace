@@ -1490,6 +1490,22 @@ printf '%s' "$SHOW" | grep -q '"priority": "urgent"' && printf '%s' "$SHOW" | gr
 ALL="$(ws task list --all --label import --json 2>&1)"
 printf '%s' "$ALL" | grep -q '"id": "task_ship_the_importer"' && ! printf '%s' "$ALL" | grep -q '"id": "task_with_body"' \
   && ok "ws task list --all filters across projects" || bad "ws task list --all filters across projects" "$ALL"
+# Work that belongs to a client, reminders, and recurring work (ADR-0024).
+check "a client's own task" ws task add @acme "Send the monthly report" --due 2026-10-31 --recur monthly
+exists "$WS/context/clients/acme/tasks/task_send_the_monthly_report.md" "it lives with the client"
+check_fails "an unknown client is refused" ws task add @nosuch "x"
+OUT="$(ws task status @acme task_send_the_monthly_report done 2>&1)"
+printf '%s' "$OUT" | grep -q '^next task_send_the_monthly_report_2 backlog' \
+  && ok "finishing recurring work prints its next occurrence" || bad "finishing recurring work prints its next occurrence" "$OUT"
+contains "$WS/context/clients/acme/tasks/task_send_the_monthly_report_2.md" "due: 2026-11-30" "the next one is due a month later"
+check "a reminder" ws remind api "Call about phase 2" --at "2026-10-20 14:00"
+contains "$TASKS/task_call_about_phase_2.md" "kind: reminder" "a reminder is a task of kind reminder"
+contains "$TASKS/task_call_about_phase_2.md" "remind_at: 2026-10-20T14:00" "it keeps its time"
+check_fails "a reminder without a time is refused" ws remind api "No time"
+ACME="$(ws task list --all --client acme --json 2>&1)"
+printf '%s' "$ACME" | grep -q '"scope": "@acme"' && printf '%s' "$ACME" | grep -q '"scope": "api"' \
+  && ! printf '%s' "$ACME" | grep -q '"scope": "otherp"' \
+  && ok "--client keeps the client's tasks and its projects' tasks" || bad "--client keeps the client's tasks and its projects' tasks" "$ACME"
 
 section "run plans"
 # A plan row changes only through its run's owner - or the person that owner is, at the
@@ -2019,6 +2035,11 @@ WS_SESSION_ID=cpa check "a checkpoint after adding a task" ws checkpoint otherp 
 CP="$(git -C "$WS/context" show --name-only --format= HEAD)"
 printf '%s' "$CP" | grep -q 'tasks/otherp/task_checkpoint_me.md' \
   && ok "operator tasks are in the checkpoint" || bad "operator tasks are in the checkpoint" "$CP"
+WS_SESSION_ID=cpa ws task add @beta "Client follow-up" >/dev/null 2>&1
+WS_SESSION_ID=cpa check "a checkpoint after adding a client task" ws checkpoint otherp -m "client tasks"
+CP="$(git -C "$WS/context" show --name-only --format= HEAD)"
+printf '%s' "$CP" | grep -q 'clients/beta/tasks/task_client_follow_up.md' \
+  && ok "the client's own tasks are checkpointed with its project" || bad "the client's own tasks are checkpointed with its project" "$CP"
 
 section "hard rules reach every agent"
 # One block, repeated in every tool's entry file: a copy that drifts is a rule

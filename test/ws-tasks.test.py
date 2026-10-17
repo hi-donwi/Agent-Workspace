@@ -13,6 +13,7 @@ from ws_tasks import (  # noqa: E402
     TaskError,
     check_item,
     comment_task,
+    create_reminder,
     create_task,
     edit_task,
     list_tasks,
@@ -332,6 +333,69 @@ class TaskSchemaVersion2(unittest.TestCase):
         listed = subprocess.run([sys.executable, script, "list", str(self.root), "--all", "--json"], text=True, capture_output=True)
         self.assertEqual(listed.returncode, 0, listed.stderr)
         self.assertIn(f'"id": "{task.id}"', listed.stdout)
+
+
+class ClientTasksAndReminders(unittest.TestCase):
+    """Work that belongs to a client, reminders, and recurring work (ADR-0024)."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="ws-tasks-client-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name) / "context"
+        for path in ("tasks/api", "tasks/web", "clients/acme", "clients/beta"):
+            (self.root / path).mkdir(parents=True)
+        (self.root / "registry.tsv").write_text("key\tclient\tgroup\tfolder\napi\tacme\t-\tprojects/acme/api\nweb\tbeta\t-\tprojects/beta/web\n")
+        self.source = load_source("context", self.root)
+
+    def test_a_client_task_lives_with_the_client_and_moves_like_any_task(self):
+        task = create_task(self.source, "@acme", "Send the monthly report", "normal", "dw-cli", due="2026-10-31", actor="x")
+        self.assertEqual((task.project, task.client), ("", "acme"))
+        self.assertEqual(task.path, f"clients/acme/tasks/{task.id}.md")
+        moved = set_status(self.source, "@acme", task.id, "in_progress", actor="x")
+        self.assertEqual(moved.status, "in_progress")
+        self.assertEqual([t.id for t in list_tasks(self.source, "@acme")], [task.id])
+        self.assertIn(task.id, [t.id for t in list_tasks(self.source)])
+        with self.assertRaisesRegex(TaskError, "no task"):
+            set_status(self.source, "@beta", task.id, "done", actor="x")
+
+    def test_a_task_belongs_to_a_project_or_a_client(self):
+        neither = VALID_TASK.replace("project: workspace", 'project: ""').replace("schema_version: 1", "schema_version: 2")
+        with self.assertRaisesRegex(TaskError, "a project or a client"):
+            parse_task_document("context", "clients/acme/tasks/x.md", "r", neither)
+        both = VALID_TASK.replace("blocked: false", "client: acme\nblocked: false").replace("schema_version: 1", "schema_version: 2")
+        with self.assertRaisesRegex(TaskError, "a project or a client"):
+            parse_task_document("context", "tasks/workspace/x.md", "r", both)
+
+    def test_the_client_filter_includes_the_client_tasks_and_its_projects_tasks(self):
+        create_task(self.source, "api", "Export CSV", "normal", "dw-cli", actor="x")
+        create_task(self.source, "web", "Landing copy", "normal", "dw-cli", actor="x")
+        create_task(self.source, "@acme", "Invoice pack", "normal", "dw-cli", actor="x")
+        self.assertEqual(sorted(t.title for t in list_tasks(self.source, client="acme")), ["Export CSV", "Invoice pack"])
+        script = str(SOURCE / ".agents/bin/ws_tasks.py")
+        listed = subprocess.run([sys.executable, script, "list", str(self.root), "--all", "--json"], text=True, capture_output=True)
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        import json as _json
+        clients = {t["title"]: t["client"] for t in _json.loads(listed.stdout)["tasks"]}
+        self.assertEqual(clients, {"Export CSV": "acme", "Landing copy": "beta", "Invoice pack": "acme"})
+
+    def test_a_reminder_is_a_task_with_a_time(self):
+        reminder = create_reminder(self.source, "@beta", "Call about phase 2", "2026-10-20 14:00", actor="x")
+        self.assertEqual((reminder.kind, reminder.due), ("reminder", "2026-10-20"))
+        self.assertTrue(reminder.remind_at.startswith("2026-10-20T14:00"))
+        self.assertRegex(reminder.remind_at, r"[+-]\d{2}:\d{2}$")
+
+    def test_finishing_recurring_work_creates_the_next_occurrence(self):
+        weekly = create_reminder(self.source, "api", "Weekly report", "2026-10-20 09:00+07:00", recur="weekly", actor="x")
+        set_status(self.source, "api", weekly.id, "done", actor="x")
+        upcoming = [t for t in list_tasks(self.source, "api") if t.status == "backlog"]
+        self.assertEqual(len(upcoming), 1)
+        self.assertEqual((upcoming[0].due, upcoming[0].remind_at, upcoming[0].recur), ("2026-10-27", "2026-10-27T09:00+07:00", "weekly"))
+        self.assertIn(f"repeats {weekly.id}", task_json(upcoming[0])["activity"][0]["text"])
+
+        monthly = create_task(self.source, "@acme", "Invoice", "normal", "dw-cli", due="2026-01-31", recur="monthly", actor="x")
+        set_status(self.source, "@acme", monthly.id, "done", actor="x")
+        nxt = [t for t in list_tasks(self.source, "@acme") if t.status == "backlog"]
+        self.assertEqual([t.due for t in nxt], ["2026-02-28"])
 
 if __name__ == "__main__":
     unittest.main()
