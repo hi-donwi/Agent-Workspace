@@ -166,6 +166,7 @@ ws today                                   # overdue, due today, waiting for you
 ws alerts --json | ws alerts snooze <id> --for 1d   # computed alerts; snoozes stay local
 ws client show <client> [--json]            # profile, projects, open work, interactions
 ws client log <client> "Call: agreed scope" # the client's interaction log
+ws mcp                                     # stdio MCP server for coding agents (see below)
 ws plan status <project-key> <run-id> 2 done        # a run's plan row; owner only
 ws clock in <project-key> "what you'll do" # human hours
 ws agent in <project-key> "what it'll do"  # agent hours, counted separately
@@ -219,6 +220,19 @@ artifacts. Use `--run <run-id>` to write the sanitized report to the private con
 where the agent's change is; the path must be one of the project's worktrees under
 `.local/worktrees/<key>/` and share the product repository, and the contract may live in
 neither checkout.
+
+### Project management for agents
+
+Tasks, milestones, reminders, alerts, and client profiles are files in `context/`, changed
+through `ws` (ADR-0024). Agents get them three ways, all within their session's bind:
+
+- the **work digest** that `ws session bind` writes into `CONTEXT.md`;
+- the **CLI** with `--json`: `ws today`, `ws alerts`, `ws task list|show|add|edit|status|comment|check`;
+- the **MCP server** `ws mcp`, registered once per tool, for example
+  `claude mcp add workspace -- ws mcp` (Claude Code) or the same command in another tool's MCP
+  settings. It offers `pm_today`, `pm_alerts`, `pm_list_tasks`, `pm_get_task`, `pm_add_task`,
+  `pm_update_task`, `pm_comment`, `pm_check`, and `client_profile`, and refuses any scope outside
+  the bound project and its client. Contacts and commercial terms never leave the desk.
 
 The `agentic governance` workflow validates the public templates and helper syntax without
 checking out `context/` or any product repository. Configure these workflow jobs as required

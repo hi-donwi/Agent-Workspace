@@ -121,5 +121,5 @@ the session pack, and an MCP server all go through that one implementation.
 - [x] Milestones (progress from children; `ws task list --kind milestone`)
 - [x] `ws client show|log`, restricted records (scaffolded by `ws client new`)
 - [x] Work digest in the session pack
-- [ ] `ws mcp`
+- [x] `ws mcp`
 - [ ] The desk: Today, Missions board, Backlog, Timeline, Clients, Inbox

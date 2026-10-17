@@ -1547,6 +1547,20 @@ cmd_alerts() {
   python3 "$ROOT/.agents/bin/ws_pm.py" alerts "$CONTEXT_DIR" "$ROOT" "$@" || die "$usage"
 }
 
+# The project management records over MCP (stdio) for any coding agent (ADR-0024). Scope
+# follows this session's bind, read on every call; --project fixes it; --workspace opens
+# every scope and is for the operator's own assistant only. Register it once, for example:
+#   claude mcp add workspace -- ws mcp
+cmd_mcp() {
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      -h|--help) die 'usage: ws mcp [--project <project-key>] [--workspace]   (stdio MCP server)' ;;
+    esac
+  done
+  WS_TASK_ACTOR="$(owner_id)" exec python3 "$ROOT/.agents/bin/ws_mcp.py" "$CONTEXT_DIR" "$ROOT" --session-dir "$(session_dir)" "$@"
+}
+
 # A reminder is a task of kind reminder, due on its day, surfacing at its time.
 cmd_remind() {
   local usage='usage: ws remind <project-key>|@<client> "text" --at "YYYY-MM-DD HH:MM" [--recur daily|weekly|monthly]'
@@ -4324,6 +4338,7 @@ ws — engineering workspace CLI
   ws remind <key>|@<client> "text" --at "YYYY-MM-DD HH:MM" [--recur weekly]  a reminder task
   ws today [--json] [--scope S] [--client C]  overdue, due, waiting for you, in progress
   ws client show <c> [--json] | log <c> "text"   a client's dossier; restricted records stay out
+  ws mcp [--project K] [--workspace]  stdio MCP server: tasks, today, alerts, client profile
   ws alerts [--json] [--all] | snooze <id> --for 1d   computed alerts; snoozes stay local
   ws plan show|status <key> <run> . a run's plan rows; owner only, --operator for the person
   ws sync                          pull the workspace, report product repo state
@@ -4413,6 +4428,7 @@ case "${1:-help}" in
   remind) shift; cmd_remind "$@" ;;
   today) shift; cmd_today "$@" ;;
   alerts) shift; cmd_alerts "$@" ;;
+  mcp) shift; cmd_mcp "$@" ;;
   plan) shift; cmd_plan "$@" ;;
   sync) shift; cmd_sync "$@" ;;
   route) shift; cmd_route "$@" ;;
