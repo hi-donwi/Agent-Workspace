@@ -1506,6 +1506,21 @@ ACME="$(ws task list --all --client acme --json 2>&1)"
 printf '%s' "$ACME" | grep -q '"scope": "@acme"' && printf '%s' "$ACME" | grep -q '"scope": "api"' \
   && ! printf '%s' "$ACME" | grep -q '"scope": "otherp"' \
   && ok "--client keeps the client's tasks and its projects' tasks" || bad "--client keeps the client's tasks and its projects' tasks" "$ACME"
+# Today and alerts are computed from the same records (ADR-0024).
+check "a task that is late" ws task add api "Late report" --due 2020-01-02
+TODAY="$(ws today --json 2>&1)"
+printf '%s' "$TODAY" | grep -q '"id": "overdue:api:task_late_report"' \
+  && ok "ws today lists overdue work" || bad "ws today lists overdue work" "$TODAY"
+check "ws today prints a summary" ws today
+check "an alert is snoozed" ws alerts snooze overdue:api:task_late_report --for 1d
+exists "$WS/.local/pm/snoozes.json" "snoozes stay on this machine, in .local/"
+ALERTS="$(ws alerts --json 2>&1)"
+! printf '%s' "$ALERTS" | grep -q 'overdue:api:task_late_report' \
+  && ok "a snoozed alert is hidden" || bad "a snoozed alert is hidden" "$ALERTS"
+ws alerts --all --json 2>&1 | grep -q 'overdue:api:task_late_report' \
+  && ok "--all shows snoozed alerts" || bad "--all shows snoozed alerts" "$(ws alerts --all --json 2>&1)"
+check_fails "a malformed alert id is refused" ws alerts snooze "not an id" --for 1d
+check_fails "a snooze needs a length or --off" ws alerts snooze overdue:api:task_late_report
 
 section "run plans"
 # A plan row changes only through its run's owner - or the person that owner is, at the

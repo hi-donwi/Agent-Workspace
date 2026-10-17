@@ -1510,6 +1510,28 @@ task_project() {
   esac
 }
 
+# Today and alerts (ADR-0024): computed from tasks, local approvals, and agent activity
+# records each time; thresholds in <context>/pm.json; snoozes in .local/pm/ (ws_pm.py).
+cmd_today() {
+  local usage='usage: ws today [--json] [--scope <project-key>|@<client>] [--client <client>]'
+  local arg
+  for arg in "$@"; do case "$arg" in -h|--help) die "$usage" ;; esac; done
+  python3 "$ROOT/.agents/bin/ws_pm.py" today "$CONTEXT_DIR" "$ROOT" "$@" || die "$usage"
+}
+
+cmd_alerts() {
+  if [ "${1:-}" = "snooze" ]; then
+    shift
+    [ $# -ge 2 ] || die 'usage: ws alerts snooze <alert-id> --for 1h|1d|1w|"YYYY-MM-DD HH:MM" | --off'
+    python3 "$ROOT/.agents/bin/ws_pm.py" snooze "$ROOT" "$@"
+    return
+  fi
+  local usage='usage: ws alerts [--json] [--all] [--scope <project-key>|@<client>] [--client <client>] | ws alerts snooze <alert-id> --for 1d'
+  local arg
+  for arg in "$@"; do case "$arg" in -h|--help) die "$usage" ;; esac; done
+  python3 "$ROOT/.agents/bin/ws_pm.py" alerts "$CONTEXT_DIR" "$ROOT" "$@" || die "$usage"
+}
+
 # A reminder is a task of kind reminder, due on its day, surfacing at its time.
 cmd_remind() {
   local usage='usage: ws remind <project-key>|@<client> "text" --at "YYYY-MM-DD HH:MM" [--recur daily|weekly|monthly]'
@@ -4277,6 +4299,8 @@ ws — engineering workspace CLI
   ws note <key> "title" [body|-]   write a project note (notes/<date>-<slug>.md); - reads stdin
   ws task list|add|show|edit|comment|check|status|block|unblock <key>|@<client> ... tasks; --json, --revision
   ws remind <key>|@<client> "text" --at "YYYY-MM-DD HH:MM" [--recur weekly]  a reminder task
+  ws today [--json] [--scope S] [--client C]  overdue, due, waiting for you, in progress
+  ws alerts [--json] [--all] | snooze <id> --for 1d   computed alerts; snoozes stay local
   ws plan show|status <key> <run> . a run's plan rows; owner only, --operator for the person
   ws sync                          pull the workspace, report product repo state
   ws route [--project k] "task"    show which skills apply (pass --project to skip other clients)
@@ -4363,6 +4387,8 @@ case "${1:-help}" in
   note) shift; cmd_note "$@" ;;
   task) shift; cmd_task "$@" ;;
   remind) shift; cmd_remind "$@" ;;
+  today) shift; cmd_today "$@" ;;
+  alerts) shift; cmd_alerts "$@" ;;
   plan) shift; cmd_plan "$@" ;;
   sync) shift; cmd_sync "$@" ;;
   route) shift; cmd_route "$@" ;;
