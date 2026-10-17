@@ -3942,24 +3942,28 @@ cmd_scan() {
 # weaken its own gate. Command output is deliberately discarded: evidence records
 # status and metadata, never arbitrary tool output that might contain secrets.
 cmd_verify() {
-  local key="" contract="" run="" json=0
+  local usage="usage: ws verify <project-key> [--contract <file>] [--run <run-id>] [--worktree <path>] [--json]"
+  local key="" contract="" run="" worktree="" json=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --contract)
-        [ -n "${2:-}" ] || die "usage: ws verify <project-key> [--contract <file>] [--run <run-id>] [--json]"
+        [ -n "${2:-}" ] || die "$usage"
         contract="$2"; shift 2 ;;
       --run)
-        [ -n "${2:-}" ] || die "usage: ws verify <project-key> [--contract <file>] [--run <run-id>] [--json]"
+        [ -n "${2:-}" ] || die "$usage"
         run="$2"; shift 2 ;;
+      --worktree)
+        [ -n "${2:-}" ] || die "$usage"
+        worktree="$2"; shift 2 ;;
       --json) json=1; shift ;;
-      --help|-h) die "usage: ws verify <project-key> [--contract <file>] [--run <run-id>] [--json]" ;;
-      --*) die "usage: ws verify <project-key> [--contract <file>] [--run <run-id>] [--json]" ;;
+      --help|-h) die "$usage" ;;
+      --*) die "$usage" ;;
       *)
-        [ -z "$key" ] || die "usage: ws verify <project-key> [--contract <file>] [--run <run-id>] [--json]"
+        [ -z "$key" ] || die "$usage"
         key="$1"; shift ;;
     esac
   done
-  [ -n "$key" ] || die "usage: ws verify <project-key> [--contract <file>] [--run <run-id>] [--json]"
+  [ -n "$key" ] || die "$usage"
   validate_key "$key"
   local row; row="$(reg_get "$key")"
   [ -n "$row" ] || die "unknown project: $key"
@@ -3971,11 +3975,33 @@ cmd_verify() {
     contract="$ROOT/.local/agent/contracts/$key.json"
   fi
   [ -f "$contract" ] || die "no operator contract at $contract"
-  local abs_contract abs_root
+  local abs_contract abs_root abs_primary
   abs_contract="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$contract")"
-  abs_root="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$dst")"
+  abs_primary="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$dst")"
+  abs_root="$abs_primary"
+
+  # An agent's change is verified where it is: its worktree, which must be one of this
+  # project's worktrees under .local/worktrees/<key>/ and share the product repository.
+  if [ -n "$worktree" ]; then
+    local abs_wt base common_wt common_dst
+    [ -d "$worktree" ] || die "no such worktree: $worktree"
+    abs_wt="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$worktree")"
+    base="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$ROOT/.local/worktrees/$key")"
+    case "$abs_wt" in
+      "$base"/*) ;;
+      *) die "a worktree to verify lives under .local/worktrees/$key/" ;;
+    esac
+    common_wt="$(git -C "$abs_wt" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
+      || die "not a git worktree: $worktree"
+    common_dst="$(git -C "$dst" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
+      || die "not a product repository: $folder"
+    [ "$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$common_wt")" = \
+      "$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$common_dst")" ] \
+      || die "not a worktree of $key: $worktree"
+    abs_root="$abs_wt"
+  fi
   case "$abs_contract" in
-    "$abs_root"|"$abs_root"/*) die "contract must not live inside the product repository" ;;
+    "$abs_primary"|"$abs_primary"/*|"$abs_root"|"$abs_root"/*) die "contract must not live inside the product repository" ;;
   esac
 
   local evidence=""
@@ -4234,7 +4260,7 @@ ws — engineering workspace CLI
   ws where                         print the workspace root from anywhere
   ws doctor [--ci]                 check repo isolation, ignores, toolchain
   ws scan <key> [--doctor] [--policy f]  Agent-Secure gate; policy is operator-owned
-  ws verify <key> [--contract f] [--run id] [--json]
+  ws verify <key> [--contract f] [--run id] [--worktree path] [--json]
                                      execute an operator-owned verification contract; output is sanitized
   ws policy check <key> --action a [--policy f] [--json]
                                      classify an action; approval-required never auto-allows
