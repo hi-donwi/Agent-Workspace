@@ -10,7 +10,7 @@ from pathlib import Path
 SOURCE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SOURCE / ".agents/bin"))
 
-from ws_pm import active_alerts, client_dossier, compute_alerts, interactions, log_interaction, snooze, thresholds, today  # noqa: E402
+from ws_pm import active_alerts, client_dossier, compute_alerts, digest, interactions, log_interaction, snooze, thresholds, today  # noqa: E402
 
 NOW = datetime.fromisoformat("2026-10-17T10:00:00+07:00")
 
@@ -183,6 +183,31 @@ class ClientDossier(unittest.TestCase):
         self.assertEqual([e["text"] for e in interactions(self.context, "acme")], ["Second", "First"])
         with self.assertRaisesRegex(Exception, "no client"):
             log_interaction(self.context, "nosuch", "x", actor="dw")
+
+
+class Digest(unittest.TestCase):
+    """The work digest an agent finds in CONTEXT.md at bind (ADR-0024)."""
+
+    def test_the_bound_project_and_its_client_only(self):
+        temp = tempfile.TemporaryDirectory(prefix="ws-pm-digest-")
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        context = root / "context"
+        for folder in ("tasks/api", "tasks/web", "clients/acme/tasks"):
+            (context / folder).mkdir(parents=True)
+        (context / "registry.tsv").write_text("key\tclient\tgroup\tfolder\napi\tacme\t-\tp/api\nweb\tbeta\t-\tp/web\n")
+        (context / "tasks/api/task_doing.md").write_text(task_doc("task_doing", "api", "Fix login", status="in_progress", extra="assignee: agent:claude\ndue: 2026-10-18\n"))
+        (context / "tasks/api/task_next.md").write_text(task_doc("task_next", "api", "Push notifications", status="ready"))
+        (context / "tasks/api/task_idea.md").write_text(task_doc("task_idea", "api", "Someday idea"))
+        (context / "tasks/web/task_other.md").write_text(task_doc("task_other", "web", "OTHER_CLIENT_CANARY", status="in_progress"))
+        (context / "clients/acme/tasks/task_report.md").write_text(task_doc("task_report", "@acme", "Send the report", extra="due: 2026-10-20\n"))
+        text = digest(context, root, "api", NOW)
+        self.assertIn("## Work for api", text)
+        self.assertIn("`task_doing` Fix login (agent:claude, due 2026-10-18)", text)
+        self.assertIn("Ready:\n- `task_next` Push notifications", text)
+        self.assertIn("Client `acme`'s own open work:\n- `task_report` Send the report (due 2026-10-20)", text)
+        self.assertIn("Open in api: 3 (1 in backlog).", text)
+        self.assertNotIn("OTHER_CLIENT_CANARY", text)
 
 if __name__ == "__main__":
     unittest.main()

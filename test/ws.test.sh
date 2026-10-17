@@ -1539,6 +1539,8 @@ lacks "$WS/.local/sessions/restricted/pack.json" "clients/acme/contacts.md" "the
 lacks "$WS/.local/sessions/restricted/pack.json" "clients/acme/commercial.md" "the session pack never lists commercial.md"
 lacks "$WS/.local/sessions/restricted/pack.json" "CANARY" "the session pack carries no restricted record"
 lacks "$WS/.local/sessions/restricted/CONTEXT.md" "CANARY" "CONTEXT.md carries no restricted record"
+contains "$WS/.local/sessions/restricted/CONTEXT.md" "## Work for api" "CONTEXT.md carries the project's work digest"
+contains "$WS/.local/sessions/restricted/CONTEXT.md" "Send the monthly report" "the digest names the client's own open work"
 
 section "run plans"
 # A plan row changes only through its run's owner - or the person that owner is, at the
