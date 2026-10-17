@@ -118,7 +118,7 @@ the session pack, and an MCP server all go through that one implementation.
 - [x] Task schema version 2 and the `ws task` commands (`add` flags, `edit`, `show`, `list --json`, `comment`, `check`)
 - [x] Client-level tasks (`@<client>`), `ws remind`, recurrence
 - [x] `ws today`, `ws alerts`, `context/pm.json`
-- [ ] Milestones
+- [x] Milestones (progress from children; `ws task list --kind milestone`)
 - [ ] `ws client show|log`, restricted records
 - [ ] Work digest in the session pack
 - [ ] `ws mcp`

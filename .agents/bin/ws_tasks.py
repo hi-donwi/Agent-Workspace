@@ -957,10 +957,15 @@ def list_tasks(source: TaskSource, project: str | None = None, *, status: Iterab
     return sorted(found, key=lambda t: (_scope_of(t).lstrip("@"), t.rank == 0, t.rank, t.id))
 
 
-def task_json(task: TaskRecord, owners: dict[str, str] | None = None) -> dict[str, object]:
+def task_json(task: TaskRecord, owners: dict[str, str] | None = None,
+              everything: Iterable[TaskRecord] | None = None) -> dict[str, object]:
     """A task for agents and the desk: its fields, the description, checklist, and activity.
-    `client` is the task's own, or its project's from the registry (`owners`)."""
+    `client` is the task's own, or its project's from the registry (`owners`). With
+    `everything`, a milestone carries its progress: how many of its children are done."""
     data = _task_to_dict(task)
+    if task.kind == "milestone" and everything is not None:
+        children = [t for t in everything if t.parent == task.id]
+        data["progress"] = {"done": sum(1 for t in children if t.status == "done"), "total": len(children)}
     data["client"] = task.client or (owners or {}).get(task.project, "")
     data["scope"] = _scope_of(task)
     data["description"] = _split_body(task.body)[0]
@@ -971,7 +976,7 @@ def task_json(task: TaskRecord, owners: dict[str, str] | None = None) -> dict[st
 
 USAGE = """usage:
   ws_tasks.py scan <source-id> <source-root>
-  ws_tasks.py list <context-root> <scope>|--all [--json] [--status S]... [--assignee A] [--label L] [--due-before D] [--client C]
+  ws_tasks.py list <context-root> <scope>|--all [--json] [--status S]... [--assignee A] [--label L] [--due-before D] [--client C] [--kind K]
   ws_tasks.py remind <context-root> <scope> <text> <owner> --at T [--recur R]
 
 <scope> is a project key, or @<client> for work that belongs to the client itself.
@@ -1019,11 +1024,11 @@ def _parse(parser: argparse.ArgumentParser, args: list[str]) -> argparse.Namespa
         raise TaskError(f"invalid options for {parser.prog}") from None
 
 
-def _print_task(task: TaskRecord, as_json: bool, owners: dict[str, str]) -> None:
+def _print_task(task: TaskRecord, as_json: bool, owners: dict[str, str], everything: list[TaskRecord]) -> None:
     if as_json:
-        print(json.dumps(task_json(task, owners), indent=2, sort_keys=True))
+        print(json.dumps(task_json(task, owners, everything), indent=2, sort_keys=True))
         return
-    data = task_json(task, owners)
+    data = task_json(task, owners, everything)
     print(f"{task.id}  {task.title}")
     for name in ("project", "client", "kind", "status", "priority", "assignee", "due", "remind_at", "recur", "parent", "rank"):
         value = data.get(name)
@@ -1035,6 +1040,9 @@ def _print_task(task: TaskRecord, as_json: bool, owners: dict[str, str]) -> None
         print(f"  labels: {', '.join(task.labels)}")
     if task.depends_on:
         print(f"  depends on: {', '.join(task.depends_on)}")
+    if "progress" in data:
+        progress = data["progress"]
+        print(f"  progress: {progress['done']}/{progress['total']} done")  # type: ignore[index]
     for item in data["checklist"]:  # type: ignore[union-attr]
         print(f"  [{'x' if item['done'] else ' '}] {item['n']}. {item['text']}")
     if data["description"]:
@@ -1068,14 +1076,17 @@ def main(argv: list[str]) -> int:
         parser.add_argument("--label", default="")
         parser.add_argument("--due-before", dest="due_before", default="")
         parser.add_argument("--client", default="")
+        parser.add_argument("--kind", default="")
         project = None if argv[2] == "--all" else argv[2]
         opts = _parse(parser, argv[3:])
         source = load_source("context", argv[1])
         found = list_tasks(source, project, status=opts.status, assignee=opts.assignee,
                            label=opts.label, due_before=opts.due_before, client=opts.client)
+        if opts.kind:
+            found = [task for task in found if task.kind == opts.kind]
         if opts.json:
-            owners = registry_clients(source)
-            print(json.dumps({"tasks": [task_json(task, owners) for task in found]}, indent=2, sort_keys=True))
+            owners, everything = registry_clients(source), load_tasks(source)[0]
+            print(json.dumps({"tasks": [task_json(task, owners, everything) for task in found]}, indent=2, sort_keys=True))
         else:
             for task in found:
                 due = f"\tdue {task.due}" if task.due else ""
@@ -1100,7 +1111,7 @@ def main(argv: list[str]) -> int:
         if len(argv) == 5 and argv[4] != "--json":
             raise TaskError("usage: ws task show <project-key> <task-id> [--json]")
         source = load_source("context", argv[1])
-        _print_task(_task(source, argv[2], argv[3], None), len(argv) == 5, registry_clients(source))
+        _print_task(_task(source, argv[2], argv[3], None), len(argv) == 5, registry_clients(source), load_tasks(source)[0])
         return 0
     if len(argv) >= 4 and argv[0] == "edit":
         opts = _parse(_options("ws task edit", edit=True), argv[4:])
