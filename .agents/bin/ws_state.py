@@ -18,6 +18,10 @@ import uuid
 FRAMEWORK_KEY = "workspace"
 
 
+# What a project delivers (ADR-0025). Mirrors PROJECT_KINDS in `ws`.
+KINDS = ("code", "research", "learning", "mission", "ops")
+
+
 def key(value):
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", value):
         raise ValueError("invalid key")
@@ -244,8 +248,14 @@ def context_pack(root, context, project, *args):
         # Framework work has a run key but no registry row and no client. Its pack is the
         # framework's own memory and run - never any client's material.
         client, group, scope, selected, external = "-", None, "framework", [], None
+        kind = "code"
     else:
         client, group, scope, selected, external = registered_scope(context, matches)
+        # An absent or "-" kind is code: every registry written before kinds still packs.
+        kind = (matches[0].get("kind") or "-").strip()
+        kind = "code" if kind in ("", "-") else kind
+        if kind not in KINDS:
+            raise ValueError(f"unknown kind '{kind}'")
     selected += [f"memory/projects/{project}/{name}.md" for name in ["project", "active", "decisions"]]
     if args:
         if len(args) != 2 or args[0] != "--run":
@@ -283,7 +293,7 @@ def context_pack(root, context, project, *args):
         files.append(dict(path=str(path.relative_to(root)), sha256=hashlib.sha256(data).hexdigest(),
                           content=data.decode(), classification="private-context"))
     print(json.dumps(dict(version=1, project=project, client=client, group=group, scope=scope,
-                          context_repo=external, files=files,
+                          kind=kind, context_repo=external, files=files,
                           handling="Local/private context only. This pack is not approved for cloud upload or a sandbox boundary."), indent=2))
 
 

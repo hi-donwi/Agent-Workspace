@@ -2207,6 +2207,92 @@ rm -f "$WS/.git/hooks/pre-commit"; ws guard remove >/dev/null 2>&1
 git -C "$WS" remote remove pub
 rm -f "$WS/context/public-identifiers"
 
+section "project kinds: every kind of work fits the registry"
+# ADR-0025. The registry here is still v3, so this also proves an older file keeps reading.
+check_fails "a non-code kind needs the kind column first" ws new notes --client acme --kind research
+check "ws context migrate-v4 adds the column" ws context migrate-v4
+contains "$WS/context/registry.tsv" "context_repo	kind" "the header carries kind"
+exists "$WS/context/registry.tsv.bak-v3" "the v3 file is kept"
+check_fails "a second migrate-v4 refuses" ws context migrate-v4
+equals "$(ws kind show api)" "code" "an existing project is a code project"
+
+check "a research project registers without a folder" ws new inquiry --client acme --kind research
+check "a learning project registers without a folder" ws new study --client acme --kind learning
+check "a mission project registers without a folder" ws new horizon --client acme --kind mission
+check "an ops project registers without a folder" ws new upkeep --client acme --kind ops
+equals "$(ws kind show inquiry)" "research" "the research kind is recorded"
+equals "$(ws kind show horizon)" "mission" "the mission kind is recorded"
+not_exists "$WS/projects/-" "no folder is created for a context-only project"
+contains "$WS/context/memory/projects/inquiry/project.md" "Standing question" "research gets its own project memory"
+contains "$WS/context/memory/projects/horizon/project.md" "Milestones" "mission gets its own project memory"
+check_fails "a code project needs a product folder" ws new plain --client acme
+check_fails "an unknown kind is refused" ws new odd --client acme --kind poetry
+
+OUT="$(ws list 2>&1)"
+printf '%s' "$OUT" | grep -E '^inquiry +research .* context' >/dev/null \
+  && ok "ws list marks a context-only project" || bad "ws list marks a context-only project" "$OUT"
+OUT="$(ws tree 2>&1)"
+printf '%s' "$OUT" | grep -q 'inquiry \[research\]' \
+  && ok "ws tree marks a non-code kind" || bad "ws tree marks a non-code kind" "$OUT"
+OUT="$(ws bootstrap --project inquiry 2>&1)"
+printf '%s' "$OUT" | grep -q 'context-only' \
+  && ok "bootstrap leaves a context-only project alone" || bad "bootstrap leaves a context-only project alone" "$OUT"
+OUT="$(ws link inquiry 2>&1)"
+printf '%s' "$OUT" | grep -q 'context-only' \
+  && ok "link has nothing to write for a context-only project" || bad "link has nothing to write for a context-only project" "$OUT"
+
+OUT="$(WS_SESSION_ID=kinds-run ws run inquiry "does the thing work" 2>&1)"
+RUNREL="$(printf '%s\n' "$OUT" | grep '^context/runs/inquiry/' | head -1)"
+contains "$WS/$RUNREL/brief.md" "## Question" "a research run starts from a question"
+contains "$WS/$RUNREL/evidence.md" "Contradicting evidence" "a research run keeps an evidence table"
+printf '%s' "$OUT" | grep -q 'kinds/research.md' \
+  && ok "run names the done bar for its kind" || bad "run names the done bar for its kind" "$OUT"
+OUT="$(WS_SESSION_ID=kinds-run ws run api "ship a thing" 2>&1)"
+RUNREL="$(printf '%s\n' "$OUT" | grep '^context/runs/api/' | head -1)"
+contains "$WS/$RUNREL/brief.md" "## Goal" "a code run keeps the code brief"
+
+WS_SESSION_ID=kinds-bind check "bind packs a context-only project" ws session bind inquiry
+contains "$WS/.local/sessions/kinds-bind/pack.json" '"kind": "research"' "the pack records the kind"
+contains "$WS/.local/sessions/kinds-bind/CONTEXT.md" "kinds/research.md" "the pack names the done bar"
+WS_SESSION_ID=kinds-bind-code check "bind packs a code project" ws session bind api
+contains "$WS/.local/sessions/kinds-bind-code/pack.json" '"kind": "code"' "a code project packs as code"
+lacks "$WS/.local/sessions/kinds-bind-code/CONTEXT.md" "Done bar:" "a code project keeps the default done bar"
+
+check "ws kind set changes the kind" ws kind set inquiry learning
+equals "$(ws kind show inquiry)" "learning" "the new kind is read back"
+check_fails "a project without a folder cannot become code" ws kind set inquiry code
+check_fails "ws kind set refuses an unknown kind" ws kind set inquiry poetry
+ws kind set inquiry research >/dev/null 2>&1
+
+OUT="$(ws doctor 2>&1 || true)"
+printf '%s' "$OUT" | grep -q 'ok inquiry is a research project (context-only' \
+  && ok "doctor accepts a context-only project" || bad "doctor accepts a context-only project" "$OUT"
+printf '%s' "$OUT" | grep -q 'inquiry.*no product folder' \
+  && bad "doctor does not demand a repository from research" "$OUT" || ok "doctor does not demand a repository from research"
+sed -i.bak 's#^\(horizon\t[^\t]*\t[^\t]*\t\)-#\1-#' "$WS/context/registry.tsv"; rm -f "$WS/context/registry.tsv.bak"
+awk -F'\t' -v OFS='\t' 'NR>1 && $1=="horizon" {$10="code"} {print}' "$WS/context/registry.tsv" > "$WS/context/registry.tsv.new" \
+  && mv "$WS/context/registry.tsv.new" "$WS/context/registry.tsv"
+OUT="$(ws doctor 2>&1 || true)"
+printf '%s' "$OUT" | grep -q 'horizon is a code project but has no product folder' \
+  && ok "doctor refuses a code project with no folder" || bad "doctor refuses a code project with no folder" "$OUT"
+awk -F'\t' -v OFS='\t' 'NR>1 && $1=="horizon" {$10="poetry"} {print}' "$WS/context/registry.tsv" > "$WS/context/registry.tsv.new" \
+  && mv "$WS/context/registry.tsv.new" "$WS/context/registry.tsv"
+OUT="$(ws doctor 2>&1 || true)"
+printf '%s' "$OUT" | grep -q "unknown kind 'poetry'" \
+  && ok "doctor flags an unknown kind" || bad "doctor flags an unknown kind" "$OUT"
+ws kind set horizon mission >/dev/null 2>&1
+
+# The kind lists live in two programs and one directory; a kind added to one must reach all.
+SH_KINDS="$(sed -n 's/^PROJECT_KINDS="\(.*\)"/\1/p' "$SRC/.agents/bin/ws" | tr ' ' '\n' | sort | tr '\n' ' ')"
+PY_KINDS="$(sed -n 's/^KINDS = (\(.*\))/\1/p' "$SRC/.agents/bin/ws_state.py" | tr -d '", ' | sed 's/code/code /;s/research/research /;s/learning/learning /;s/mission/mission /;s/ops/ops /' | tr ' ' '\n' | grep -v '^$' | sort | tr '\n' ' ')"
+equals "$PY_KINDS" "$SH_KINDS" "ws and ws_state.py list the same kinds"
+for K in $SH_KINDS; do
+  [ "$K" = code ] && continue
+  exists "$SRC/.agents/standards/core/kinds/$K.md" "kind $K has a done bar"
+  exists "$SRC/.agents/templates/run-brief.$K.md" "kind $K has a run brief"
+  exists "$SRC/.agents/templates/memory-project.$K.md" "kind $K has a project memory template"
+done
+
 section "public CI governance stays deterministic"
 GOVERNANCE="$SRC/.github/workflows/agentic-governance.yml"
 exists "$GOVERNANCE" "agentic governance workflow exists"

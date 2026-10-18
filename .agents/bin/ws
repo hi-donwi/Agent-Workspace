@@ -89,6 +89,8 @@ PY
 
 repo_path() {
   local folder="$1" result
+  # A context-only project (research, learning, mission, ops) has no product folder.
+  is_empty "$folder" && return 0
   case "$folder" in projects/*) ;; *) die "product folder must be under projects/" ;; esac
   result="$(safe_path "$ROOT/projects" "${folder#projects/}")" || die "unsafe product folder"
   printf '%s\n' "$result"
@@ -177,21 +179,34 @@ session_id() {
 # which would otherwise shift every column after a blank one. v1 rows are
 # normalised on the fly (no group/scope/profile), so both shapes can be read
 # everywhere - the on-disk header is the version of record.
-# Always yields 9 columns whatever the file's version, so a v2 registry needs no
-# rewrite before context_repo can be read from it — the column is simply "-".
+# Always yields 10 columns whatever the file's version, so an older registry needs no
+# rewrite before context_repo or kind can be read from it — the column is simply "-"
+# (an absent kind means code, see project_kind).
 reg_rows() {
   [ -f "$REGISTRY" ] || return 0
   local v1="1"
   local header; header="$(head -1 "$REGISTRY")"
-  if [ "$header" = "$(printf '%b' "$REG_HEADER_V2")" ] || [ "$header" = "$(printf '%b' "$REG_HEADER_V3")" ]; then
+  if [ "$header" = "$(printf '%b' "$REG_HEADER_V2")" ] || [ "$header" = "$(printf '%b' "$REG_HEADER_V3")" ] \
+     || [ "$header" = "$(printf '%b' "$REG_HEADER_V4")" ]; then
     v1=""
   fi
   tail -n +2 "$REGISTRY" | grep -v '^[[:space:]]*$' | awk -F'\t' -v v1="$v1" 'BEGIN{OFS="\t"}
-    { if (v1) { print $1, $2, "-", $3, $4, "client", "-", $5, "-" }
-      else    { for (i = 1; i <= 9; i++) if ($i == "") $i = "-"; NF = 9; print } }'
+    { if (v1) { print $1, $2, "-", $3, $4, "client", "-", $5, "-", "-" }
+      else    { for (i = 1; i <= 10; i++) if ($i == "") $i = "-"; NF = 10; print } }'
 }
 # "-" is the registry's empty marker
 is_empty() { [ -z "${1:-}" ] || [ "${1:-}" = "-" ]; }
+
+# A project's kind says what its deliverable is (ADR-0025): code is a product repository;
+# research, learning, mission, and ops need no repository and keep their records in
+# context/. A row with no kind is code, so every registry written before kinds still reads.
+PROJECT_KINDS="code research learning mission ops"
+kind_valid() { case " $PROJECT_KINDS " in *" ${1:-} "*) return 0 ;; *) return 1 ;; esac; }
+project_kind() {
+  local k; k="$(reg_get "$1" 2>/dev/null | cut -f10 || true)"
+  is_empty "$k" && k="code"
+  printf '%s' "$k"
+}
 reg_get()  { validate_key "$1"; reg_rows | awk -F'\t' -v k="$1" '$1==k {print; exit}'; }
 
 # Skills live in the workspace (shared by every organisation), the organisation's
@@ -367,6 +382,9 @@ cmd_context() {
     migrate-v2)
       registry_migrate_v2
       ;;
+    migrate-v4)
+      registry_migrate_v4
+      ;;
     migrate-v3)
       registry_migrate_v3
       ;;
@@ -380,7 +398,7 @@ cmd_context() {
         c_ylw "no context yet - run: ws context init"
       fi
       ;;
-    *) die "usage: ws context [status|init|clone <r>|sync|publish|split --personal <c>|switch <r> [--force]|migrate-v2|migrate-v3|pack <project> [--run <id>]]" ;;
+    *) die "usage: ws context [status|init|clone <r>|sync|publish|split --personal <c>|switch <r> [--force]|migrate-v2|migrate-v3|migrate-v4|pack <project> [--run <id>]]" ;;
   esac
 }
 
@@ -682,12 +700,16 @@ count_dirs() {
 
 # ─────────────────────────────────────────────────────────────── list
 cmd_list() {
-  printf '%-20s %-12s %-12s %-40s %-8s %s\n' KEY CLIENT GROUP FOLDER STATUS REMOTE
-  while IFS=$'\t' read -r key client group folder remote scope profile desc; do
+  printf '%-20s %-9s %-12s %-12s %-40s %-8s %s\n' KEY KIND CLIENT GROUP FOLDER STATUS REMOTE
+  while IFS=$'\t' read -r key client group folder remote scope profile desc _ kind; do
     local status="missing"
-    [ -d "$ROOT/$folder/.git" ] && status="ok"
-    [ -d "$ROOT/$folder" ] && [ ! -d "$ROOT/$folder/.git" ] && status="no-git"
-    printf '%-20s %-12s %-12s %-40s %-8s %s\n' "$key" "$client" "$group" "$folder" "$status" "$remote"
+    if is_empty "$folder"; then status="context"
+    else
+      [ -d "$ROOT/$folder/.git" ] && status="ok"
+      [ -d "$ROOT/$folder" ] && [ ! -d "$ROOT/$folder/.git" ] && status="no-git"
+    fi
+    is_empty "$kind" && kind="code"
+    printf '%-20s %-9s %-12s %-12s %-40s %-8s %s\n' "$key" "$kind" "$client" "$group" "$folder" "$status" "$remote"
   done < <(reg_rows)
 }
 
@@ -729,6 +751,7 @@ cmd_bootstrap() {
     if [ -n "$only_client" ] && [ "$client" != "$only_client" ]; then continue; fi
     if [ -n "$only_group" ] && [ "$group" != "$only_group" ]; then continue; fi
     if [ -n "$only_project" ] && [ "$key" != "$only_project" ]; then continue; fi
+    if is_empty "$folder"; then c_dim "- $key is context-only (no repository to clone)"; continue; fi
     local dst; dst="$(repo_path "$folder")"
     # Cloning a subproject's remote into its folder either fails (the parent's
     # checkout already created it) or, if its row comes first, plants a full copy of
@@ -751,6 +774,36 @@ cmd_bootstrap() {
   done < <(reg_rows)
   is_repo "$ROOT" && { guard_status >/dev/null 2>&1 || guard_install; }
   c_grn "bootstrap complete ($n cloned)"
+}
+
+# ─────────────────────────────────────────────────────────────── kind
+# ADR-0025. The kind is the registry's tenth column; the done bar, run templates, and the
+# need for a product repository follow from it.
+cmd_kind() {
+  case "${1:-list}" in
+    list)
+      printf '%-20s %s\n' KEY KIND
+      reg_rows | awk -F'\t' '{ k = ($10 == "-" ? "code" : $10); printf "%-20s %s\n", $1, k }' ;;
+    show)
+      [ -n "${2:-}" ] || die "usage: ws kind show <key>"
+      [ -n "$(reg_get "$2")" ] || die "'$2' is not in registry.tsv"
+      project_kind "$2"; echo ;;
+    set)
+      local key="${2:-}" kind="${3:-}"
+      [ -n "$key" ] && [ -n "$kind" ] || die "usage: ws kind set <key> <kind>  (${PROJECT_KINDS// / | })"
+      kind_valid "$kind" || die "unknown kind '$kind' (${PROJECT_KINDS// / | })"
+      [ -n "$(reg_get "$key")" ] || die "'$key' is not in registry.tsv"
+      [ "$(head -1 "$REGISTRY")" = "$(printf '%b' "$REG_HEADER_V4")" ] \
+        || die "this registry has no kind column - run: ws context migrate-v4"
+      local folder; folder="$(reg_get "$key" | cut -f4)"
+      if [ "$kind" = "code" ] && is_empty "$folder"; then
+        die "$key has no product folder, so it cannot be a code project"
+      fi
+      awk -F'\t' -v OFS='\t' -v k="$key" -v v="$kind" 'NR > 1 && $1 == k { $10 = v } { print }' \
+        "$REGISTRY" > "$REGISTRY.tmp" && mv "$REGISTRY.tmp" "$REGISTRY"
+      c_grn "-> $key is now kind '$kind'" ;;
+    *) die "usage: ws kind [list | show <key> | set <key> <kind>]" ;;
+  esac
 }
 
 # ─────────────────────────────────────────────────────────────── client
@@ -815,6 +868,8 @@ REG_HEADER_V2="key\tclient\tgroup\tfolder\tremote\tcontext_scope\tsecurity_profi
 # workspace-relative folder, like `folder`, or "-" when the project's context lives in
 # the root context repo as usual.
 REG_HEADER_V3="$REG_HEADER_V2\tcontext_repo"
+# v4 appends kind last for the same reason. "-" and "code" both mean a code project.
+REG_HEADER_V4="$REG_HEADER_V3\tkind"
 
 # v2 -> v3. Reading does not need this (reg_rows normalises), but a column nobody can
 # see in the file is a column nobody will set.
@@ -831,6 +886,21 @@ registry_migrate_v3() {
   } > "$REGISTRY.tmp" && mv "$REGISTRY.tmp" "$REGISTRY"
   c_grn "-> registry migrated to v3 (previous file kept at registry.tsv.bak-v2)"
   c_dim "   context_repo defaults to '-': the project's context is in the root context repo"
+}
+
+registry_migrate_v4() {
+  [ -f "$REGISTRY" ] || die "no registry.tsv yet - run: ws context init"
+  local header; header="$(head -1 "$REGISTRY")"
+  [ "$header" = "$(printf '%b' "$REG_HEADER_V4")" ] && die "registry is already v4 - nothing to migrate"
+  [ "$header" = "$(printf '%b' "$REG_HEADER_V3")" ] || die "registry is not v3 - run: ws context migrate-v3 first"
+  cp "$REGISTRY" "$REGISTRY.bak-v3"
+  {
+    printf '%b\n' "$REG_HEADER_V4"
+    tail -n +2 "$REGISTRY" | grep -v '^[[:space:]]*$' | awk -F'\t' 'BEGIN{OFS="\t"}
+      { for (i = 1; i <= 9; i++) if ($i == "") $i = "-"; NF = 9; print $0, "code" }'
+  } > "$REGISTRY.tmp" && mv "$REGISTRY.tmp" "$REGISTRY"
+  c_grn "-> registry migrated to v4 (previous file kept at registry.tsv.bak-v3)"
+  c_dim "   every existing project is kind 'code'; set another with: ws kind set <key> <kind>"
 }
 
 registry_migrate_v2() {
@@ -871,6 +941,11 @@ registry_validate() {
       fail=1
     fi
   done < <(tail -n +2 "$REGISTRY" | grep -v '^[[:space:]]*$')
+  local k kind
+  while IFS=$'\t' read -r k _ _ _ _ _ _ _ _ kind; do
+    is_empty "$kind" && continue
+    kind_valid "$kind" || { c_red "x $k: unknown kind '$kind' (${PROJECT_KINDS// / | })"; fail=1; }
+  done < <(reg_rows)
 }
 
 # ─────────────────────────────────────────────────────────────── tree
@@ -885,7 +960,7 @@ cmd_tree() {
     reg_rows | awk -F'\t' '
       { if ($2 != lastc) { printf "CLIENT\t%s\n", $2; lastc = $2; lastg = "" }
         if ($3 != lastg) { printf "GROUP\t%s%s\n", ($3 == "-" ? "(ungrouped)" : $3 "/"), ($3 == "-" ? "" : ""); lastg = $3 }
-        printf "PROJ\t%s\n", $1 }'
+        printf "PROJ\t%s%s\n", $1, (($10 != "-" && $10 != "code") ? " [" $10 "]" : "") }'
   } > "$out"
   local type name seen=""
   while IFS=$'\t' read -r type name; do
@@ -968,10 +1043,11 @@ client_list() {
 
 # ─────────────────────────────────────────────────────────────── new
 cmd_new() {
-  local key="" folder="" remote="" client="-" group="-" scope="client" profile="-"
+  local key="" folder="" remote="" client="-" group="-" scope="client" profile="-" kind="code"
   local pos=()
   while [ $# -gt 0 ]; do
     case "$1" in
+      --kind) kind="${2:?}"; shift 2 ;;
       --client) client="${2:?}"; shift 2 ;;
       --group) group="${2:?}"; shift 2 ;;
       --scope) scope="${2:?}"; shift 2 ;;
@@ -981,8 +1057,18 @@ cmd_new() {
   done
   set -- "${pos[@]}"
   key="${1:-}"; folder="${2:-}"; remote="${3:-}"
+  kind_valid "$kind" || die "unknown --kind '$kind' (${PROJECT_KINDS// / | })"
+  # Only code needs a product folder. Any other kind may omit it (or pass "-"): its records
+  # live in context/ and nothing is cloned or initialised.
+  if [ "$kind" != "code" ] && [ -z "$folder" ]; then folder="-"; fi
   [ -n "$key" ] && [ -n "$folder" ] \
-    || die "usage: ws new <key> <folder> [remote-url] --client <client-key>"
+    || die "usage: ws new <key> <folder> [remote-url] --client <client-key> [--kind code|research|learning|mission|ops]"
+  if [ "$kind" = "code" ] && is_empty "$folder"; then
+    die "a code project needs a product folder - pass one, or choose --kind research|learning|mission|ops"
+  fi
+  if [ "$kind" != "code" ] && ! is_empty "$remote" && is_empty "$folder"; then
+    die "a remote needs a folder to clone into - pass one, or drop the remote"
+  fi
   validate_key "$key"
   validate_key "$client"
   [ -n "$(reg_get "$key")" ] && die "key '$key' is already registered"
@@ -1010,7 +1096,9 @@ cmd_new() {
 
   local dst; dst="$(repo_path "$folder")"
   local parent; parent="$(subproject_parent "$folder" "${remote:--}")"
-  if [ -n "$parent" ]; then
+  if is_empty "$folder"; then
+    c_dim "-> $key is a $kind project with no product repository - its records live in context/"
+  elif [ -n "$parent" ]; then
     # `git init` here would nest a repository inside the parent's tracked tree.
     c_dim "-> $key lives inside $parent's repo - no clone or repo of its own"
   elif [ -n "$remote" ] && [ ! -d "$dst" ]; then
@@ -1023,17 +1111,23 @@ cmd_new() {
 
   # A v3 registry has nine columns; an eight-column row there reads back correctly
   # through reg_rows but is the one row in the file that looks different.
-  local tail=""
-  [ "$(head -1 "$REGISTRY")" = "$(printf '%b' "$REG_HEADER_V3")" ] && tail="$(printf '\t-')"
+  local tail="" header; header="$(head -1 "$REGISTRY")"
+  [ "$header" = "$(printf '%b' "$REG_HEADER_V3")" ] && tail="$(printf '\t-')"
+  [ "$header" = "$(printf '%b' "$REG_HEADER_V4")" ] && tail="$(printf '\t-\t%s' "$kind")"
+  if [ "$kind" != "code" ] && [ "$header" != "$(printf '%b' "$REG_HEADER_V4")" ]; then
+    die "this registry has no kind column - run: ws context migrate-v4 (after migrate-v3 if needed), then retry"
+  fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s%s\n' "$key" "$client" "$group" "$folder" "${remote:--}" "$scope" "$profile" "new project" "$tail" >> "$REGISTRY"
-  c_grn "-> registered in registry.tsv (client: $client, group: $group, scope: $scope)"
+  c_grn "-> registered in registry.tsv (client: $client, group: $group, scope: $scope, kind: $kind)"
 
   mkdir -p "$MEM/$key"
   for f in project active decisions log; do
     [ -f "$MEM/$key/$f.md" ] && continue
     if [ -f "$TPL/memory-$f.md" ]; then
-      sed "s|{{KEY}}|$key|g; s|{{FOLDER}}|$folder|g; s|{{DATE}}|$(date +%F)|g" \
-        "$TPL/memory-$f.md" > "$MEM/$key/$f.md"
+      local ktpl="$TPL/memory-$f.md"
+      [ -f "$TPL/memory-$f.$kind.md" ] && ktpl="$TPL/memory-$f.$kind.md"
+      sed "s|{{KEY}}|$key|g; s|{{FOLDER}}|$folder|g; s|{{DATE}}|$(date +%F)|g; s|{{KIND}}|$kind|g" \
+        "$ktpl" > "$MEM/$key/$f.md"
     else
       printf '# %s - %s\n\n(empty)\n' "$key" "$f" > "$MEM/$key/$f.md"
     fi
@@ -1205,6 +1299,10 @@ cmd_link() {
   local row; row="$(reg_get "$key")" || true
   [ -n "$row" ] || die "key '$key' is not in registry.tsv"
   local folder; folder="$(printf '%s' "$row" | cut -f4)"
+  if is_empty "$folder"; then
+    c_dim "  $key is context-only - there is no product repository to link"
+    return 0
+  fi
   local dst; dst="$(repo_path "$folder")"
   # The exclude entries and the guard hook are anchored at a repo's root. A pointer
   # written into a subproject's folder sits in a subdirectory of a tracked tree,
@@ -1357,6 +1455,7 @@ HOOK
 cmd_unlink() {
   local key="${1:-}"; [ -n "$key" ] || die "usage: ws unlink <key>"
   local folder; folder="$(reg_get "$key" | cut -f4)"
+  is_empty "$folder" && die "$key is context-only - there is no pointer to remove"
   local dst; dst="$(repo_path "$folder")"
   is_repo "$dst" || die "not a product repository"
   local name hook
@@ -1393,10 +1492,15 @@ cmd_run() {
   mkdir -p "$dir/contributors"
 
   local date_now; date_now="$(date '+%F %H:%M %z')"
+  # A kind may override any run file with run-<file>.<kind>.md; the framework itself is code.
+  local kind="code"
+  [ "$key" = "$FRAMEWORK_KEY" ] || kind="$(project_kind "$key")"
   for f in brief plan progress decisions evidence handoff; do
-    if [ -f "$TPL/run-$f.md" ]; then
+    local rtpl="$TPL/run-$f.md"
+    [ -f "$TPL/run-$f.$kind.md" ] && rtpl="$TPL/run-$f.$kind.md"
+    if [ -f "$rtpl" ]; then
       sed "s|{{KEY}}|$key|g; s|{{TITLE}}|$title|g; s|{{DATE}}|$date_now|g; s|{{OWNER}}|$(human_id) ($(agent_id))|g" \
-        "$TPL/run-$f.md" > "$dir/$f.md"
+        "$rtpl" > "$dir/$f.md"
     else
       printf '# %s - %s\n\nRun: %s\nDate: %s\n' "$title" "$f" "$key" "$date_now" > "$dir/$f.md"
     fi
@@ -1409,6 +1513,7 @@ cmd_run() {
   c_grn "-> run created"
   printf '%s\n' "${dir#$ROOT/}"
   c_dim "  owner: $(human_id) ($(agent_id)) - start with brief.md, then plan.md"
+  [ "$kind" = "code" ] || c_dim "  kind: $kind - the done bar is .agents/standards/core/kinds/$kind.md"
   point_active_run "$key" "${dir#$ROOT/}" "$(human_id) ($(agent_id))"
 }
 
@@ -1715,6 +1820,7 @@ cmd_sync() {
   echo "-- Product repos (not touched) --"
   local key client group folder remote scope profile desc
   while IFS=$'\t' read -r key client group folder remote scope profile desc; do
+    is_empty "$folder" && continue
     local dst; dst="$(repo_path "$folder")"
     is_repo "$dst" || { c_dim "- $key not cloned"; continue; }
     local dirty=""; [ -n "$(git -C "$dst" status --porcelain)" ] && dirty=" (uncommitted changes)"
@@ -2553,6 +2659,12 @@ project = pack.get("project", bind.get("project", ""))
 client = pack.get("client", bind.get("client", ""))
 group = pack.get("group") or bind.get("group") or "-"
 handling = pack.get("handling", "")
+kind = pack.get("kind") or "code"
+# The done bar and the stack standards follow the kind (ADR-0025); a project that is not
+# code is not judged by the code bar and does not load the stack packs.
+kind_line = "" if kind == "code" else (
+    f"- Done bar: `.agents/standards/core/kinds/{kind}.md` (not the code definition of done)\n"
+    "- A product repository is optional for this kind; records live in `context/memory/projects/` and `context/runs/`\n")
 user_prefs_section = ""
 # directory is $ROOT/.local/sessions/<id>; three hops up is $ROOT.
 workspace_root = directory.resolve().parent.parent.parent
@@ -2575,7 +2687,8 @@ This file is generated by `ws session bind`. It is the allowlist for this agent 
 - Client: `{client}`
 - Group: `{group}`
 - Scope: `{pack.get("scope", bind.get("scope", "client"))}`
-- Session: `{bind.get("session", "")}`
+- Kind: `{kind}`
+{kind_line}- Session: `{bind.get("session", "")}`
 {run_line}
 ## Load only these files
 
@@ -2888,11 +3001,11 @@ cmd_usage() {
   # folder counts for that project, same idea as a client's projects for hours.
   local roots=() k c g f r s p d
   if [ -n "$client" ]; then
-    while IFS=$'\t' read -r k c g f r s p d; do [ "$c" = "$client" ] && roots+=("$ROOT/$f"); done < <(reg_rows)
+    while IFS=$'\t' read -r k c g f r s p d; do [ "$c" = "$client" ] && ! is_empty "$f" && roots+=("$ROOT/$f"); done < <(reg_rows)
     [ "${#roots[@]}" -gt 0 ] || die "no project in registry.tsv has client '$client'"
   elif [ "$project" != "-" ]; then
-    while IFS=$'\t' read -r k c g f r s p d; do [ "$k" = "$project" ] && roots+=("$ROOT/$f"); done < <(reg_rows)
-    [ "${#roots[@]}" -gt 0 ] || die "unknown project '$project' - see: ws list"
+    while IFS=$'\t' read -r k c g f r s p d; do [ "$k" = "$project" ] && ! is_empty "$f" && roots+=("$ROOT/$f"); done < <(reg_rows)
+    [ "${#roots[@]}" -gt 0 ] || die "unknown project, or a context-only project with no folder to match usage against: '$project' - see: ws list"
   fi
 
   local files=() p d
@@ -3136,6 +3249,33 @@ cmd_identifiers() {
   c_dim "  locally, and CI runs no equivalent check (it has neither context/ nor workspace.conf)." >&2
 }
 
+# The per-project memory size check, shared by repo-backed and context-only projects.
+doctor_project_memory() {
+  local key="$1"
+  if [ -d "$MEM/$key" ]; then
+    # ws_state.py context-pack refuses any single file over 32 KiB (and the
+    # pack as a whole over 128 KiB), so a file creeping up on that is a future
+    # `ws session bind` failure, not just a slow read today. ws compact memory
+    # exists for exactly active.md/log.md; this is the nudge to run it before
+    # the hard refusal does.
+    local f size
+    for f in active.md log.md; do
+      [ -f "$MEM/$key/$f" ] || continue
+      size="$(wc -c < "$MEM/$key/$f" | tr -d ' ')"
+      if [ "$size" -gt 32768 ]; then
+        c_red "  x memory/projects/$key/$f is ${size}B - over the 32 KiB pack limit; ws session bind $key will fail"
+        c_dim "      ws compact memory $key --apply"
+        fail=1
+      elif [ "$size" -gt 16384 ]; then
+        c_ylw "  ! memory/projects/$key/$f is ${size}B - past half the 32 KiB pack limit"
+        c_dim "      ws compact memory $key --apply"
+      fi
+    done
+  else
+    c_ylw "  ! no memory at context/memory/projects/$key/"
+  fi
+}
+
 cmd_doctor() {
   local fail=0 ci=0
   [ "${1:-}" = "--ci" ] && ci=1
@@ -3331,14 +3471,15 @@ cmd_doctor() {
   if [ -n "$dup" ]; then
     c_red "x duplicate keys in registry.tsv: $(printf '%s' "$dup" | tr '\n' ' ')"; fail=1
   fi
-  dup="$(reg_rows | cut -f4 | sort | uniq -d)"
+  dup="$(reg_rows | cut -f4 | /usr/bin/grep -vx -- '-' | sort | uniq -d || true)"
   if [ -n "$dup" ]; then
     c_red "x duplicate folders in registry.tsv: $(printf '%s' "$dup" | tr '\n' ' ')"; fail=1
   fi
   local key client group folder remote scope profile desc
-  while IFS=$'\t' read -r key client group folder remote scope profile desc; do
+  while IFS=$'\t' read -r key client group folder remote scope profile desc _ kind; do
     local dst; dst="$(repo_path "$folder")"
-    if is_empty "$remote"; then
+    is_empty "$kind" && kind="code"
+    if is_empty "$remote" && ! is_empty "$folder"; then
       c_dim "  $key has no remote (local-only)"
     fi
     if is_empty "$client"; then
@@ -3347,6 +3488,16 @@ cmd_doctor() {
       fail=1
     elif [ ! -d "$CLIENTS_DIR/$client" ]; then
       c_red "x $key declares client '$client', but context/clients/$client/ does not exist"; fail=1
+    fi
+    if is_empty "$folder"; then
+      # Research, learning, mission, and ops keep their records in context/ (ADR-0025).
+      if [ "$kind" = "code" ]; then
+        c_red "x $key is a code project but has no product folder in registry.tsv"; fail=1
+      else
+        c_grn "ok $key is a $kind project (context-only, no repository)"
+        doctor_project_memory "$key"
+      fi
+      continue
     fi
     local parent; parent="$(subproject_parent "$folder" "$remote")"
     if [ -n "$parent" ]; then
@@ -3420,28 +3571,7 @@ cmd_doctor() {
       c_ylw "  ! pre-commit guard missing - run: ws link $key"
     fi
 
-    if [ -d "$MEM/$key" ]; then
-      # ws_state.py context-pack refuses any single file over 32 KiB (and the
-      # pack as a whole over 128 KiB), so a file creeping up on that is a future
-      # `ws session bind` failure, not just a slow read today. ws compact memory
-      # exists for exactly active.md/log.md; this is the nudge to run it before
-      # the hard refusal does.
-      local f size
-      for f in active.md log.md; do
-        [ -f "$MEM/$key/$f" ] || continue
-        size="$(wc -c < "$MEM/$key/$f" | tr -d ' ')"
-        if [ "$size" -gt 32768 ]; then
-          c_red "  x memory/projects/$key/$f is ${size}B - over the 32 KiB pack limit; ws session bind $key will fail"
-          c_dim "      ws compact memory $key --apply"
-          fail=1
-        elif [ "$size" -gt 16384 ]; then
-          c_ylw "  ! memory/projects/$key/$f is ${size}B - past half the 32 KiB pack limit"
-          c_dim "      ws compact memory $key --apply"
-        fi
-      done
-    else
-      c_ylw "  ! no memory at context/memory/projects/$key/"
-    fi
+    doctor_project_memory "$key"
   done < <(reg_rows)
 
   local extra
@@ -4324,6 +4454,8 @@ ws — engineering workspace CLI
   ws client [new <key>|list]        a client that may span several projects
   ws group [new <k> --client <c>|list]  a product group inside one client (v2)
   ws tree                          render client > group > project from the registry
+  ws kind [list|show <key>|set <key> <kind>]  what a project delivers: code, research, learning,
+                                    mission, or ops (non-code kinds need no product repository)
   ws context [status|init|migrate-v2]   migrate the registry to v2 (group/scope/profile)
   ws list                          list projects and clone status
   ws bootstrap [--client|--group|--project|--only k]
@@ -4409,6 +4541,7 @@ case "${1:-help}" in
   group) shift; cmd_group "$@" ;;
   list) shift; cmd_list "$@" ;;
   tree) shift; cmd_tree "$@" ;;
+  kind) shift; cmd_kind "$@" ;;
   bootstrap) shift; cmd_bootstrap "$@" ;;
   new) shift; cmd_new "$@" ;;
   link) shift; cmd_link "$@" ;;
