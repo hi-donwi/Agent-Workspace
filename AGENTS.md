@@ -66,6 +66,15 @@ Directory map and detail: [docs/workspace-layout.md](docs/workspace-layout.md) �
 [ADR-0001](docs/adr/0001-nested-independent-project-repos.md) ·
 [ADR-0006](docs/adr/0006-framework-context-product-split.md).
 
+### Project kinds
+
+A project has a **kind** (`ws kind`): `code` (default), `research`, `learning`, `mission`,
+or `ops`. Only `code` needs a product repository; the others keep their records in
+`context/` and register with `ws new <key> --client <c> --kind <kind>` (no folder). The
+kind decides the done bar (`.agents/standards/core/kinds/<kind>.md` instead of §10) and the
+run templates. Detail: [docs/project-kinds.md](docs/project-kinds.md) ·
+[ADR-0025](docs/adr/0025-project-kinds.md).
+
 ## 2. `projects/` — repos inside a repo
 
 Every repository under `projects/` is an **independent git repository** with its own
@@ -219,7 +228,7 @@ abandoned and closed with `ws agent recover`, not billed. Rollups and `ws usage`
 
 ## 10. Definition of Done
 
-Done means `.agents/standards/core/definition-of-done.md` holds, plus each enabled
+For a project of kind `code`, done means `.agents/standards/core/definition-of-done.md` holds, plus each enabled
 pack's own list (e.g. `.agents/standards/java/definition-of-done.md`): the project's
 verification command is green, logic has unit tests and endpoints integration tests, no
 secrets or debug leftovers or ticketless `TODO`s, the run's `handoff.md` is updated, and

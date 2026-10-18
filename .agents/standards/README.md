@@ -31,6 +31,7 @@ because that leaves testing, security, and observability unruled.
 | [`core/git-workflow.md`](core/git-workflow.md) | Branching, commits, review | Committing |
 | [`core/api-contract.md`](core/api-contract.md) | REST shape, errors, paging, OpenAPI | Adding endpoints |
 | [`core/definition-of-done.md`](core/definition-of-done.md) | Universal completion checklist (stack-neutral) | Closing a task |
+| [`core/kinds/`](core/kinds/) | The done bar for `research`, `learning`, `mission`, and `ops` projects | Closing a run in a project of that kind |
 
 ## Java pack
 

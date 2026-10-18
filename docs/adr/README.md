@@ -41,3 +41,4 @@ An ADR with no rejected alternatives records a preference, not a decision.
 | [0022](0022-context-checkpoint-publication.md) | Opt-in context checkpoint publication | Accepted | 2026-10-12 |
 | [0023](0023-the-desk-is-the-agent-host-ui.md) | The desk is the agent host's UI | Accepted | 2026-10-16 |
 | [0024](0024-project-management-records.md) | Project management records | Accepted | 2026-10-17 |
+| [0025](0025-project-kinds.md) | Project kinds | Accepted | 2026-10-18 |

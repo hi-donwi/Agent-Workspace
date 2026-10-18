@@ -2,6 +2,10 @@
 
 "Done" means releasable, not "I finished typing the code".
 
+This is the bar for projects of kind `code`. Projects of kind `research`, `learning`,
+`mission`, and `ops` use the bar in `kinds/<kind>.md` instead (ADR-0025); the secrets and
+ADR rules below hold for every kind.
+
 This is the universal bar. A stack pack may add checks on top of it (see
 `java/definition-of-done.md` for the Java additions) — it may not remove any.
 
