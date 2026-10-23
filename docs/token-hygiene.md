@@ -39,6 +39,7 @@ User-level settings, not tracked here. Each was checked against the version note
 | Claude Code | `env.CLAUDE_CODE_AUTO_COMPACT_WINDOW` (`~/.claude/settings.json`) | `300000` | Compacts at 300K instead of near a 1M window. Range 100000–1000000. |
 | Claude Code | `effortLevel`, `modelSettings.<model>.effortLevel` | `high` | Raise per hard task with `/effort`; thinking is output, the dearest token. |
 | Codex (0.155) | `model_auto_compact_token_limit` (`~/.codex/config.toml`) | `250000` | Below every catalogue model's window (272K–500K), so it applies to all. |
+| Codex (0.155) | `service_tier` (`~/.codex/config.toml`) | unset | Unset is standard processing. `fast` (sent as `priority`) is faster with increased usage; the TUI's Fast mode toggle turns it back on. |
 | Gemini CLI (0.40) | `model.compressionThreshold` (`~/.gemini/settings.json`) | `0.3` | Fraction of the window; default `0.5`. |
 | opencode (1.19) | `compaction.prune` (`~/.config/opencode/opencode.jsonc`) | `true` | Drops old tool outputs. Its compact threshold is per model (`limit.input − reserved`), so there is no absolute window to set. |
 | Kilo, Antigravity, Cursor, Copilot, Codebuff | — | — | No equivalent setting found; `AGENTS.md` §6 rule 6 is what reaches them. |
