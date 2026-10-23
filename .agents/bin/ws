@@ -1474,6 +1474,15 @@ cmd_unlink() {
 
 # ─────────────────────────────────────────────────────────────── run
 cmd_run() {
+  # `path` and `write` are subcommands unless a project is registered under that key,
+  # so an existing `ws run <key> "title"` never changes meaning.
+  case "${1:-}" in
+    path|write)
+      if [ -z "$(reg_get "$1")" ]; then
+        local sub="$1"; shift
+        "run_$sub" "$@"; return
+      fi ;;
+  esac
   local key="${1:-}"; shift || true
   local title="${*:-}"
   [ -n "$key" ] && [ -n "$title" ] || die 'usage: ws run <project-key> "task title"'
@@ -1509,12 +1518,73 @@ cmd_run() {
   # Which session made the run: the owner id is human + tool, which every session of
   # the same tool shares, so it cannot tell `ws checkpoint` whose run this is.
   mkdir -p "$(session_dir)" && printf '%s/%s\n' "$key" "$(basename "$dir")" >> "$(session_dir)/runs"
+  # A session bound to this project now works in this run; the bind says so.
+  local bind; bind="$(session_dir)/bind"
+  if [ -f "$bind" ] && grep -qxF "project=$key" "$bind"; then
+    sed -i.bak "s|^run=.*|run=$(basename "$dir")|" "$bind" && rm -f "$bind.bak"
+  fi
 
   c_grn "-> run created"
   printf '%s\n' "${dir#$ROOT/}"
   c_dim "  owner: $(human_id) ($(agent_id)) - start with brief.md, then plan.md"
   [ "$kind" = "code" ] || c_dim "  kind: $kind - the done bar is .agents/standards/core/kinds/$kind.md"
   point_active_run "$key" "${dir#$ROOT/}" "$(human_id) ($(agent_id))"
+}
+
+# The run this session created: the newest entry of its run list, for one project or
+# any. Folder names carry human + tool, which parallel sessions of one tool share, so
+# they cannot say whose run it is - the session's own list can.
+session_run() {
+  local key="${1:-}" list; list="$(session_dir)/runs"
+  [ -s "$list" ] || return 1
+  if [ -n "$key" ]; then grep -E "^$key/" "$list" | tail -1
+  else tail -1 "$list"; fi
+}
+
+run_path() {
+  [ $# -le 1 ] || die "usage: ws run path [<project-key>]"
+  [ -z "${1:-}" ] || validate_key "$1"
+  local entry; entry="$(session_run "${1:-}")"
+  [ -n "$entry" ] || die "session $(session_id) created no run${1:+ for $1} - ws run <project-key> \"title\""
+  printf '%s\n' "${RUNS#$ROOT/}/$entry"
+}
+
+# Writes stdin to one file of a run this session created, so an agent never edits a
+# run it found by name. --run names one of this session's runs; anything else is refused.
+run_write() {
+  local usage='usage: ws run write <project-key> <brief|plan|progress|decisions|evidence|handoff> [--append] [--run <run-id>] < text'
+  [ $# -ge 2 ] || die "$usage"
+  local key="$1" file="$2" append=0 run=""
+  shift 2
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --append) append=1; shift ;;
+      --run) [ -n "${2:-}" ] || die "$usage"; run="$2"; shift 2 ;;
+      *) die "$usage" ;;
+    esac
+  done
+  validate_key "$key"
+  case "$file" in
+    brief|plan|progress|decisions|evidence|handoff) ;;
+    *) die "$usage" ;;
+  esac
+  if [ -n "$run" ]; then
+    validate_key "$run"
+    grep -qxF "$key/$run" "$(session_dir)/runs" 2>/dev/null \
+      || die "run $run was not created by session $(session_id) - only its owner session writes it"
+  else
+    run="$(session_run "$key")" || true
+    [ -n "$run" ] || die "session $(session_id) created no run for $key - ws run $key \"title\""
+    run="${run#$key/}"
+  fi
+  local target="$RUNS/$key/$run/$file.md"
+  [ -d "$RUNS/$key/$run" ] || die "run $run no longer exists in $key"
+  local tmp; tmp="$(mktemp)"
+  cat > "$tmp"
+  if ! grep -q '[^[:space:]]' "$tmp"; then rm -f "$tmp"; die "nothing on stdin to write"; fi
+  if [ "$append" = 1 ]; then cat "$tmp" >> "$target"; else cat "$tmp" > "$target"; fi
+  rm -f "$tmp"
+  c_grn "-> ${target#$ROOT/}"
 }
 
 # Append a row to active.md's run table. Never overwrite Current focus — that
@@ -4543,6 +4613,10 @@ ws — engineering workspace CLI
   ws link <key>                    write the untracked AGENTS.md pointer in a product repo
   ws unlink <key>                  remove the pointer
   ws run <key> "title"             create a new run under .agents/runs/<key>/
+  ws run path [<key>]              this session's newest run (never another session's)
+  ws run write <key> <file> [--append] [--run <id>] < text
+                                    write brief|plan|progress|decisions|evidence|handoff
+                                    of a run this session created; others are refused
   ws log <key> "milestone"         append one row to the project log
   ws note <key> "title" [body|-]   write a project note (notes/<date>-<slug>.md); - reads stdin
   ws task list|add|show|edit|comment|check|status|block|unblock <key>|@<client> ... tasks; --json, --revision
