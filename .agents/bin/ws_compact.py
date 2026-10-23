@@ -97,7 +97,10 @@ def compact_active(text: str, keep_closed: int):
     rows = lines[first:end]
 
     def state(row):
-        return cells(row)[-1].strip('`* ').lower()
+        value = cells(row)[-1].strip('`* ').lower()
+        # Historical tables annotate terminal states with an explicit separator.
+        # Do not treat ambiguous phrases such as "done pending review" as closed.
+        return re.split(r'\s+[-–—]\s+|:\s+', value, maxsplit=1)[0].strip('`* ')
 
     def stamp(i):
         found = RUN_STAMP_RE.search(cells(rows[i])[0])

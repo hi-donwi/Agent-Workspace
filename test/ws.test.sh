@@ -45,7 +45,7 @@ equals()     { [ "$1" = "$2" ] && ok "$3" || bad "$3" "expected '$2', got '$1'";
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 # Isolate $HOME too: ws usage falls back to ~/.agent-ops when unconfigured, and
-# a real one on the machine running this suite must never leak into a test.
+# a real one on the machine running these tests must never leak into a test.
 export HOME="$TMP/home"; mkdir -p "$HOME"
 export GIT_CONFIG_GLOBAL="$TMP/gitconfig" GIT_CONFIG_SYSTEM=/dev/null
 git config --global user.email "test@example.com"
@@ -53,10 +53,10 @@ git config --global user.name  "Test Runner"
 git config --global init.defaultBranch main
 git config --global commit.gpgsign false
 export WS_USER=tester WS_AGENT=testagent
-# Runtime session ids from the host agent must not leak into the suite. Neither
+# Runtime session ids from the host agent must not leak into the test harness. Neither
 # may the variables `agent_id` detects the tool by: with CLAUDECODE or
 # CODEX_SANDBOX set, WS_AGENT is ignored and every clock file is named after the
-# agent running the suite, so three cases here failed on a developer's machine
+# agent running the tests, so three cases here failed on a developer's machine
 # and passed in CI — the worst way round for a regression test to behave.
 HOST_ENV="WS_SESSION_ID GROK_SESSION_ID GROK_SESSION CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID
           CODEX_THREAD_ID CURSOR_TRACE_ID CLAUDECODE CODEX_SANDBOX GEMINI_CLI"
@@ -681,11 +681,13 @@ cat > "$CM/active.md" <<'MD'
 | `2026-09-08-090000-a-x-review` | a (claude-code) | ready for review |
 | `2026-09-07-090000-a-x-progress` | a (claude-code) | in progress |
 | `2026-09-06-090000-a-x-blocked` | a (claude-code) | blocked |
-| `2026-09-05-090000-a-x-d5` | a (claude-code) | done |
+| `2026-09-06-080000-a-x-pending` | a (claude-code) | done pending review |
+| `2026-09-06-070000-a-x-unknown` | a (claude-code) | done-ish |
+| `2026-09-05-090000-a-x-d5` | a (claude-code) | done — delivered |
 | `2026-09-04-090000-a-x-d4` | a (claude-code) | done |
-| `2026-09-03-090000-a-x-d3` | a (claude-code) | done |
-| `2026-09-02-090000-a-x-d2` | a (claude-code) | done |
-| `2026-09-01-090000-a-opencode-d1` | a (opencode) | done |
+| `2026-09-03-090000-a-x-d3` | a (claude-code) | done – delivered |
+| `2026-09-02-090000-a-x-d2` | a (claude-code) | closed: delivered |
+| `2026-09-01-090000-a-opencode-d1` | a (opencode) | done - delivered |
 
 ## Next up
 
@@ -701,7 +703,7 @@ check "ws compact memory without --apply is a dry run" ws compact memory compact
 cmp -s "$CM/active.md" "$TMP/compact-active.before" && cmp -s "$CM/log.md" "$TMP/compact-log.before" \
   && ok "the dry run changed nothing" || bad "the dry run changed nothing"
 check "ws compact memory --apply compacts" ws compact memory compactdemo --apply
-for live in x-new x-review x-progress x-blocked; do
+for live in x-new x-review x-progress x-blocked x-pending x-unknown; do
   contains "$CM/active.md" "$live" "a live run is kept ($live)"
 done
 contains "$CM/active.md" "x-d5" "the newest done runs are kept"
@@ -883,7 +885,7 @@ contains "$WS/.local/sessions/otherbind/pack.json" "SIBLING_SESSION_CANARY" \
 # Every agent that exports no session id shares one directory, so a bind there
 # redirects whatever other agent is using it — without telling either of them.
 # This is ADR-0011 isolation defeated by two processes and no env var.
-# The suite unsets every session variable, so a bare `ws` is the default session.
+# The harness unsets every session variable, so a bare `ws` is the default session.
 check "the default session can take a first bind" ws session bind api
 contains "$WS/.local/sessions/default/bind" "project=api" "default bound to api"
 check "rebinding the default session to the SAME project is a refresh" \
@@ -1052,7 +1054,7 @@ contains "$WS/.local/sessions/nocx/pack.json" '"context_repo": null' \
 # exactly what happened in this workspace before the column existed.
 check "ws link names the project's own context repo" ws link api
 # Assert against the file ws link actually wrote, not a guess: which of the two it is
-# depends on whether the product tracks its own AGENTS.md at this point in the suite.
+# depends on whether the product tracks its own AGENTS.md at this point in the tests.
 LINKPTR="$PROD/AGENTS.md"; [ -f "$PROD/.workspace-instructions.md" ] && LINKPTR="$PROD/.workspace-instructions.md"
 not_exists "$PROD/$( [ "$LINKPTR" = "$PROD/AGENTS.md" ] && echo .workspace-instructions.md || echo AGENTS.md )" \
   "only one generated pointer is left on disk"
@@ -1753,6 +1755,70 @@ printf '%s' "$OUT" | grep -q 'hvy-big' \
   && bad "another project's heavy session leaked into this scope" "$OUT" \
   || ok "the heaviest-sessions list is scoped like everything else"
 
+section "ws usage: explicit scopes and incomplete coverage"
+# Separate month keeps these fixtures independent of earlier usage assertions.
+UM=2099-12
+cat > "$USRC/ops/usage/$UM.jsonl" <<EOF
+{"id":"framework","tool":"codex","project":"workspace","projectRoot":"$PROD","tokens":{"input":11,"output":1}}
+{"id":"legacy-root","tool":"codex","projectRoot":"$WS","tokens":{"input":13,"output":1}}
+{"id":"explicit-api","tool":"codex","projectKey":"api","projectRoot":"$WS","tokens":{"input":17,"output":1}}
+{"id":"other-project","tool":"codex","project":"api2","projectRoot":"$PROD","tokens":{"input":999,"output":1}}
+{"id":"invalid-identity","tool":"codex","projectKey":["api"],"projectRoot":"$PROD","tokens":{"input":999,"output":1}}
+EOF
+OUT="$(ws usage --month "$UM" --project workspace 2>&1)"
+printf '%s' "$OUT" | grep -qE '^TOTAL +2 +24 ' \
+  && ok "framework scope matches explicit identity and only the exact legacy root" \
+  || bad "framework scope matches explicit identity and only the exact legacy root" "$OUT"
+OUT="$(ws usage --month "$UM" --project api 2>&1)"
+printf '%s' "$OUT" | grep -qE '^TOTAL +1 +17 ' \
+  && ok "explicit project identity overrides a misleading working directory" \
+  || bad "explicit project identity overrides a misleading working directory" "$OUT"
+check_fails "usage still rejects an unknown project" ws usage --month "$UM" --project no-such-project
+
+cat > "$USRC/ops/usage/$UM.jsonl" <<EOF
+{"id":"known","tool":"codex","projectRoot":"$PROD","tokens":{"input":10,"output":2,"cacheRead":90}}
+{"id":"unavailable","tool":"codex","projectRoot":"$PROD","tokensAvailable":false,"tokens":{"input":999}}
+{"id":"fallback","tool":"codex","projectRoot":"$PROD","raw":{"tokenSource":"thread_total_only"},"tokens":{"input":777,"output":0}}
+{"id":"missing","tool":"codex","projectRoot":"$PROD"}
+{"id":"invalid","tool":"codex","projectRoot":"$PROD","tokens":{"input":-1,"output":2}}
+EOF
+OUT="$(ws usage --month "$UM" --project api 2>&1)"
+printf '%s' "$OUT" | grep -qE '^TOTAL +1 +10 +2$' \
+  && ok "only measured numeric breakdowns enter detailed totals" \
+  || bad "only measured numeric breakdowns enter detailed totals" "$OUT"
+printf '%s' "$OUT" | grep -q 'cache hit: 90%' \
+  && ok "total-only fallbacks do not distort cache hit rates" \
+  || bad "total-only fallbacks do not distort cache hit rates" "$OUT"
+printf '%s' "$OUT" | grep -q 'Coverage: detailed=1 unavailable=3 total-only=1 duplicates=0' \
+  && ok "coverage distinguishes unavailable usage from fallback totals" \
+  || bad "coverage distinguishes unavailable usage from fallback totals" "$OUT"
+printf '%s' "$OUT" | grep -q 'Total-only tokens (breakdown unknown): 777' \
+  && ok "fallback token totals remain visible outside input and output columns" \
+  || bad "fallback token totals remain visible outside input and output columns" "$OUT"
+
+cat > "$USRC/ops/usage/$UM.jsonl" <<EOF
+{"id":"same","tool":"codex","projectRoot":"$PROD","end":"2099-12-01T00:00:00Z","tokens":{"input":10,"output":2}}
+{"id":"same","tool":"codex","projectRoot":"$PROD","end":"2099-12-01T00:00:00Z","tokens":{"input":10,"output":2}}
+{"id":"same","tool":"claude-code","projectRoot":"$PROD","end":"2099-12-01T00:00:00Z","tokens":{"input":20,"output":2}}
+{"tool":"codex","projectRoot":"$PROD","tokens":{"input":30,"output":2}}
+{"tool":"codex","projectRoot":"$PROD","tokens":{"input":30,"output":2}}
+{"id":"same","tool":"codex","projectRoot":"$PROD","end":"2099-12-02T00:00:00Z","tokens":{"input":40,"output":2}}
+EOF
+# Duplicate in a second source differs only in import metadata.
+printf '{"id":"same","tool":"codex","projectRoot":"%s","end":"2099-12-01T00:00:00Z","tokens":{"input":10,"output":2},"source":"import","importedAt":"2099-12-03"}\n' \
+  "$PROD" > "$AGU/$UM.jsonl"
+OUT="$(ws usage --month "$UM" --project api 2>&1)"
+printf '%s' "$OUT" | grep -qE '^TOTAL +5 +130 +10$' \
+  && ok "exact identified duplicates collapse while tools, snapshots and anonymous rows stay distinct" \
+  || bad "exact identified duplicates collapse while tools, snapshots and anonymous rows stay distinct" "$OUT"
+printf '%s' "$OUT" | grep -q 'duplicates=2' \
+  && ok "duplicate coverage includes repeated records across both sources" \
+  || bad "duplicate coverage includes repeated records across both sources" "$OUT"
+printf '%s' "$OUT" | grep -q 'RECORDS' \
+  && ok "usage labels mixed-granularity rows as records, not sessions" \
+  || bad "usage labels mixed-granularity rows as records, not sessions" "$OUT"
+rm -f "$AGU/$UM.jsonl" "$USRC/ops/usage/$UM.jsonl"
+
 section "doctor on a bare clone"
 # Three bugs have now shipped that only appear before anything has been created:
 # check-ignore not matching a directory that does not exist, and `find` on a
@@ -2217,6 +2283,16 @@ check_fails "a second migrate-v4 refuses" ws context migrate-v4
 equals "$(ws kind show api)" "code" "an existing project is a code project"
 
 check "a research project registers without a folder" ws new inquiry --client acme --kind research
+printf '{"tool":"codex","projectKey":"inquiry","tokens":{"input":23,"output":2}}\n' > "$USRC/ops/usage/2099-12.jsonl"
+OUT="$(ws usage --month 2099-12 --project inquiry 2>&1)"
+printf '%s' "$OUT" | grep -qE '^TOTAL +1 +23 ' \
+  && ok "usage supports an explicitly attributed context-only project" \
+  || bad "usage supports an explicitly attributed context-only project" "$OUT"
+OUT="$(ws usage --month 2099-12 --client acme 2>&1)"
+printf '%s' "$OUT" | grep -qE '^TOTAL +1 +23 ' \
+  && ok "client usage includes its context-only projects" \
+  || bad "client usage includes its context-only projects" "$OUT"
+rm -f "$USRC/ops/usage/2099-12.jsonl"
 check "a learning project registers without a folder" ws new study --client acme --kind learning
 check "a mission project registers without a folder" ws new horizon --client acme --kind mission
 check "an ops project registers without a folder" ws new upkeep --client acme --kind ops

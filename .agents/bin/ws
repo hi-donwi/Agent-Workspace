@@ -2996,16 +2996,26 @@ cmd_usage() {
   [ -n "$udir" ] || [ -d "$agentdir" ] \
     || die "no usage source found - set 'usage_source' in workspace.conf, install one at ~/.agent-ops, or run the agent host (.local/agent/usage/)"
 
-  # Resolve the target project(s) to absolute roots a record's projectRoot is
-  # matched against - a record whose cwd was anywhere under a project's own
-  # folder counts for that project, same idea as a client's projects for hours.
-  local roots=() k c g f r s p d
+  # Prefer explicit identity; roots support records from older collectors only.
+  # Framework work and context-only projects need no registered product folder.
+  local roots=() project_keys="" k c g f r s p d
   if [ -n "$client" ]; then
-    while IFS=$'\t' read -r k c g f r s p d; do [ "$c" = "$client" ] && ! is_empty "$f" && roots+=("$ROOT/$f"); done < <(reg_rows)
-    [ "${#roots[@]}" -gt 0 ] || die "no project in registry.tsv has client '$client'"
+    while IFS=$'\t' read -r k c g f r s p d; do
+      [ "$c" = "$client" ] || continue
+      project_keys="${project_keys}${project_keys:+,}$k"
+      is_empty "$f" || roots+=("$ROOT/$f")
+    done < <(reg_rows)
+    [ -n "$project_keys" ] || die "no project in registry.tsv has client '$client'"
+  elif [ "$project" = "$FRAMEWORK_KEY" ]; then
+    project_keys="$FRAMEWORK_KEY"
+    roots+=("$ROOT")
   elif [ "$project" != "-" ]; then
-    while IFS=$'\t' read -r k c g f r s p d; do [ "$k" = "$project" ] && ! is_empty "$f" && roots+=("$ROOT/$f"); done < <(reg_rows)
-    [ "${#roots[@]}" -gt 0 ] || die "unknown project, or a context-only project with no folder to match usage against: '$project' - see: ws list"
+    while IFS=$'\t' read -r k c g f r s p d; do
+      [ "$k" = "$project" ] || continue
+      project_keys="$k"
+      is_empty "$f" || roots+=("$ROOT/$f")
+    done < <(reg_rows)
+    [ -n "$project_keys" ] || die "unknown project: '$project' - see: ws list"
   fi
 
   local files=() p d
@@ -3022,13 +3032,20 @@ cmd_usage() {
 import sys, json
 
 month = sys.argv[1]
-roots = [r.rstrip('/') for r in sys.argv[2:] if r]
+projects = set(filter(None, sys.argv[2].split(',')))
+framework_root = sys.argv[3].rstrip('/')
+roots = [r.rstrip('/') for r in sys.argv[4:] if r]
 
 by_day = {}
 by_tool = {}
 tool_tok = {}
 total = {"sessions": 0, "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}
 records = []
+seen = set()
+unavailable = total_only = fallback_tokens = duplicates = 0
+
+def token_count(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 for line in sys.stdin:
     line = line.strip()
@@ -3038,11 +3055,45 @@ for line in sys.stdin:
         rec = json.loads(line)
     except ValueError:
         continue
-    if roots:
+    if not isinstance(rec, dict):
+        continue
+    if projects:
+        identity = rec.get("project") or rec.get("projectKey")
         root = rec.get("projectRoot")
-        if not root or not any(root == r or root.startswith(r + "/") for r in roots):
+        if identity:
+            if not isinstance(identity, str) or identity not in projects:
+                continue
+        elif not isinstance(root, str) or not any(
+            root.rstrip('/') == r or (r != framework_root and root.startswith(r + "/"))
+            for r in roots
+        ):
             continue
-    tok = rec.get("tokens") or {}
+    # No identity means no safe duplicate suppression. Different snapshots and
+    # producer fields must stay distinct until request-level accounting exists.
+    if rec.get("id") or rec.get("requestId"):
+        fingerprint = json.dumps({k: v for k, v in rec.items()
+                                  if k not in ("source", "importedAt")}, sort_keys=True)
+        if fingerprint in seen:
+            duplicates += 1
+            continue
+        seen.add(fingerprint)
+    tok = rec.get("tokens")
+    if rec.get("tokensAvailable") is False or not isinstance(tok, dict):
+        unavailable += 1
+        continue
+    raw = rec.get("raw") or {}
+    if isinstance(raw, dict) and raw.get("tokenSource") == "thread_total_only":
+        if token_count(tok.get("input")):
+            total_only += 1
+            fallback_tokens += tok["input"]
+        else:
+            unavailable += 1
+        continue
+    if not all(token_count(tok.get(f)) for f in ("input", "output")) or not all(
+        token_count(tok.get(f, 0)) for f in ("cacheRead", "cacheWrite")
+    ):
+        unavailable += 1
+        continue
     day = (rec.get("end") or "")[:10]
     total["sessions"] += 1
     for f in ("input", "output", "cacheRead", "cacheWrite"):
@@ -3073,9 +3124,9 @@ def hit_pct(cache_read, input_, cache_write):
     return f"{100 * cache_read / denom:.0f}%" if denom else "-"
 
 if total["sessions"] == 0:
-    print("no usage records for this scope in " + month)
+    print("no detailed token usage records for this scope in " + month)
 else:
-    print(f"{'DAY':<12} {'SESSIONS':>8} {'INPUT':>10} {'OUTPUT':>10}")
+    print(f"{'DAY':<12} {'RECORDS':>8} {'INPUT':>10} {'OUTPUT':>10}")
     for day in sorted(by_day):
         d = by_day[day]
         print(f"{day:<12} {d['sessions']:>8} {d['input']:>10} {d['output']:>10}")
@@ -3087,7 +3138,7 @@ else:
     print()
     print("by tool: " + ", ".join(f"{k}={v}" for k, v in sorted(by_tool.items())))
     print()
-    print(f"{'TOOL':<14} {'SESSIONS':>8} {'INPUT':>10} {'CACHE-READ':>12} {'CACHE-WRITE':>12} {'OUTPUT':>10} {'HIT%':>6}")
+    print(f"{'TOOL':<14} {'RECORDS':>8} {'INPUT':>10} {'CACHE-READ':>12} {'CACHE-WRITE':>12} {'OUTPUT':>10} {'HIT%':>6}")
     for t in sorted(tool_tok):
         tt = tool_tok[t]
         print(f"{t:<14} {by_tool[t]:>8} {tt['input']:>10} {tt['cacheRead']:>12} {tt['cacheWrite']:>12} {tt['output']:>10} "
@@ -3096,14 +3147,17 @@ else:
     heavy = sorted(records, key=lambda r: r["cacheRead"], reverse=True)[:5]
     if heavy and heavy[0]["cacheRead"] > 0:
         print()
-        print("heaviest sessions (by cache read):")
+        print("heaviest records (by cache read):")
         print(f"  {'ID':<14} {'TOOL':<12} {'DAY':<12} {'INPUT':>10} {'CACHE-READ':>12} {'OUTPUT':>10}")
         for r in heavy:
             print(f"  {r['id']:<14} {r['tool']:<12} {r['day']:<12} {r['input']:>10} {r['cacheRead']:>12} {r['output']:>10}")
+print(f"Coverage: detailed={total['sessions']} unavailable={unavailable} total-only={total_only} duplicates={duplicates}")
+if total_only:
+    print(f"Total-only tokens (breakdown unknown): {fallback_tokens}")
 PYEOF
   # An empty month is no records - not `cat` reading stdin, nor an unbound empty
   # array under bash 3.2's set -u.
-  { [ "${#files[@]}" -gt 0 ] && cat "${files[@]}" 2>/dev/null; true; } | python3 "$pyfile" "$month" "${roots[@]:-}"
+  { [ "${#files[@]}" -gt 0 ] && cat "${files[@]}" 2>/dev/null; true; } | python3 "$pyfile" "$month" "$project_keys" "$ROOT" "${roots[@]:-}"
   rm -f "$pyfile"
   [ -n "$src" ] && c_dim "Source: $src (a separate personal tool - see: ws doctor)."
   [ -d "$agentdir" ] && c_dim "Source: ${agentdir#$ROOT/} (the agent host's own records)."

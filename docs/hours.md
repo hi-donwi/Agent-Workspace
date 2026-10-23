@@ -73,13 +73,37 @@ manual on purpose — only the person at the keyboard knows when they actually s
 
 ## `ws usage` — a third, optional, read-only axis
 
-Hours answer "how long"; token usage answers "how much it cost." That is tracked by a
+Hours answer "how long"; token usage reports model usage, not a verified bill or subscription
+quota. Usage is collected by a
 **separate personal tool this workspace does not own, vendor, or require** — commonly one
 kept at `~/.agent-ops` (name it via `usage_source` in `workspace.conf` if it lives
 elsewhere). `ws usage [--project <key> | --client <key>]` reads that tool's records
-read-only, filtering by a project's or client's real project root, and never writes
-anything back or copies its data into `context/`. Absent, `ws usage` says so plainly and
-`ws doctor` treats it as informational, never a failure — most workspaces will not have
-this tool installed at all.
+and any agent-host records in `.local/agent/usage/`, without modifying either source.
+Either source can be used alone. `ws doctor` treats the personal collector as optional.
+
+An explicit `project` (host) or `projectKey` (collector) takes precedence over
+`projectRoot`. Records without an explicit identity use the legacy project-folder
+match. The framework key `workspace` supports an exact root match only, so nested
+products are excluded; registered context-only projects match by explicit identity.
+This does not repair an upstream collector's incorrect project identity or recover a
+missing session bind. Unknown project keys still fail rather than widening the scope.
+
+The table counts **records**, because sources may mix session snapshots and individual
+requests. `Coverage` shows detailed, unavailable, total-only, and duplicate record counts.
+Unavailable or invalid input/output breakdowns do not enter detailed sums. A collector
+fallback marked `raw.tokenSource: thread_total_only` is shown separately, not classified
+as uncached input. Legacy records with numeric input/output are supported; optional cache
+fields default to zero under that legacy format.
+
+Exact repeated records with a stable `id` or `requestId` are counted once across both
+sources, ignoring only import metadata (`source`, `importedAt`). Different payloads,
+snapshots, tools, and unidentified rows remain separate. This is not request-level
+reconciliation: do not sum inclusive parent usage with child usage or assume cumulative
+snapshots are request deltas. Reliable multi-agent totals need upstream request identity,
+ancestry, and direct/inclusive scope.
+
+Day buckets still use each record's end date and source month file. For multi-day
+cumulative sessions these are snapshot dates, not actual daily spending. Cost estimation,
+provider reconciliation, and parent/child run accounting are not supplied by this report.
 
 ---
