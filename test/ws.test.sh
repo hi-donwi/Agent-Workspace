@@ -2102,6 +2102,38 @@ exists "$WS/.local/sessions/fwstart/bind" "ws agent start bound the framework ke
 exists "$WS/.local/worktrees/workspace/fwstart/.git" "the framework worktree exists"
 WS_SESSION_ID=fwstart check "ws agent stop closes the framework session" ws agent stop
 
+section "run path and run write stay with the session that made the run"
+# Run folders carry human + tool, which every session of one tool shares, so picking
+# "the newest run with my owner in its name" found a parallel session's run and its
+# handoff was overwritten. The session's own run list is the authority.
+WS_SESSION_ID=rpa ws run otherp "path a run" >/dev/null 2>&1
+WS_SESSION_ID=rpb ws run otherp "path b run" >/dev/null 2>&1
+RP="$(WS_SESSION_ID=rpa ws run path otherp 2>/dev/null)"
+printf '%s' "$RP" | grep -q -- '-path-a-run$' \
+  && ok "run path names this session's run, not a newer one of the same tool" \
+  || bad "run path names this session's run, not a newer one of the same tool" "$RP"
+equals "$(WS_SESSION_ID=rpa ws run path 2>/dev/null)" "$RP" "run path defaults to this session's newest run"
+WS_SESSION_ID=rpnone check_fails "run path fails for a session that made no run" ws run path otherp
+WS_SESSION_ID=rpa check "run write replaces a file of this session's run" \
+  ws run write otherp handoff <<< "HANDOFF_A"
+contains "$WS/$RP/handoff.md" "HANDOFF_A" "the handoff holds what was written"
+WS_SESSION_ID=rpa check "run write --append adds to it" \
+  ws run write otherp handoff --append <<< "HANDOFF_MORE"
+contains "$WS/$RP/handoff.md" "HANDOFF_A" "the appended handoff keeps the first text"
+contains "$WS/$RP/handoff.md" "HANDOFF_MORE" "the appended handoff has the new text"
+WS_SESSION_ID=rpb check_fails "run write refuses another session's run" \
+  ws run write otherp handoff --run "$(basename "$RP")" <<< "CLOBBER"
+lacks "$WS/$RP/handoff.md" "CLOBBER" "the other session's handoff is untouched"
+WS_SESSION_ID=rpa check_fails "run write refuses a file that is not a run file" \
+  ws run write otherp ../../escape <<< "x"
+WS_SESSION_ID=rpa check_fails "run write refuses an empty input" ws run write otherp handoff <<< ""
+WS_SESSION_ID=rpa ws session bind otherp >/dev/null 2>&1
+WS_SESSION_ID=rpa ws run otherp "bound run" >/dev/null 2>&1
+grep -q -- '^run=.*-bound-run$' "$WS/.local/sessions/rpa/bind" \
+  && ok "ws run records the new run in the session bind" \
+  || bad "ws run records the new run in the session bind" "$(cat "$WS/.local/sessions/rpa/bind")"
+WS_SESSION_ID=rpa ws session clear >/dev/null 2>&1
+
 section "checkpoint commits only this agent's context work"
 (cd "$WS" && WS_AGENT=otheragent ./.agents/bin/ws run otherp "someone elses run" >/dev/null 2>&1)
 ws run otherp "my own run" >/dev/null 2>&1
