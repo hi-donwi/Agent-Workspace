@@ -7,7 +7,22 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CONF="$ROOT/workspace.conf"
+
+# A linked framework worktree (`ws agent start workspace`, or an editor's own) carries
+# the tracked framework but none of the workspace's untracked state: workspace.conf,
+# context/, projects/, and .local/ exist only in the primary clone. Framework files stay
+# on ROOT; state resolves through WS_HOME, so a bind, a run, or a clock made from a
+# worktree lands where every other session reads it.
+WS_HOME="$ROOT"
+if _ws_dirs="$(git -C "$ROOT" rev-parse --path-format=absolute --git-dir --git-common-dir 2>/dev/null)"; then
+  _ws_common="$(printf '%s\n' "$_ws_dirs" | sed -n 2p)"
+  if [ "$(printf '%s\n' "$_ws_dirs" | sed -n 1p)" != "$_ws_common" ] \
+    && [ -f "$(dirname "$_ws_common")/.agents/bin/ws" ]; then
+    WS_HOME="$(dirname "$_ws_common")"
+  fi
+fi
+unset _ws_dirs _ws_common
+CONF="$WS_HOME/workspace.conf"
 SKILLS="$ROOT/.agents/skills"
 TPL="$ROOT/.agents/templates"
 
@@ -43,7 +58,7 @@ normalize_remote() {
   printf '%s' "${1:-}" | sed -E 's#^git@([^:]+):#https://\1/#; s#^ssh://git@([^/]+)/#https://\1/#; s#\.git$##'
 }
 
-CONTEXT_DIR="$ROOT/$(conf_get context_dir 'context')"
+CONTEXT_DIR="$WS_HOME/$(conf_get context_dir 'context')"
 REGISTRY="$CONTEXT_DIR/registry.tsv"
 GROUPS_FILE="$CONTEXT_DIR/groups.tsv"
 MEM="$CONTEXT_DIR/memory/projects"
@@ -92,7 +107,7 @@ repo_path() {
   # A context-only project (research, learning, mission, ops) has no product folder.
   is_empty "$folder" && return 0
   case "$folder" in projects/*) ;; *) die "product folder must be under projects/" ;; esac
-  result="$(safe_path "$ROOT/projects" "${folder#projects/}")" || die "unsafe product folder"
+  result="$(safe_path "$WS_HOME/projects" "${folder#projects/}")" || die "unsafe product folder"
   printf '%s\n' "$result"
 }
 
@@ -346,7 +361,7 @@ cmd_context() {
   local action="${1:-status}"; shift || true
   case "$action" in
     pack)
-      python3 "$ROOT/.agents/bin/ws_state.py" context-pack "$ROOT" "$CONTEXT_DIR" "$@"
+      python3 "$ROOT/.agents/bin/ws_state.py" context-pack "$WS_HOME" "$CONTEXT_DIR" "$@"
       ;;
     sync)
       context_sync
@@ -427,10 +442,10 @@ context_split() {
   esac
   local stamp archive dest_p dest_o
   stamp="$(date +%Y%m%dT%H%M%S)"
-  archive="$ROOT/.local/archives/context-mixed-$stamp"
-  dest_p="$ROOT/.local/contexts/$personal"
-  dest_o="$ROOT/.local/contexts/org"
-  mkdir -p "$ROOT/.local/archives" "$ROOT/.local/contexts"
+  archive="$WS_HOME/.local/archives/context-mixed-$stamp"
+  dest_p="$WS_HOME/.local/contexts/$personal"
+  dest_o="$WS_HOME/.local/contexts/org"
+  mkdir -p "$WS_HOME/.local/archives" "$WS_HOME/.local/contexts"
   git clone -q "$CONTEXT_DIR" "$archive"
   git -C "$archive" remote remove origin 2>/dev/null || true
   python3 "$ROOT/.agents/bin/ws_context_split.py" "$CONTEXT_DIR" "$personal" "$dest_p" "$dest_o"
@@ -534,7 +549,7 @@ context_switch() {
 # The loopback port of an Agent-Brain gateway the agent host is configured to use: the
 # `brain` endpoint in .local/agent/endpoints.json. Prints nothing when there is none.
 chat_brain_port() {
-  local f="$ROOT/.local/agent/endpoints.json"
+  local f="$WS_HOME/.local/agent/endpoints.json"
   [ -f "$f" ] || return 0
   python3 - "$f" <<'PY' 2>/dev/null || true
 import json, sys, urllib.parse
@@ -587,10 +602,10 @@ HELP
   local ctrl_dir="${WS_AGENT_CONTROL_DIR:-}"
   if [ -z "$ctrl_dir" ]; then
     local rel_folder; rel_folder="$(reg_get "agent-control" 2>/dev/null | cut -f4 || true)"
-    if [ -n "$rel_folder" ] && [ -d "$ROOT/$rel_folder" ]; then
-      ctrl_dir="$ROOT/$rel_folder"
-    elif [ -d "$ROOT/projects/donwi/public/Agent-Control" ]; then
-      ctrl_dir="$ROOT/projects/donwi/public/Agent-Control"
+    if [ -n "$rel_folder" ] && [ -d "$WS_HOME/$rel_folder" ]; then
+      ctrl_dir="$WS_HOME/$rel_folder"
+    elif [ -d "$WS_HOME/projects/donwi/public/Agent-Control" ]; then
+      ctrl_dir="$WS_HOME/projects/donwi/public/Agent-Control"
     fi
   fi
   [ -n "$ctrl_dir" ] && [ -d "$ctrl_dir" ] || die "agent-control not found. Register it in registry.tsv or set WS_AGENT_CONTROL_DIR"
@@ -631,8 +646,8 @@ HELP
       c_dim "Agent-Brain gateway already running on port $brain_port"
     elif command -v brain >/dev/null; then
       c_grn "-> starting the Agent-Brain gateway: brain serve --cloud-only --port $brain_port"
-      mkdir -p "$ROOT/.local/agent"
-      brain serve --cloud-only --port "$brain_port" > "$ROOT/.local/agent/brain-serve.log" 2>&1 &
+      mkdir -p "$WS_HOME/.local/agent"
+      brain serve --cloud-only --port "$brain_port" > "$WS_HOME/.local/agent/brain-serve.log" 2>&1 &
       brain_pid=$!
       # The PID is written into the trap: the local variable is gone by the time ws exits.
       trap "kill $brain_pid 2>/dev/null" EXIT
@@ -643,7 +658,7 @@ HELP
   fi
 
   c_grn "-> launching Agent-Control..."
-  export WS_WORKSPACE_ROOT="$ROOT"
+  export WS_WORKSPACE_ROOT="$WS_HOME"
   [ -n "$port" ] && export PORT="$port"
   [ -n "$host" ] && export HOST="$host"
 
@@ -661,7 +676,7 @@ agent_host_dir() {
   local d="${WS_AGENT_HOST_DIR:-}"
   if [ -z "$d" ]; then
     local rel; rel="$(reg_get agent-control 2>/dev/null | cut -f4 || true)"
-    [ -n "$rel" ] && d="$ROOT/$rel"
+    [ -n "$rel" ] && d="$WS_HOME/$rel"
   fi
   if [ -n "$d" ] && [ -d "$d" ]; then printf '%s\n' "$d"; fi
   return 0
@@ -705,8 +720,8 @@ cmd_list() {
     local status="missing"
     if is_empty "$folder"; then status="context"
     else
-      [ -d "$ROOT/$folder/.git" ] && status="ok"
-      [ -d "$ROOT/$folder" ] && [ ! -d "$ROOT/$folder/.git" ] && status="no-git"
+      [ -d "$WS_HOME/$folder/.git" ] && status="ok"
+      [ -d "$WS_HOME/$folder" ] && [ ! -d "$WS_HOME/$folder/.git" ] && status="no-git"
     fi
     is_empty "$kind" && kind="code"
     printf '%-20s %-9s %-12s %-12s %-40s %-8s %s\n' "$key" "$kind" "$client" "$group" "$folder" "$status" "$remote"
@@ -990,7 +1005,7 @@ cmd_client() {
       shift
       [ $# -ge 1 ] || die "usage: ws client show <client> [--json]"
       task_project "@$1"
-      python3 "$ROOT/.agents/bin/ws_pm.py" client "$CONTEXT_DIR" "$ROOT" "$@" ;;
+      python3 "$ROOT/.agents/bin/ws_pm.py" client "$CONTEXT_DIR" "$WS_HOME" "$@" ;;
     log)
       shift
       [ $# -eq 2 ] || die 'usage: ws client log <client> "what happened"'
@@ -1320,13 +1335,13 @@ cmd_link() {
   # hand-written pointer gets added next to this one, aimed at the real repo.
   local external; external="$(printf '%s' "$row" | cut -f9)"
   local memory_row runs_row context_note=""
-  if is_empty "$external" || [ ! -d "$ROOT/$external" ]; then
+  if is_empty "$external" || [ ! -d "$WS_HOME/$external" ]; then
     memory_row="\`$MEM/$key/\`"
     runs_row="\`$RUNS/$key/\`"
     is_empty "$external" || c_ylw "  ! context_repo '$external' is not on disk - pointing at the root context"
   else
-    memory_row="\`$ROOT/$external/\` (its own repository)"
-    runs_row="\`$ROOT/$external/runs/\`"
+    memory_row="\`$WS_HOME/$external/\` (its own repository)"
+    runs_row="\`$WS_HOME/$external/runs/\`"
     context_note="
 This project's context is a **repository of its own**; \`$MEM/$key/\` holds routing
 stubs only. Its remote is separate from this product repo's — check who can read it
@@ -1706,20 +1721,20 @@ cmd_today() {
   local usage='usage: ws today [--json] [--scope <project-key>|@<client>] [--client <client>]'
   local arg
   for arg in "$@"; do case "$arg" in -h|--help) die "$usage" ;; esac; done
-  python3 "$ROOT/.agents/bin/ws_pm.py" today "$CONTEXT_DIR" "$ROOT" "$@" || die "$usage"
+  python3 "$ROOT/.agents/bin/ws_pm.py" today "$CONTEXT_DIR" "$WS_HOME" "$@" || die "$usage"
 }
 
 cmd_alerts() {
   if [ "${1:-}" = "snooze" ]; then
     shift
     [ $# -ge 2 ] || die 'usage: ws alerts snooze <alert-id> --for 1h|1d|1w|"YYYY-MM-DD HH:MM" | --off'
-    python3 "$ROOT/.agents/bin/ws_pm.py" snooze "$ROOT" "$@"
+    python3 "$ROOT/.agents/bin/ws_pm.py" snooze "$WS_HOME" "$@"
     return
   fi
   local usage='usage: ws alerts [--json] [--all] [--scope <project-key>|@<client>] [--client <client>] | ws alerts snooze <alert-id> --for 1d'
   local arg
   for arg in "$@"; do case "$arg" in -h|--help) die "$usage" ;; esac; done
-  python3 "$ROOT/.agents/bin/ws_pm.py" alerts "$CONTEXT_DIR" "$ROOT" "$@" || die "$usage"
+  python3 "$ROOT/.agents/bin/ws_pm.py" alerts "$CONTEXT_DIR" "$WS_HOME" "$@" || die "$usage"
 }
 
 # The project management records over MCP (stdio) for any coding agent (ADR-0024). Scope
@@ -1733,7 +1748,7 @@ cmd_mcp() {
       -h|--help) die 'usage: ws mcp [--project <project-key>] [--workspace]   (stdio MCP server)' ;;
     esac
   done
-  WS_TASK_ACTOR="$(owner_id)" exec python3 "$ROOT/.agents/bin/ws_mcp.py" "$CONTEXT_DIR" "$ROOT" --session-dir "$(session_dir)" "$@"
+  WS_TASK_ACTOR="$(owner_id)" exec python3 "$ROOT/.agents/bin/ws_mcp.py" "$CONTEXT_DIR" "$WS_HOME" --session-dir "$(session_dir)" "$@"
 }
 
 # A reminder is a task of kind reminder, due on its day, surfacing at its time.
@@ -2482,7 +2497,7 @@ agent_start() {
   fi
   is_repo "$dst" || die "not a git repository: $dst"
 
-  local wt="$ROOT/.local/worktrees/$key/$session"
+  local wt="$WS_HOME/.local/worktrees/$key/$session"
   mkdir -p "$(dirname "$wt")"
   if [ -e "$wt/.git" ] || [ -f "$wt/.git" ]; then
     c_dim "reusing worktree $wt"
@@ -2572,14 +2587,14 @@ agent_clean() {
   done
   case "$idle" in ''|*[!0-9]*) die "--idle-hours takes a whole number of hours" ;; esac
 
-  local base="$ROOT/.local/worktrees"
+  local base="$WS_HOME/.local/worktrees"
   [ -d "$base" ] || { c_dim "no worktrees under .local/worktrees/"; return 0; }
   local now wt rel cdir gdir primary last age state kb total=0 count=0
   now="$(date +%s)"
   for wt in "$base"/*/*/; do
     wt="${wt%/}"
     [ -f "$wt/.git" ] || continue
-    rel="${wt#"$ROOT"/}"
+    rel="${wt#"$WS_HOME"/}"
     cdir="$(agent_git_dir "$wt")" || cdir=""
     gdir="$(git -C "$wt" rev-parse --path-format=absolute --git-dir 2>/dev/null)" || gdir=""
     if [ -z "$cdir" ] || [ -z "$gdir" ]; then c_ylw "  ! $rel is not a readable worktree"; continue; fi
@@ -2623,7 +2638,7 @@ agent_clean() {
 # Per session-id under .local/sessions/, never a workspace-level "active project"
 # file, so concurrent agents do not overwrite each other (ADR-0011).
 session_dir() {
-  printf '%s/.local/sessions/%s' "$ROOT" "$(session_id)"
+  printf '%s/.local/sessions/%s' "$WS_HOME" "$(session_id)"
 }
 
 cmd_session() {
@@ -2694,7 +2709,7 @@ session_bind() {
     # the project. context-pack accepts either, so this must too.
     local external; external="$(printf '%s' "$row" | cut -f9)"
     if [ -d "$RUNS/$key/$run" ]; then :
-    elif ! is_empty "$external" && [ -d "$ROOT/$external/runs/$run" ]; then :
+    elif ! is_empty "$external" && [ -d "$WS_HOME/$external/runs/$run" ]; then :
     else die "run does not exist in project"; fi
   fi
 
@@ -2703,7 +2718,7 @@ session_bind() {
   local tmp; tmp="$(mktemp)"
   local pack_args=("$key")
   [ -n "$run" ] && pack_args+=(--run "$run")
-  if ! python3 "$ROOT/.agents/bin/ws_state.py" context-pack "$ROOT" "$CONTEXT_DIR" "${pack_args[@]}" > "$tmp"; then
+  if ! python3 "$ROOT/.agents/bin/ws_state.py" context-pack "$WS_HOME" "$CONTEXT_DIR" "${pack_args[@]}" > "$tmp"; then
     rm -f "$tmp"
     die "context pack failed"
   fi
@@ -2781,7 +2796,7 @@ PY
   # The bound project's work, and its client's own (ADR-0024), so an agent starts knowing
   # what is in progress, ready, blocked, and due. A broken task file must not block a bind.
   local work
-  if work="$(python3 "$ROOT/.agents/bin/ws_pm.py" digest "$CONTEXT_DIR" "$ROOT" "$key" 2>&1)"; then
+  if work="$(python3 "$ROOT/.agents/bin/ws_pm.py" digest "$CONTEXT_DIR" "$WS_HOME" "$key" 2>&1)"; then
     printf '\n%s' "$work" >> "$dir/CONTEXT.md"
   else
     c_ylw "! no work digest in CONTEXT.md: ${work##*: }"
@@ -2830,7 +2845,7 @@ session_compact_reminder() {
   [ -f "$bind_file" ] || return 0
   key="$(sed -n 's/^project=//p' "$bind_file" | head -1)"
   [ -n "$key" ] && [ -f "$dir/CONTEXT.md" ] || return 0
-  python3 - "$dir/CONTEXT.md" "$key" "$ROOT" <<'PY'
+  python3 - "$dir/CONTEXT.md" "$key" "$WS_HOME" <<'PY'
 import json
 import os
 import sys
@@ -2875,7 +2890,7 @@ auto_project_key() {
   # symlinks — so either side alone can disagree with the other.
   local k c g f r s p d here rootp
   here="$(cd "$PWD" 2>/dev/null && pwd -P)" || here="$PWD"
-  rootp="$(cd "$ROOT" 2>/dev/null && pwd -P)" || rootp="$ROOT"
+  rootp="$(cd "$WS_HOME" 2>/dev/null && pwd -P)" || rootp="$WS_HOME"
   # Longest match, not first: with a monorepo registered as two keys, the parent's
   # folder also contains the subproject's, and whichever row came first in the file
   # would take the hours. An hour on the wrong project is worse than none.
@@ -2919,15 +2934,15 @@ ACTIVITY_STATES="idle working thinking reading typing running learning waiting w
 agent_activity() {
   local helper="$ROOT/.agents/bin/ws_activity.py"
   case "${1:-}" in
-    --hook) python3 "$helper" hook "$ROOT" || true; return 0 ;;
-    off)    python3 "$helper" off "$ROOT" "$(session_id)"; return 0 ;;
+    --hook) python3 "$helper" hook "$WS_HOME" || true; return 0 ;;
+    off)    python3 "$helper" off "$WS_HOME" "$(session_id)"; return 0 ;;
     ""|-h|--help) die "usage: ws agent activity <${ACTIVITY_STATES// /|}> [detail] | off" ;;
   esac
   local state="$1"; shift
   case " $ACTIVITY_STATES " in *" $state "*) ;; *) die "unknown activity state '$state' (one of: $ACTIVITY_STATES)" ;; esac
   local key; key="$(auto_project_key)"
   [ -n "$key" ] || die "no project for this session - run ws session bind <key> first"
-  python3 "$helper" set "$ROOT" "$(session_id)" "$key" "$(agent_id)" "$state" "$*" >/dev/null
+  python3 "$helper" set "$WS_HOME" "$(session_id)" "$key" "$(agent_id)" "$state" "$*" >/dev/null
   c_grn "-> activity $state on $key"
 }
 
@@ -3057,7 +3072,7 @@ cmd_usage() {
 
   # Two sources, summed: an optional external tool's records, and the agent host's own
   # under .local/agent/usage/ (ADR-0021), which are this workspace's data.
-  local src udir="" agentdir="$ROOT/.local/agent/usage"
+  local src udir="" agentdir="$WS_HOME/.local/agent/usage"
   src="$(usage_source)"
   if [ -n "$src" ]; then
     udir="$src/ops/usage"
@@ -3073,7 +3088,7 @@ cmd_usage() {
     while IFS=$'\t' read -r k c g f r s p d; do
       [ "$c" = "$client" ] || continue
       project_keys="${project_keys}${project_keys:+,}$k"
-      is_empty "$f" || roots+=("$ROOT/$f")
+      is_empty "$f" || roots+=("$WS_HOME/$f")
     done < <(reg_rows)
     [ -n "$project_keys" ] || die "no project in registry.tsv has client '$client'"
   elif [ "$project" = "$FRAMEWORK_KEY" ]; then
@@ -3083,7 +3098,7 @@ cmd_usage() {
     while IFS=$'\t' read -r k c g f r s p d; do
       [ "$k" = "$project" ] || continue
       project_keys="$k"
-      is_empty "$f" || roots+=("$ROOT/$f")
+      is_empty "$f" || roots+=("$WS_HOME/$f")
     done < <(reg_rows)
     [ -n "$project_keys" ] || die "unknown project: '$project' - see: ws list"
   fi
@@ -3467,7 +3482,7 @@ cmd_doctor() {
         c_grn "ok $((free_kb / 1048576)) GB free on the workspace volume"
       fi
     fi
-    wts="$(count_files "$ROOT/.local/worktrees" -mindepth 3 -maxdepth 3 -name .git)"
+    wts="$(count_files "$WS_HOME/.local/worktrees" -mindepth 3 -maxdepth 3 -name .git)"
     [ "${wts:-0}" = "0" ] || c_dim "    $wts agent worktree(s) under .local/worktrees/ (ws agent clean lists the idle ones)"
     echo
   fi
@@ -3833,7 +3848,7 @@ PY
   echo "-- Session --"
   local sid sbind sproject sclient
   sid="$(session_id)"
-  sbind="$ROOT/.local/sessions/$sid/bind"
+  sbind="$WS_HOME/.local/sessions/$sid/bind"
   if [ -f "$sbind" ]; then
     sproject="$(sed -n 's/^project=//p' "$sbind" | head -1)"
     sclient="$(sed -n 's/^client=//p' "$sbind" | head -1)"
@@ -3960,7 +3975,7 @@ PY
   echo "-- Agent-Secure --"
   if command -v agent-secure >/dev/null; then
     c_grn "ok agent-secure on PATH"
-    if [ -d "$ROOT/.local/secure/policies" ]; then
+    if [ -d "$WS_HOME/.local/secure/policies" ]; then
       c_dim "  operator policies: .local/secure/policies/ (ws scan <key>)"
     else
       c_dim "  no operator policies yet — ws scan reads .local/secure/policies/<profile>.json"
@@ -4292,7 +4307,7 @@ cmd_scan() {
   if [ -z "$policy" ]; then
     local name="$profile"
     is_empty "$name" && name="default"
-    policy="$ROOT/.local/secure/policies/${name}.json"
+    policy="$WS_HOME/.local/secure/policies/${name}.json"
   fi
   [ -f "$policy" ] || die "no operator policy at $policy
     Agent-Secure policies are operator-owned and live outside the product repo.
@@ -4352,7 +4367,7 @@ cmd_verify() {
   is_repo "$dst" || die "not a product repository: $folder"
 
   if [ -z "$contract" ]; then
-    contract="$ROOT/.local/agent/contracts/$key.json"
+    contract="$WS_HOME/.local/agent/contracts/$key.json"
   fi
   [ -f "$contract" ] || die "no operator contract at $contract"
   local abs_contract abs_root abs_primary
@@ -4366,7 +4381,7 @@ cmd_verify() {
     local abs_wt base common_wt common_dst
     [ -d "$worktree" ] || die "no such worktree: $worktree"
     abs_wt="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$worktree")"
-    base="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$ROOT/.local/worktrees/$key")"
+    base="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$WS_HOME/.local/worktrees/$key")"
     case "$abs_wt" in
       "$base"/*) ;;
       *) die "a worktree to verify lives under .local/worktrees/$key/" ;;
@@ -4497,7 +4512,7 @@ cmd_policy() {
   local folder; folder="$(printf '%s' "$row" | cut -f4)"
   local dst; dst="$(repo_path "$folder")"
   is_repo "$dst" || die "not a product repository: $folder"
-  [ -n "$policy" ] || policy="$ROOT/.local/agent/policies/$key.json"
+  [ -n "$policy" ] || policy="$WS_HOME/.local/agent/policies/$key.json"
   [ -f "$policy" ] || die "no operator policy at $policy"
   local abs_policy abs_root
   abs_policy="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$policy")"
@@ -4545,7 +4560,7 @@ cmd_eval() {
     || die "usage: ws eval validate <scenarios.json> | ws eval compare <scenarios.json> --observed <results.json>"
   local file="${1:-}"; [ -n "$file" ] || die "usage: ws eval $sub <scenarios.json>"
   local abs; abs="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$file")"
-  case "$abs" in "$ROOT/projects"|"$ROOT/projects"/*) die "evaluation input must not live inside a product repository" ;; esac
+  case "$abs" in "$WS_HOME/projects"|"$WS_HOME/projects"/*) die "evaluation input must not live inside a product repository" ;; esac
   if [ "$sub" = "validate" ]; then
     python3 "$ROOT/.agents/bin/ws_eval.py" validate "$abs"
     return
@@ -4553,7 +4568,7 @@ cmd_eval() {
   [ "${2:-}" = "--observed" ] && [ -n "${3:-}" ] \
     || die "usage: ws eval compare <scenarios.json> --observed <results.json>"
   local observed; observed="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$3")"
-  case "$observed" in "$ROOT/projects"|"$ROOT/projects"/*) die "evaluation input must not live inside a product repository" ;; esac
+  case "$observed" in "$WS_HOME/projects"|"$WS_HOME/projects"/*) die "evaluation input must not live inside a product repository" ;; esac
   python3 "$ROOT/.agents/bin/ws_eval.py" compare "$abs" --observed "$observed"
 }
 
@@ -4563,7 +4578,7 @@ cmd_compat() {
     || die "usage: ws compat validate <manifest.json> | ws compat compare <manifest.json> --observed <results.json>"
   local file="${1:-}"; [ -n "$file" ] || die "usage: ws compat $sub <manifest.json>"
   local abs; abs="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$file")"
-  case "$abs" in "$ROOT/projects"|"$ROOT/projects"/*) die "compatibility input must not live inside a product repository" ;; esac
+  case "$abs" in "$WS_HOME/projects"|"$WS_HOME/projects"/*) die "compatibility input must not live inside a product repository" ;; esac
   if [ "$sub" = "validate" ]; then
     python3 "$ROOT/.agents/bin/ws_compat.py" validate "$abs"
     return
@@ -4571,7 +4586,7 @@ cmd_compat() {
   [ "${2:-}" = "--observed" ] && [ -n "${3:-}" ] \
     || die "usage: ws compat compare <manifest.json> --observed <results.json>"
   local observed; observed="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$3")"
-  case "$observed" in "$ROOT/projects"|"$ROOT/projects"/*) die "compatibility input must not live inside a product repository" ;; esac
+  case "$observed" in "$WS_HOME/projects"|"$WS_HOME/projects"/*) die "compatibility input must not live inside a product repository" ;; esac
   python3 "$ROOT/.agents/bin/ws_compat.py" compare "$abs" --observed "$observed"
 }
 
@@ -4674,7 +4689,7 @@ H
 }
 
 command -v python3 >/dev/null || die "Python 3 is required (see ADR-0010)"
-CONTEXT_DIR="$(safe_path "$ROOT" "$(conf_get context_dir context)")" || die "unsafe context directory"
+CONTEXT_DIR="$(safe_path "$WS_HOME" "$(conf_get context_dir context)")" || die "unsafe context directory"
 
 # Every command is a sign of life for an open clock, so the mtime tracks the
 # session's last activity and a recovery has something better than the start

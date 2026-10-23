@@ -2134,6 +2134,26 @@ grep -q -- '^run=.*-bound-run$' "$WS/.local/sessions/rpa/bind" \
   || bad "ws run records the new run in the session bind" "$(cat "$WS/.local/sessions/rpa/bind")"
 WS_SESSION_ID=rpa ws session clear >/dev/null 2>&1
 
+section "ws run from a framework worktree keeps state in the primary clone"
+# A framework worktree carries the tracked framework but none of the untracked state:
+# workspace.conf, context/, projects/, .local/. An agent working there runs the
+# worktree's own ws, and that ws must still find the one context every session shares.
+FWT="$WS/.local/worktrees/workspace/fwstart"
+wtws() { (cd "$FWT" && WS_SESSION_ID=wtstate "$FWT/.agents/bin/ws" "$@"); }
+check "ws session bind works from a framework worktree" wtws session bind otherp
+exists "$WS/.local/sessions/wtstate/bind" "the bind lands in the primary clone's sessions"
+not_exists "$FWT/.local/sessions" "the worktree gets no sessions folder of its own"
+check "ws run works from a framework worktree" wtws run otherp "run from a worktree"
+WT_RUN="$(ls "$WS/context/runs/otherp" 2>/dev/null | grep -- '-run-from-a-worktree$' | head -1)"
+[ -n "$WT_RUN" ] && ok "the run lands in the primary clone's context" \
+  || bad "the run lands in the primary clone's context" "$(ls "$WS/context/runs/otherp" 2>&1)"
+not_exists "$FWT/context" "the worktree gets no context folder of its own"
+contains "$WS/.local/sessions/wtstate/runs" "otherp/$WT_RUN" "the session records the run it made"
+check "ws checkpoint works from a framework worktree" wtws checkpoint otherp -m "worktree checkpoint"
+git -C "$WS/context" show --name-only --format= HEAD | grep -q "runs/otherp/$WT_RUN/" \
+  && ok "the checkpoint commits the worktree session's run" \
+  || bad "the checkpoint commits the worktree session's run" "$(git -C "$WS/context" show --stat --format= HEAD)"
+
 section "checkpoint commits only this agent's context work"
 (cd "$WS" && WS_AGENT=otheragent ./.agents/bin/ws run otherp "someone elses run" >/dev/null 2>&1)
 ws run otherp "my own run" >/dev/null 2>&1
