@@ -3030,6 +3030,11 @@ cmd_usage() {
   local pyfile; pyfile="$(mktemp)"
   cat > "$pyfile" <<'PYEOF'
 import sys, json
+from datetime import datetime
+
+# A session open longer than this has usually been resumed across a break or reused for
+# several tasks; each later request re-reads its whole context (docs/token-hygiene.md).
+LONG_SESSION_HOURS = 8
 
 month = sys.argv[1]
 projects = set(filter(None, sys.argv[2].split(',')))
@@ -3046,6 +3051,15 @@ unavailable = total_only = fallback_tokens = duplicates = 0
 
 def token_count(value):
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+def span_hours(rec):
+    try:
+        start = datetime.fromisoformat(str(rec.get("start")).replace("Z", "+00:00"))
+        end = datetime.fromisoformat(str(rec.get("end")).replace("Z", "+00:00"))
+        hours = (end - start).total_seconds() / 3600
+    except (ValueError, TypeError):
+        return None
+    return hours if hours >= 0 else None
 
 for line in sys.stdin:
     line = line.strip()
@@ -3117,6 +3131,7 @@ for line in sys.stdin:
         "cacheRead": tok.get("cacheRead") or 0,
         "input": tok.get("input") or 0,
         "output": tok.get("output") or 0,
+        "span": span_hours(rec),
     })
 
 def hit_pct(cache_read, input_, cache_write):
@@ -3148,9 +3163,19 @@ else:
     if heavy and heavy[0]["cacheRead"] > 0:
         print()
         print("heaviest records (by cache read):")
-        print(f"  {'ID':<14} {'TOOL':<12} {'DAY':<12} {'INPUT':>10} {'CACHE-READ':>12} {'OUTPUT':>10}")
+        print(f"  {'ID':<14} {'TOOL':<12} {'DAY':<12} {'INPUT':>10} {'CACHE-READ':>12} {'OUTPUT':>10} {'SPAN':>7}")
         for r in heavy:
-            print(f"  {r['id']:<14} {r['tool']:<12} {r['day']:<12} {r['input']:>10} {r['cacheRead']:>12} {r['output']:>10}")
+            span = "-" if r["span"] is None else f"{r['span']:.1f}h"
+            print(f"  {r['id']:<14} {r['tool']:<12} {r['day']:<12} {r['input']:>10} {r['cacheRead']:>12} {r['output']:>10} {span:>7}")
+
+    spans = [r for r in records if r["span"] is not None]
+    long_runs = [r for r in spans if r["span"] > LONG_SESSION_HOURS]
+    if long_runs:
+        worst = max(long_runs, key=lambda r: r["span"])
+        print()
+        print(f"long sessions: {len(long_runs)} of {len(spans)} records spanned over {LONG_SESSION_HOURS}h"
+              f" (longest {worst['span']:.1f}h, {worst['tool']}) - one task per session,"
+              " see docs/token-hygiene.md")
 print(f"Coverage: detailed={total['sessions']} unavailable={unavailable} total-only={total_only} duplicates={duplicates}")
 if total_only:
     print(f"Total-only tokens (breakdown unknown): {fallback_tokens}")
