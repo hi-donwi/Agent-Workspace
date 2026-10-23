@@ -60,7 +60,9 @@ cover the other.
    memory file over 32 KiB and the whole pack over 128 KiB — `ws doctor` warns once a
    project's `active.md`/`log.md` passes 16 KiB and fails once one is actually over the
    limit, naming this command as the fix. It only touches closed/done/dropped/merged/
-   abandoned/superseded rows; an `active.md` that is large because of genuinely open,
+   abandoned/superseded rows, including annotations separated by ` - `, ` – `, ` — `,
+   or `: ` (for example, `done - delivered`). Ambiguous states such as `done pending review`
+   remain open. An `active.md` that is large because of genuinely open,
    in-progress work needs a person to curate it, not this command.
 3. **`ws compact exec -- <cmd>`** — runs a command and condenses its output (by line
    count and, per line, by character count) before printing it, while saving the command's
@@ -79,13 +81,17 @@ cover the other.
 ## Watch it
 
 ```bash
-ws usage                                   # sessions, input/output, cache hit % per day and per tool
-ws usage --month 2026-09 --project <key>   # per project or client; also lists the heaviest sessions
+ws usage                                   # records, measured input/output, cache hit %, and coverage
+ws usage --month 2026-09 --project <key>   # per project or client; also lists the heaviest records
 ws doctor                                  # shared session ids, abandoned clocks, worktree noise, memory nearing the pack limit
 ws agent recover                           # close clocks left open by dead sessions
 ```
 
-`ws usage` prints a per-tool cache-hit rate and the heaviest sessions by cache read, not
-just totals — a cache-hit rate well under ~50% for one tool, or a handful of sessions
-holding most of a month's cache reads, usually means one of the cache killers above hit
-that tool or that session, not a workload that genuinely re-reads that much.
+`ws usage` separates detailed usage from unavailable or total-only records and reports
+exact duplicate records it suppressed. Check coverage before comparing cache rates:
+unknown cache usage must not be interpreted as a measured cache miss. The heaviest
+records are ranked by cache reads, which can indicate successful reuse rather than waste.
+Compare similar workloads; there is no universal cache-hit threshold that proves a problem.
+See [hours.md](hours.md#ws-usage--a-third-optional-read-only-axis) for attribution and
+snapshot-accounting limits. Reliable multi-agent cost review also needs request identity,
+parent/child ancestry, and provider-specific token semantics from the collector.
