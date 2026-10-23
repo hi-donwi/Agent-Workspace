@@ -4,11 +4,53 @@ Agent input tokens dwarf output tokens (a 160:1 ratio is normal for agentic work
 every turn re-sends the whole context: instructions, history, and file reads. Cost is
 decided less by any single file than by **what re-sends** and **whether the cache hits**.
 
+## Session length is the biggest lever
+
+Each request re-reads the whole context, so a session's cost is roughly *context size ×
+number of requests*, and both grow the longer one session is kept. One workspace measured
+45 sessions of a 1M-window model: the first request carried ~45K tokens (the instruction
+payload below was ~1.5% of an average request), but the **mean request carried ~385K**,
+because sessions ran until the window was nearly full before the tool compacted them.
+Requests above 400K produced 69% of all cache reads. Replaying those sessions with a
+300K auto-compact window roughly halved their input-side cost, compaction overhead included.
+
+Two habits caused most of it, and both had grown recently: one session reused for several
+tasks, and sessions **resumed after a break**. A prompt cache lasts minutes to an hour; the
+first request after it expires re-writes the whole context at the cache-write price
+(2× input on a 1-hour cache), then every later request re-reads it. In that workspace 57% of
+all cache-write tokens were such full rewrites.
+
+So, for every agent (`AGENTS.md` §6, rule 6):
+
+- **One task, one session.** Finish, `ws checkpoint`, and start fresh; the run's
+  `handoff.md` is the continuity, not the transcript.
+- **Do not resume a session idle for over an hour**; start a new one from the handoff.
+- **Fewer, larger tool calls.** Each tool call is one more full-context request: read
+  several files in one call, and hand broad searches to a subagent where the tool has one,
+  so only its conclusion enters the main context.
+- **Compact earlier** where the tool allows it — see the next section.
+
+## Per-tool settings
+
+User-level settings, not tracked here. Each was checked against the version noted.
+
+| Tool | Setting (file) | Value | Notes |
+|---|---|---|---|
+| Claude Code | `env.CLAUDE_CODE_AUTO_COMPACT_WINDOW` (`~/.claude/settings.json`) | `300000` | Compacts at 300K instead of near a 1M window. Range 100000–1000000. |
+| Claude Code | `effortLevel`, `modelSettings.<model>.effortLevel` | `high` | Raise per hard task with `/effort`; thinking is output, the dearest token. |
+| Codex (0.155) | `model_auto_compact_token_limit` (`~/.codex/config.toml`) | `250000` | Below every catalogue model's window (272K–500K), so it applies to all. |
+| Gemini CLI (0.40) | `model.compressionThreshold` (`~/.gemini/settings.json`) | `0.3` | Fraction of the window; default `0.5`. |
+| opencode (1.19) | `compaction.prune` (`~/.config/opencode/opencode.jsonc`) | `true` | Drops old tool outputs. Its compact threshold is per model (`limit.input − reserved`), so there is no absolute window to set. |
+| Kilo, Antigravity, Cursor, Copilot, Codebuff | — | — | No equivalent setting found; `AGENTS.md` §6 rule 6 is what reaches them. |
+
+`ws usage` lists each heavy record's start-to-end span and warns when sessions ran longer
+than 8 hours, so the habits above can be checked rather than assumed.
+
 ## The instruction payload (what every tool loads whole)
 
 | Payload | Size | Where it loads |
 |---|---|---|
-| `AGENTS.md` | ~13 KB | Every tool, every turn — keep it under 20 KB |
+| `AGENTS.md` | ~13 KB | Every tool, every turn — keep it under 13 KB (13,312 bytes) |
 | Hard-rules copies | 4 × ~1.8 KB | `GEMINI.md`, Copilot, Cursor, `.agents/rules/` (generated from one block) |
 | Skill `description:` frontmatter | ~0.6 KB × 65 | Tool skill pickers; `index.json` (~29 KB) only when a tool reads it |
 | Product repo `AGENTS.md` | project-specific | Only while working in that product |
@@ -82,7 +124,7 @@ cover the other.
 
 ```bash
 ws usage                                   # records, measured input/output, cache hit %, and coverage
-ws usage --month 2026-09 --project <key>   # per project or client; also lists the heaviest records
+ws usage --month 2026-09 --project <key>   # per project or client; heaviest records with their span, long-session warning
 ws doctor                                  # shared session ids, abandoned clocks, worktree noise, memory nearing the pack limit
 ws agent recover                           # close clocks left open by dead sessions
 ```
