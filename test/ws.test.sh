@@ -2186,10 +2186,11 @@ for f in AGENTS.md GEMINI.md .github/copilot-instructions.md .cursor/rules/00-wo
 done
 # Antigravity silently discards an .agents/rules file without a trigger.
 contains "$SRC/.agents/rules/00-hard-rules.md" "trigger: always_on" "the rules file is always on for Antigravity"
-# Antigravity truncates a rule file at 24 KB; stay well under it.
+# Antigravity truncates a rule file at 24 KB, and every tool re-sends the file on every
+# request, so hold it to the 13 KB its own header promises.
 SIZE="$(wc -c < "$SRC/AGENTS.md" | tr -d ' ')"
-[ "$SIZE" -lt 20000 ] && ok "AGENTS.md fits every tool's rule budget ($SIZE bytes)" \
-  || bad "AGENTS.md fits every tool's rule budget" "$SIZE bytes"
+[ "$SIZE" -le 13312 ] && ok "AGENTS.md stays within its 13 KB budget ($SIZE bytes)" \
+  || bad "AGENTS.md stays within its 13 KB budget" "$SIZE bytes"
 printf "$ALLOW" > "$WS/context/public-identifiers"
 check "doctor passes with the hard rules in sync" ws doctor --ci
 sed -i.bak 's/This framework repository is public/This framework repository is private/' "$WS/AGENTS.md"

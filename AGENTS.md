@@ -38,16 +38,15 @@ The full contract is `AGENTS.md`. Where it and this list differ, this list wins.
 <!-- hard-rules:end -->
 
 If a shell reports `ws: command not found`, run `.agents/bin/ws install` from the workspace
-root and retry. The installer creates a user-level, cwd-resolving launcher; it does not depend
-on an interactive shell profile. Until its bin directory is on the agent's `PATH`, invoke
-`.agents/bin/ws` directly.
+root and retry ([docs/onboarding.md](docs/onboarding.md)). Until its bin directory is on the
+agent's `PATH`, invoke `.agents/bin/ws` directly.
 
 ---
 
 ## 1. Three repositories, one directory
 
-A working checkout is **three independent git repositories** stacked in one folder; which
-repo owns a file is decided by who owns it, and that is not negotiable.
+A working checkout is **three independent git repositories** stacked in one folder; who
+owns a file decides which repo holds it, and that is not negotiable.
 
 | # | Repo | Owner | Contains | Who may read it |
 |---|---|---|---|---|
@@ -55,12 +54,9 @@ repo owns a file is decided by who owns it, and that is not negotiable.
 | 2 | `context/` | One organisation | What we build, for whom, where it stands | That organisation |
 | 3 | `projects/<group>/<…>/<repo>/` | Usually the client | The code | Whoever the client allows |
 
-*Nothing from 2 or 3 may enter 1; nothing from 1 or 2 may enter 3.* The framework **is
-published**: no client name, project key, memory, product document, or registry row
-belongs in it. `workspace.conf` is the one untracked file that carries the organisation's
-identity. Product repos are mapped by `context/registry.tsv` (key → remote → folder),
-never submodules. Reusing the workspace for another team: clone the framework, `ws init`,
-`ws context init`.
+*Nothing from 2 or 3 may enter 1; nothing from 1 or 2 may enter 3.* `workspace.conf` is
+the one untracked file that carries the organisation's identity. Product repos are
+mapped by `context/registry.tsv` (key → remote → folder), never submodules.
 
 Directory map and detail: [docs/workspace-layout.md](docs/workspace-layout.md) ·
 [ADR-0001](docs/adr/0001-nested-independent-project-repos.md) ·
@@ -70,7 +66,7 @@ Directory map and detail: [docs/workspace-layout.md](docs/workspace-layout.md) �
 
 A project has a **kind** (`ws kind`): `code` (default), `research`, `learning`, `mission`,
 or `ops`. Only `code` needs a product repository; the others keep their records in
-`context/` and register with `ws new <key> --client <c> --kind <kind>` (no folder). The
+`context/` and register with `ws new … --kind <kind>` (no folder). The
 kind decides the done bar (`.agents/standards/core/kinds/<kind>.md` instead of §10) and the
 run templates. Detail: [docs/project-kinds.md](docs/project-kinds.md) ·
 [ADR-0025](docs/adr/0025-project-kinds.md).
@@ -80,9 +76,7 @@ run templates. Detail: [docs/project-kinds.md](docs/project-kinds.md) ·
 Every repository under `projects/` is an **independent git repository** with its own
 remote, ignored via `/projects/*`. Not a submodule, and it must not become one.
 
-- The local folder **mirrors the remote's full path**, top-level group included. A
-  monorepo may be registered as two keys naming the same remote; the inner key has no
-  clone, pointer, or hook of its own.
+- The local folder **mirrors the remote's full path**, top-level group included.
 - **Open your editor at the workspace root**, not at `projects/<x>`: rules are discovered
   by walking up the tree. `.ignore` (`!projects/*/`) keeps product code searchable while
   git still ignores it — never negate `/projects/*` in `.gitignore`.
@@ -92,7 +86,6 @@ remote, ignored via `/projects/*`. Not a submodule, and it must not become one.
 - **Never run `git clean -ffxd` at the root**, and push product work the same day: `-ff`
   deletes nested product repos, `.git` and unpushed commits included.
 
-`ws bootstrap` · `ws ide` · `ws doctor` · `ws chat`.
 Detail: [docs/workspace-layout.md](docs/workspace-layout.md).
 
 ## 3. `context/` — the organisation's own repo
@@ -132,8 +125,7 @@ search surface the last client you worked on. That is a leak, not a hint.
    pack includes it). Never grep `context/` or `projects/` from the workspace root.
 5. Route with `ws route --project <key> "..."`; bare `ws route` searches every client.
 6. Write continuity to `context/memory/projects/<key>/` and the run — never to
-   editor/tool workspace memory (Grok `topics/`, Cursor memories, …): those stores are
-   workspace-scoped and leak into the next client's session.
+   editor/tool workspace memory, which leaks into the next client's session.
 
 Then load, most durable to most task-specific, and stop when you have enough:
 
@@ -146,8 +138,7 @@ Then load, most durable to most task-specific, and stop when you have enough:
 | 5 | `AGENTS.md` inside the product repo | Project specifics (modules, ports, env) |
 | 6 | Spec / PRD / OpenAPI contract | Source of truth for feature behaviour |
 
-Do not open another project's memory because it is adjacent on disk. Attention isolation
-vs access control: [ADR-0011](docs/adr/0011-attention-isolation-is-not-access-isolation.md).
+Attention isolation vs access control: [ADR-0011](docs/adr/0011-attention-isolation-is-not-access-isolation.md).
 
 ## 5. Skills and standards
 
@@ -156,7 +147,7 @@ framework's skills and the organisation's domain skills; if one matches, read it
 `SKILL.md` first and follow it. Open a skill's `references/` only when `SKILL.md` is not
 enough. `.agents/skills/` is **generated** from `.agents/skills.manifest`
 (`ws skills sync`, pinned in `skills.lock`) — never edit or commit the materialised
-copies; `ws skills available`, `ws skills add <name>`.
+copies.
 
 Binding standards live under `.agents/standards/` in **packs** enabled by
 `workspace.conf` (`core` is always on; `java`, `web` add their stack). They hold unless
@@ -185,6 +176,11 @@ then `ws checkpoint`.
 5. **One agent, one checkout:** parallel agents isolate with `ws agent start <key>`
    (worktree under `.local/worktrees/`, clock, bind) and a unique `WS_SESSION_ID`. The
    framework's working tree has one writer at a time.
+6. **Short sessions.** Each request re-sends the whole conversation. One task per
+   session: when it is done, checkpoint and suggest a fresh session instead of the next
+   task; do not resume one idle for over an hour (its cache is gone and the whole context
+   is billed again). Read several files per call; hand broad searches to a subagent if
+   the tool has one. Per-tool settings: [docs/token-hygiene.md](docs/token-hygiene.md).
 
 Concurrency table and full procedure: [docs/memory-and-runs.md](docs/memory-and-runs.md).
 
@@ -192,12 +188,10 @@ Concurrency table and full procedure: [docs/memory-and-runs.md](docs/memory-and-
 
 Record both; **never add them together**. Human hours are payroll and invoice hours
 (`ws clock in/out`); agent hours are machine time, often several at once
-(`ws agent in/out`, automated for Claude Code by `ws hooks install`). Records land in
-`context/works/{human,agent}/<key>/<YYYY-MM>.jsonl`; overlapping intervals merge within
-each column. An agent clock left open past `max_agent_session_hours` is treated as
-abandoned and closed with `ws agent recover`, not billed. Rollups and `ws usage`:
-[docs/hours.md](docs/hours.md). Why agent input tokens grow and how to keep them down:
-[docs/token-hygiene.md](docs/token-hygiene.md).
+(`ws agent in/out`, automated for Claude Code by `ws hooks install`). An agent clock left
+open past `max_agent_session_hours` is treated as abandoned and closed with
+`ws agent recover`, not billed. Records, rollups, and `ws usage`:
+[docs/hours.md](docs/hours.md).
 
 ## 8. Security — non-negotiable
 
@@ -207,13 +201,10 @@ abandoned and closed with `ws agent recover`, not billed. Rollups and `ws usage`
 - Client data (customer records, contract values, prices) must not reach third-party
   services, including as examples inside a prompt. Anonymise first.
 - **No tracked file here and no commit message may name a client, a group, a project
-  key, or the organisation.** The **framework guard** (`ws guard install`, run by
-  `ws init` and `ws bootstrap`) refuses them at commit, commit-message, and push time;
-  `ws doctor` scans tracked files against the same list, derived from `registry.tsv`
-  and `context/clients/*/client.md` (key, client, group, folder, remote owner, legal/
-  brand name). A name that is public anyway (your own open repos, their account) is
-  declared in `context/public-identifiers`. CI runs neither check: both need the
-  context repo, which is never CI's to have.
+  key, or the organisation.** The **framework guard** (`ws guard install`) refuses them
+  at commit and push time and `ws doctor` scans tracked files; a name that is public
+  anyway goes in `context/public-identifiers`. Detail:
+  [docs/context-repository.md](docs/context-repository.md#the-framework-guard).
 - If a secret is committed by accident: **rotate it first**, then clean history.
   Deleting the file is not enough. An unpushed commit is dropped (`git reset --soft`),
   never "fixed" by a follow-up commit that leaves it in history.
@@ -233,5 +224,4 @@ pack's own list (e.g. `.agents/standards/java/definition-of-done.md`): the proje
 verification command is green, logic has unit tests and endpoints integration tests, no
 secrets or debug leftovers or ticketless `TODO`s, the run's `handoff.md` is updated, and
 commits follow Conventional Commits. Architecture review is part of done, not a separate
-ceremony: `*Resource → *Service → *Repository`, `*Client` for external systems, record
-DTOs, pure mappers — the rules live in `.agents/standards/java/project-layout.md`.
+ceremony: each pack's layout rules apply (e.g. `.agents/standards/java/project-layout.md`).
