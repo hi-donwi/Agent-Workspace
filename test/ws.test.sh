@@ -1755,6 +1755,34 @@ printf '%s' "$OUT" | grep -q 'hvy-big' \
   && bad "another project's heavy session leaked into this scope" "$OUT" \
   || ok "the heaviest-sessions list is scoped like everything else"
 
+section "ws usage: sessions kept open too long"
+# A session resumed across days re-reads its whole context on every request; its
+# start-to-end span is what the collector can tell us about that.
+SM=2099-11
+cat > "$USRC/ops/usage/$SM.jsonl" <<EOF
+{"id":"short-run","tool":"codex","projectRoot":"$PROD","start":"2099-11-02T01:00:00Z","end":"2099-11-02T02:30:00.250Z","tokens":{"input":10,"output":1,"cacheRead":50,"cacheWrite":0}}
+{"id":"long-run","tool":"opencode","projectRoot":"$PROD","start":"2099-11-01T00:00:00Z","end":"2099-11-03T12:00:00Z","tokens":{"input":10,"output":1,"cacheRead":90,"cacheWrite":0}}
+{"id":"no-start","tool":"codex","projectRoot":"$PROD","end":"2099-11-04T00:00:00Z","tokens":{"input":10,"output":1,"cacheRead":20,"cacheWrite":0}}
+EOF
+OUT="$(ws usage --month "$SM" --project api 2>&1)"
+printf '%s' "$OUT" | grep -qE 'long-run +opencode +2099-11-03 .* 60\.0h$' \
+  && ok "heaviest records show each session's start-to-end span" \
+  || bad "heaviest records show each session's start-to-end span" "$OUT"
+printf '%s' "$OUT" | grep -qE 'no-start +codex .* -$' \
+  && ok "a record without a start shows no span instead of failing" \
+  || bad "a record without a start shows no span instead of failing" "$OUT"
+printf '%s' "$OUT" | grep -q 'long sessions: 1 of 2 records spanned over 8h (longest 60.0h, opencode)' \
+  && ok "ws usage warns about sessions kept open past 8 hours" \
+  || bad "ws usage warns about sessions kept open past 8 hours" "$OUT"
+cat > "$USRC/ops/usage/$SM.jsonl" <<EOF
+{"id":"short-run","tool":"codex","projectRoot":"$PROD","start":"2099-11-02T01:00:00Z","end":"2099-11-02T02:30:00Z","tokens":{"input":10,"output":1,"cacheRead":50,"cacheWrite":0}}
+EOF
+OUT="$(ws usage --month "$SM" --project api 2>&1)"
+printf '%s' "$OUT" | grep -q 'long sessions' \
+  && bad "short sessions raise no long-session warning" "$OUT" \
+  || ok "short sessions raise no long-session warning"
+rm -f "$USRC/ops/usage/$SM.jsonl"
+
 section "ws usage: explicit scopes and incomplete coverage"
 # Separate month keeps these fixtures independent of earlier usage assertions.
 UM=2099-12
