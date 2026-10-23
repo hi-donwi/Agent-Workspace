@@ -237,6 +237,17 @@ Product repositories and the public framework never inherit this setting.
 this repository: signed PDFs, database dumps, screenshots with real records. It is
 git-ignored and never pushed anywhere.
 
+## The framework guard
+
+No tracked framework file and no commit message may name a client, a group, a project
+key, or the organisation. The **framework guard** (`ws guard install`, run by `ws init`
+and `ws bootstrap`) refuses them at commit, commit-message, and push time; `ws doctor`
+scans tracked files against the same list, derived from `registry.tsv` and
+`context/clients/*/client.md` (key, client, group, folder, remote owner, legal/brand
+name). A name that is public anyway (your own open repos, their account) is declared in
+`context/public-identifiers`. CI runs neither check: both need the context repo, which
+is never CI's to have.
+
 ## Concurrency
 
 Several people and agents write here at once. `context/.gitattributes` — tracked **inside
