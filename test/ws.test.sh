@@ -851,6 +851,51 @@ check_fails "ws agent clean refuses a non-numeric idle window" \
   ws agent clean --idle-hours soon
 WS_SESSION_ID=wt3 ws agent stop >/dev/null 2>&1
 
+# Agents rarely run `ws agent stop`, so their locks used to keep worktrees "active"
+# forever. A lock is stale once its worktree saw no git or file activity for
+# max_agent_session_hours and no process works inside it; an orphan lock names a
+# worktree that is gone.
+WS_SESSION_ID=wt5 ws agent start api "abandoned" >/dev/null 2>&1
+WS_SESSION_ID=wt6 ws agent start api "held by a process" >/dev/null 2>&1
+WS_SESSION_ID=wt7 ws agent start api "abandoned with work" >/dev/null 2>&1
+printf 'draft\n' > "$WT/wt7/notes.txt"
+CGDIR="$(git -C "$WS/context" rev-parse --path-format=absolute --git-common-dir)"
+exists "$CGDIR/ws-agent-sessions/wt5.lock" "agent start also locks the context repo"
+for s in wt5 wt6 wt7; do
+  wgdir="$(git -C "$WT/$s" rev-parse --path-format=absolute --git-dir)"
+  touch -t 202001010000 "$wgdir/index" "$wgdir/HEAD" "$wgdir/logs/HEAD" \
+    "$gdir/ws-agent-sessions/$s.lock"
+done
+touch -t 202001010000 "$WT/wt7/notes.txt"
+printf 'session=gone\nproject=api\nworktree=%s\n' "$WT/gone" > "$gdir/ws-agent-sessions/gone.lock"
+(cd "$WT/wt6" && exec sleep 60) &
+HOLD=$!
+CLEAN_OUT="$(ws agent clean --idle-hours 0 2>&1)"
+printf '%s' "$CLEAN_OUT" | grep -q "clean .local/worktrees/api/wt5 (.*stale session lock)" \
+  && ok "ws agent clean lists a worktree whose session lock is stale" \
+  || bad "ws agent clean lists a worktree whose session lock is stale" "$CLEAN_OUT"
+printf '%s' "$CLEAN_OUT" | grep -q "keep  .local/worktrees/api/wt6 (active session)" \
+  && ok "ws agent clean keeps an old lock while a process works in its worktree" \
+  || bad "ws agent clean keeps an old lock while a process works in its worktree" "$CLEAN_OUT"
+printf '%s' "$CLEAN_OUT" | grep -q "keep  .local/worktrees/api/wt7 (uncommitted or untracked files; stale session lock)" \
+  && ok "ws agent clean keeps uncommitted work behind a stale lock" \
+  || bad "ws agent clean keeps uncommitted work behind a stale lock" "$CLEAN_OUT"
+printf '%s' "$CLEAN_OUT" | grep -q "orphan lock gone" \
+  && ok "ws agent clean lists a lock whose worktree is gone" \
+  || bad "ws agent clean lists a lock whose worktree is gone" "$CLEAN_OUT"
+exists "$gdir/ws-agent-sessions/gone.lock" "ws agent clean without --apply drops no lock"
+check "ws agent clean --apply clears stale and orphan locks" \
+  ws agent clean --apply --idle-hours 0
+not_exists "$WT/wt5" "the worktree behind a stale lock is removed"
+not_exists "$gdir/ws-agent-sessions/wt5.lock" "its stale lock is dropped"
+not_exists "$CGDIR/ws-agent-sessions/wt5.lock" "and so is its context lock"
+exists "$WT/wt7/notes.txt" "uncommitted work behind a stale lock is kept"
+not_exists "$gdir/ws-agent-sessions/wt7.lock" "while the stale lock itself is dropped"
+not_exists "$gdir/ws-agent-sessions/gone.lock" "an orphan lock is dropped"
+exists "$gdir/ws-agent-sessions/wt6.lock" "a lock whose worktree a process works in is kept"
+kill "$HOLD" 2>/dev/null; wait "$HOLD" 2>/dev/null || true
+for s in wt5 wt6 wt7; do WS_SESSION_ID=$s ws agent stop >/dev/null 2>&1; done
+
 section "session bind (attention isolation)"
 # Git worktrees isolate HEAD. Session bind isolates what the agent is allowed
 # to load: one project pack per WS_SESSION_ID, never a sibling client.

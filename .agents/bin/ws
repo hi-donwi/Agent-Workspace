@@ -2570,11 +2570,79 @@ newest_mtime() {
   printf '%s' "$newest"
 }
 
+# Newest mtime among a worktree's modified and untracked files: an agent can edit for
+# hours without touching the index.
+changed_mtime() {
+  local wt="$1" f files=()
+  while IFS= read -r -d '' f; do files+=("$wt/$f"); done \
+    < <(git -C "$wt" ls-files -z -m -o --exclude-standard 2>/dev/null)
+  newest_mtime ${files[@]+"${files[@]}"}
+}
+
+# Working directory of every running process, one real path per line. Empty output
+# means the processes could not be seen, and callers then treat every worktree as in use.
+process_cwds() {
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -w -d cwd -Fn 2>/dev/null | sed -n 's/^n//p'
+  elif [ -d /proc/self ]; then
+    local p
+    for p in /proc/[0-9]*/cwd; do readlink "$p" 2>/dev/null; done
+  fi
+  return 0
+}
+
+# worktree_in_use <real path> <cwd list>
+worktree_in_use() {
+  [ -n "$2" ] || return 0
+  printf '%s\n' "$2" | awk -v p="$1" '$0 == p || index($0, p "/") == 1 { f = 1 } END { exit !f }'
+}
+
+# Every ws-agent-sessions directory under a registered repository or the framework clone.
+agent_lock_dirs() {
+  local folder dst gdir
+  {
+    while IFS=$'\t' read -r _ _ _ folder _ _ _ _; do
+      [ -n "$folder" ] && [ "$folder" != "-" ] || continue
+      dst="$(repo_path "$folder")"
+      is_repo "$dst" || continue
+      gdir="$(agent_git_dir "$dst")" || continue
+      if [ -d "$gdir/ws-agent-sessions" ]; then printf '%s\n' "$gdir/ws-agent-sessions"; fi
+    done < <(reg_rows)
+    if is_repo "$ROOT"; then
+      gdir="$(agent_git_dir "$ROOT")" || gdir=""
+      if [ -n "$gdir" ] && [ -d "$gdir/ws-agent-sessions" ]; then
+        printf '%s\n' "$gdir/ws-agent-sessions"
+      fi
+    fi
+    :
+  } | sort -u
+  return 0
+}
+
+# drop_session_lock <lock dir> <session> <every lock dir>: the context repo's lock for
+# the session goes too, once no other repository still holds one.
+drop_session_lock() {
+  local dir
+  rm -f "$1/$2.lock"
+  while IFS= read -r dir; do
+    [ -n "$dir" ] && [ -f "$dir/$2.lock" ] && return 0
+  done <<< "$3"
+  if is_repo "$CONTEXT_DIR"; then
+    rm -f "$(agent_git_dir "$CONTEXT_DIR")/ws-agent-sessions/$2.lock"
+  fi
+  return 0
+}
+
 # Stopped sessions leave their worktrees under .local/worktrees/, each with its own
 # dependencies and build output; a week of parallel agents fills a laptop disk. Only a
-# worktree git itself calls clean is removed: no session lock, idle for --idle-hours,
-# nothing modified or untracked, and HEAD reachable from a branch. Ignored files go
-# with it, exactly as `git worktree remove` treats them.
+# worktree git itself calls clean is removed: no live session lock, idle for
+# --idle-hours, nothing modified or untracked, and HEAD reachable from a branch. Ignored
+# files go with it, exactly as `git worktree remove` treats them.
+#
+# Agents rarely run `ws agent stop`, so a lock alone does not prove a live session. A
+# lock is stale once its worktree saw no git or file activity for
+# max_agent_session_hours and no process has its working directory inside; --apply
+# drops it, and drops orphan locks whose worktree is gone.
 agent_clean() {
   local apply=0 idle; idle="$(conf_get worktree_idle_hours 24)"
   while [ $# -gt 0 ]; do
@@ -2588,9 +2656,12 @@ agent_clean() {
   case "$idle" in ''|*[!0-9]*) die "--idle-hours takes a whole number of hours" ;; esac
 
   local base="$WS_HOME/.local/worktrees"
-  [ -d "$base" ] || { c_dim "no worktrees under .local/worktrees/"; return 0; }
-  local now wt rel cdir gdir primary last age state kb total=0 count=0
+  local lockdirs; lockdirs="$(agent_lock_dirs)"
+  local cwds="" now wt rel cdir gdir lock note primary last changed age state kb total=0 count=0
+  local dir f lockwt orphans=0
   now="$(date +%s)"
+  # One process scan for the whole run, and only when some lock needs it.
+  if [ -n "$lockdirs" ]; then cwds="$(process_cwds)"; fi
   for wt in "$base"/*/*/; do
     wt="${wt%/}"
     [ -f "$wt/.git" ] || continue
@@ -2598,20 +2669,34 @@ agent_clean() {
     cdir="$(agent_git_dir "$wt")" || cdir=""
     gdir="$(git -C "$wt" rev-parse --path-format=absolute --git-dir 2>/dev/null)" || gdir=""
     if [ -z "$cdir" ] || [ -z "$gdir" ]; then c_ylw "  ! $rel is not a readable worktree"; continue; fi
-    last="$(newest_mtime "$gdir/index" "$gdir/HEAD" "$gdir/logs/HEAD")"
+    lock="$cdir/ws-agent-sessions/$(basename "$wt").lock"
+    note=""
+    last="$(newest_mtime "$gdir/index" "$gdir/HEAD" "$gdir/logs/HEAD" "$lock")"
+    if [ -f "$lock" ]; then
+      changed="$(changed_mtime "$wt")"
+      if [ "$changed" -gt "$last" ]; then last="$changed"; fi
+    fi
     age=$(( (now - last) / 3600 ))
-    if [ -f "$cdir/ws-agent-sessions/$(basename "$wt").lock" ]; then state="active session"
-    elif [ "$age" -lt "$idle" ]; then state="used ${age}h ago"
-    elif [ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]; then state="uncommitted or untracked files"
+    if [ -f "$lock" ]; then
+      if [ "$age" -lt "$MAX_AGENT_HOURS" ] || worktree_in_use "$(cd "$wt" && pwd -P)" "$cwds"; then
+        c_dim "  keep  $rel (active session)"; continue
+      fi
+      note="stale session lock"
+      if [ "$apply" = 1 ]; then drop_session_lock "$cdir/ws-agent-sessions" "$(basename "$wt")" "$lockdirs"; fi
+    fi
+    if [ "$age" -lt "$idle" ]; then state="used ${age}h ago"
+    # --no-optional-locks: a dry run must not refresh the index and look like activity.
+    elif [ -n "$(git --no-optional-locks -C "$wt" status --porcelain 2>/dev/null)" ]; then
+      state="uncommitted or untracked files"
     # Not `git branch --contains`: on a detached HEAD it lists "(HEAD detached ...)".
     elif [ -z "$(git -C "$wt" for-each-ref --count=1 --contains HEAD refs/heads refs/remotes 2>/dev/null)" ]; then
       state="HEAD is on no branch"
     else state=clean
     fi
-    if [ "$state" != clean ]; then c_dim "  keep  $rel ($state)"; continue; fi
+    if [ "$state" != clean ]; then c_dim "  keep  $rel ($state${note:+; $note})"; continue; fi
     kb="$(du -sk "$wt" 2>/dev/null | cut -f1)" || true; kb="${kb:-0}"
     if [ "$apply" = 0 ]; then
-      echo "  clean $rel ($((kb / 1024)) MB)"
+      echo "  clean $rel ($((kb / 1024)) MB${note:+, $note})"
     else
       primary="$(git -C "$wt" worktree list --porcelain | sed -n '1s/^worktree //p')" || primary=""
       if git -C "$primary" worktree remove "$wt" 2>/dev/null; then
@@ -2623,10 +2708,26 @@ agent_clean() {
     fi
     total=$((total + kb)); count=$((count + 1))
   done
+  # A lock whose worktree is gone keeps nothing alive; it only misleads ws doctor.
+  while IFS= read -r dir; do
+    [ -n "$dir" ] || continue
+    for f in "$dir"/*.lock; do
+      [ -f "$f" ] || continue
+      lockwt="$(sed -n 's/^worktree=//p' "$f")"
+      [ -n "$lockwt" ] && [ ! -e "$lockwt" ] || continue
+      orphans=$((orphans + 1))
+      if [ "$apply" = 1 ]; then
+        drop_session_lock "$dir" "$(basename "$f" .lock)" "$lockdirs"
+        c_dim "  dropped orphan lock $(basename "$f" .lock)"
+      else
+        echo "  orphan lock $(basename "$f" .lock) (worktree gone)"
+      fi
+    done
+  done <<< "$lockdirs"
   if [ "$apply" = 1 ]; then
-    c_grn "-> removed $count idle worktree(s), $((total / 1024)) MB"
-  elif [ "$count" -gt 0 ]; then
-    c_grn "-> $count idle clean worktree(s), $((total / 1024)) MB; remove with: ws agent clean --apply"
+    c_grn "-> removed $count idle worktree(s), $((total / 1024)) MB; dropped $orphans orphan lock(s)"
+  elif [ "$count" -gt 0 ] || [ "$orphans" -gt 0 ]; then
+    c_grn "-> $count idle clean worktree(s), $((total / 1024)) MB, $orphans orphan lock(s); remove with: ws agent clean --apply"
   else
     c_dim "no idle clean worktrees (idle window ${idle}h)"
   fi
@@ -4654,7 +4755,7 @@ ws — engineering workspace CLI
   ws agent stop [note]              clock-out and drop this session's lock
   ws agent activity <state>|off     what this session is doing, for the desk
   ws agent clean [--apply] [--idle-hours N]
-                                    list (or remove) idle, clean agent worktrees
+                                    list (or remove) idle, clean agent worktrees and stale locks
   ws hours [--month M] [--project k|--client c] [--rollup]   report both, side by side
   ws usage [--month M] [--project k|--client c]  token usage, from a separate optional tool
   ws chat [--dev] [--port N] [--no-brain]  the desk (Agent-Control) and its Agent-Brain gateway

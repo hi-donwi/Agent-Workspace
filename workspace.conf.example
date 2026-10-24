@@ -44,6 +44,7 @@ usage_source =
 # Disk hygiene on the machine running agents. `ws doctor` warns when the workspace
 # volume has less free space than min_free_disk_gb. `ws agent clean` treats a
 # stopped agent's worktree as idle once worktree_idle_hours have passed since its
-# last git activity.
+# last git activity. A session lock counts as stale after max_agent_session_hours
+# without activity, when no process works inside the worktree.
 min_free_disk_gb = 20
 worktree_idle_hours = 24
