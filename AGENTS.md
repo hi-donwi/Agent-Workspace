@@ -196,8 +196,8 @@ open past `max_agent_session_hours` is treated as abandoned and closed with
 ## 8. Security — non-negotiable
 
 - **Never** put credentials, tokens, private keys, or client data in `.agents/`,
-  `docs/`, or a commit message. Client documents, dumps, and screenshots go in
-  `.local/`, which is git-ignored and pushed nowhere.
+  `docs/`, or a commit message. Keep local artifacts in `.local/` using
+  [the domain layout](docs/local-artifacts.md).
 - Client data (customer records, contract values, prices) must not reach third-party
   services, including as examples inside a prompt. Anonymise first.
 - **No tracked file here and no commit message may name a client, a group, a project
