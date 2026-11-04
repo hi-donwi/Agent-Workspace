@@ -188,6 +188,12 @@ then `ws checkpoint`.
 
 Concurrency table and full procedure: [docs/memory-and-runs.md](docs/memory-and-runs.md).
 
+Keep local outputs grouped by purpose: project artifacts go under
+`.local/projects/<group>/<nested-path>/<repo>/<run-id>/<kind>/`, generic workspace
+artifacts under `.local/workspace/<domain>/<run-id>/<kind>/`, and disposable files under
+`.local/tmp/<domain>/<session-id>/`. Check references before moving existing files, and
+keep credentials out of `.local/`.
+
 ## 7. Two clocks — human hours and agent hours
 
 Record both; **never add them together**. Human hours are payroll and invoice hours
