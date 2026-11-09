@@ -28,6 +28,6 @@ Shared instructions for all agents live in AGENTS.md. Claude Code loads them via
 - **`.local/` is never a source for committed output.** It holds raw client material
   (proposal PDFs, data dumps, screenshots). Reading it for reference is fine; copying its
   contents into a tracked file is not.
-- **Write everything in English** — documentation, code, comments, commit messages. An
-  organisation may keep a domain glossary in another language; it lives in its context
-  repo (`context/skills/<domain>/SKILL.md`), never in the framework.
+- **Use English for engineering sources, canonical documents, and commit messages.**
+  Localized UI text and labeled, source-linked derived translations may use other languages.
+  A domain glossary belongs in its context repo, never in the framework.
