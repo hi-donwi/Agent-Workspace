@@ -32,7 +32,8 @@ description: "Hard rules for every agent in this workspace: public framework, co
 6. **Say who you are.** Every shell that runs `ws` exports `WS_AGENT=<your tool>` and
    `WS_SESSION_ID=<unique id>`; otherwise your work is logged as `dev` on a shared
    `default` session.
-7. **English** in every file and every commit message.
+7. **English** in engineering sources, canonical documents, and commit messages. Localized
+   UI text and clearly labeled, source-linked derived translations may use other languages.
 
 The full contract is `AGENTS.md`. Where it and this list differ, this list wins.
 <!-- hard-rules:end -->

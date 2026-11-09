@@ -1,14 +1,8 @@
 # AGENTS.md — Agent Workspace
 
-The working contract for **every AI agent** (Claude Code, Codex, Cursor, Copilot, Gemini
-CLI, Antigravity, opencode, Kilo, Codebuff, and any other) and **every developer** in the
-organisation named in `workspace.conf`. It is tool-neutral and the **single source of
-truth**; `CLAUDE.md`, `GEMINI.md`, `.cursor/rules/`, `.github/copilot-instructions.md`, and
-`.agents/rules/` only point here and repeat the hard rules below.
-
-This file is kept under 13 KB so every tool loads it whole. Detail and reasoning live in
-`docs/`; each section links to its page. Layout map and full command reference:
-[docs/workspace-layout.md](docs/workspace-layout.md).
+The tool-neutral contract for every agent and developer in `workspace.conf`. `AGENTS.md` is
+the source of truth; tool-specific entry files point here and repeat the hard rules below.
+Keep this file under 13 KB. Details and commands: [workspace layout](docs/workspace-layout.md).
 
 <!-- hard-rules:begin -->
 ## Hard rules - read these even if you read nothing else
@@ -32,7 +26,8 @@ This file is kept under 13 KB so every tool loads it whole. Detail and reasoning
 6. **Say who you are.** Every shell that runs `ws` exports `WS_AGENT=<your tool>` and
    `WS_SESSION_ID=<unique id>`; otherwise your work is logged as `dev` on a shared
    `default` session.
-7. **English** in every file and every commit message.
+7. **English** in engineering sources, canonical documents, and commit messages. Localized
+   UI text and clearly labeled, source-linked derived translations may use other languages.
 
 The full contract is `AGENTS.md`. Where it and this list differ, this list wins.
 <!-- hard-rules:end -->

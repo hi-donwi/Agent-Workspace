@@ -1,7 +1,7 @@
 # ADR-0004: English as the workspace language
 
 - **Date:** 2026-09-12
-- **Status:** Accepted
+- **Status:** Partially superseded by [ADR-0026](0026-source-linked-localization.md)
 - **Project:** workspace
 
 ## Context
