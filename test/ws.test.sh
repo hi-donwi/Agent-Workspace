@@ -1663,7 +1663,7 @@ section "ws atlas opens the context explorer locked to one project"
 FAKEATLAS="$TMP/fake-atlas"; mkdir -p "$FAKEATLAS/node_modules"
 printf '{"name":"fake-atlas","private":true,"scripts":{"start":"true"}}\n' > "$FAKEATLAS/package.json"
 ATLASBIN="$TMP/fake-npm-bin"; mkdir -p "$ATLASBIN"
-printf '#!/bin/sh\npwd -P > "$NPM_CWD"\nprintf "%%s\\n" "$@" > "$NPM_ARGS"\n' > "$ATLASBIN/npm"; chmod +x "$ATLASBIN/npm"
+printf '#!/bin/sh\npwd -P > "$NPM_CWD"\nprintf "%%s\\n" "$@" > "$NPM_ARGS"\nexit "${NPM_EXIT:-0}"\n' > "$ATLASBIN/npm"; chmod +x "$ATLASBIN/npm"
 atlas() { (cd "$WS" && NPM_CWD="$TMP/npm.cwd" NPM_ARGS="$TMP/npm.args" PATH="$ATLASBIN:$PATH" "$WS/.agents/bin/ws" atlas "$@" 2>&1); }
 OUT="$(atlas api)" && bad "ws atlas without an explorer refuses" "$OUT" || ok "ws atlas without an explorer refuses"
 printf '%s' "$OUT" | grep -q atlas_dir && ok "the refusal names the atlas_dir setting" || bad "the refusal names the atlas_dir setting" "$OUT"
@@ -1690,6 +1690,10 @@ check_fails "ws atlas refuses the framework key" atlas workspace
 check_fails "ws atlas refuses a project key together with --all" atlas api --all
 check_fails "ws atlas refuses a port that is not a number" atlas api --port web
 check_fails "ws atlas without a key or a bind refuses" atlas
+OUT="$(NPM_EXIT=3 atlas api)" && bad "ws atlas fails when the explorer fails" "$OUT" || ok "ws atlas fails when the explorer fails"
+printf '%s' "$OUT" | grep -q "exited with status 3" && ok "the failure names the explorer's exit status" \
+  || bad "the failure names the explorer's exit status" "$OUT"
+NPM_EXIT=130 check "stopping the explorer with Ctrl+C is not a failure" atlas api
 cp "$TMP/workspace.conf.atlas" "$WS/workspace.conf"; rm -rf "$WS/.local/explorer"
 
 section "log and route"
