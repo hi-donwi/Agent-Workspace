@@ -269,6 +269,21 @@ all, however long ago its `AGENTS.md` claimed otherwise), copy it from
 The per-file rules are tabulated in [`AGENTS.md`](../AGENTS.md) under *Working in
 parallel*.
 
+## Reading it in a browser
+
+`ws atlas <key>` serves the context read-only on `http://127.0.0.1:4317/`, locked to one
+project: that project's memory, runs, client notes (without other groups), its group, and
+its `context_repo` folder. Other clients and projects are refused by the server, not merely
+hidden, so the page is safe to keep open during that project's work. Without a key it uses
+this session's bind; `--port N` picks another port.
+
+The explorer is a separate checkout that `ws` does not vendor. Point `atlas_dir` in
+`workspace.conf` at it (relative to the workspace root, or absolute); `ws atlas` installs its
+dependencies on first use and runs `npm start -- <context> --project <key> --port <port>`
+there. `ws atlas --all` drops the lock and shows every client's context, which is for the
+operator alone. A plain folder, such as one product repository's documents, is opened with
+the explorer's own `npm start -- <folder>`; its demo app does not read your files.
+
 ## Starting over for another organisation
 
 Nothing in the framework names a company, so adopting it elsewhere is:

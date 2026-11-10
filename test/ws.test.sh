@@ -1657,6 +1657,41 @@ else
 fi
 rm -f "$WS/.local/agent/endpoints.json"
 
+section "ws atlas opens the context explorer locked to one project"
+# The explorer is a separate checkout. ws hands it the context folder and a project lock;
+# a fake npm records what it was asked to start and from where.
+FAKEATLAS="$TMP/fake-atlas"; mkdir -p "$FAKEATLAS/node_modules"
+printf '{"name":"fake-atlas","private":true,"scripts":{"start":"true"}}\n' > "$FAKEATLAS/package.json"
+ATLASBIN="$TMP/fake-npm-bin"; mkdir -p "$ATLASBIN"
+printf '#!/bin/sh\npwd -P > "$NPM_CWD"\nprintf "%%s\\n" "$@" > "$NPM_ARGS"\n' > "$ATLASBIN/npm"; chmod +x "$ATLASBIN/npm"
+atlas() { (cd "$WS" && NPM_CWD="$TMP/npm.cwd" NPM_ARGS="$TMP/npm.args" PATH="$ATLASBIN:$PATH" "$WS/.agents/bin/ws" atlas "$@" 2>&1); }
+OUT="$(atlas api)" && bad "ws atlas without an explorer refuses" "$OUT" || ok "ws atlas without an explorer refuses"
+printf '%s' "$OUT" | grep -q atlas_dir && ok "the refusal names the atlas_dir setting" || bad "the refusal names the atlas_dir setting" "$OUT"
+check "ws atlas starts the explorer named by WS_ATLAS_DIR" env WS_ATLAS_DIR="$FAKEATLAS" \
+  sh -c 'cd "$1" && NPM_CWD="$2/npm.cwd" NPM_ARGS="$2/npm.args" PATH="$3:$PATH" "$1/.agents/bin/ws" atlas api' _ "$WS" "$TMP" "$ATLASBIN"
+equals "$(cat "$TMP/npm.cwd")" "$(cd "$FAKEATLAS" && pwd -P)" "the explorer starts in its own checkout"
+equals "$(tr '\n' ' ' < "$TMP/npm.args")" "start --silent -- $(cd "$WS/context" && pwd -P) --port 4317 --project api " \
+  "it opens the context folder on port 4317, locked to the project"
+cp "$WS/workspace.conf" "$TMP/workspace.conf.atlas"
+mkdir -p "$WS/.local/explorer"; cp -R "$FAKEATLAS/." "$WS/.local/explorer/"
+printf 'atlas_dir = .local/explorer\n' >> "$WS/workspace.conf"
+rm -f "$TMP/npm.args"
+check "ws atlas reads a relative atlas_dir from workspace.conf" atlas --all --port 5005
+equals "$(cat "$TMP/npm.cwd")" "$(cd "$WS/.local/explorer" && pwd -P)" "atlas_dir resolves from the workspace root"
+equals "$(tr '\n' ' ' < "$TMP/npm.args")" "start --silent -- $(cd "$WS/context" && pwd -P) --port 5005 " \
+  "--all opens every client's context without a project lock"
+WS_SESSION_ID=atlasbind ws session bind api >/dev/null 2>&1
+rm -f "$TMP/npm.args"
+WS_SESSION_ID=atlasbind check "ws atlas defaults to the bound project" atlas
+contains "$TMP/npm.args" "api" "the bound project is the lock"
+WS_SESSION_ID=atlasbind ws session clear >/dev/null 2>&1
+check_fails "ws atlas refuses an unregistered key" atlas nosuch
+check_fails "ws atlas refuses the framework key" atlas workspace
+check_fails "ws atlas refuses a project key together with --all" atlas api --all
+check_fails "ws atlas refuses a port that is not a number" atlas api --port web
+check_fails "ws atlas without a key or a bind refuses" atlas
+cp "$TMP/workspace.conf.atlas" "$WS/workspace.conf"; rm -rf "$WS/.local/explorer"
+
 section "log and route"
 # Preserve an existing Current focus so parallel agents cannot stomp it.
 sed -i.bak 's/^- \*\*Current focus:\*\*.*/- **Current focus:** keep this line/' \

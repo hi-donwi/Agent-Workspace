@@ -41,6 +41,11 @@ packs = core, java, web
 # leave it absent entirely; `ws usage` and `ws doctor` both degrade quietly.
 usage_source =
 
+# Optional: a local checkout of the context explorer that `ws atlas` runs, relative to the
+# workspace root or absolute. Its `npm start -- <folder> [--port N] [--project <key>]`
+# serves a folder read-only on loopback. Leave empty if you do not use `ws atlas`.
+atlas_dir =
+
 # Disk hygiene on the machine running agents. `ws doctor` warns when the workspace
 # volume has less free space than min_free_disk_gb. `ws agent clean` treats a
 # stopped agent's worktree as idle once worktree_idle_hours have passed since its

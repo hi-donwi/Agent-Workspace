@@ -669,6 +669,72 @@ HELP
   fi
 }
 
+# ─────────────────────────────────────────────────────────────── atlas
+# Read the context in a browser. The explorer is a separate checkout (`atlas_dir` in
+# workspace.conf, or WS_ATLAS_DIR) whose `npm start -- <folder> [--port N] [--project k]`
+# serves a folder read-only on loopback. ws opens the context repository locked to one
+# project, so the page shows that project's memory, runs, client, and context repo only.
+cmd_atlas() {
+  local key="" all=0 port=4317
+  local usage="usage: ws atlas [<project-key>|--all] [--port N]"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --all) all=1; shift ;;
+      --port) [ $# -ge 2 ] || die "$usage"; port="$2"; shift 2 ;;
+      --port=*) port="${1#--port=}"; shift ;;
+      --help|-h)
+        cat <<'HELP'
+ws atlas — read the context in a browser, locked to one project
+
+Usage:
+  ws atlas [<project-key>] [--port N]   one project's memory, runs, client, and context repo
+  ws atlas --all [--port N]             every client's context, for the operator only
+
+The project defaults to this session's bind. The explorer is the checkout named by
+`atlas_dir` in workspace.conf (relative to the workspace root) or WS_ATLAS_DIR; its
+dependencies are installed on first use. It serves on http://127.0.0.1:<port>/ (default
+4317), never writes to the context, and stops with Ctrl+C.
+HELP
+        return 0
+        ;;
+      -*) die "$usage" ;;
+      *) [ -z "$key" ] || die "$usage"; key="$1"; shift ;;
+    esac
+  done
+  case "$port" in ''|*[!0-9]*) die "--port needs a port number" ;; esac
+
+  if [ "$all" = 1 ]; then
+    [ -z "$key" ] || die "$usage  (a project key and --all exclude each other)"
+  else
+    if [ -z "$key" ]; then
+      key="$(sed -n 's/^project=//p' "$(session_dir)/bind" 2>/dev/null | head -1)"
+      [ -n "$key" ] || die "$usage  (no session bind to default to)"
+    fi
+    [ "$key" != "$FRAMEWORK_KEY" ] || die "the framework has no project context; name a project, or pass --all"
+    [ -n "$(reg_get "$key")" ] || die "'$key' is not a registered project key"
+  fi
+  [ -d "$CONTEXT_DIR" ] || die "no context folder at ${CONTEXT_DIR#$WS_HOME/}"
+
+  local dir="${WS_ATLAS_DIR:-$(conf_get atlas_dir)}"
+  [ -n "$dir" ] || die "no context explorer configured: set atlas_dir in workspace.conf to its checkout, or WS_ATLAS_DIR"
+  case "$dir" in /*) ;; *) dir="$WS_HOME/$dir" ;; esac
+  [ -f "$dir/package.json" ] || die "atlas_dir is not an explorer checkout (no package.json): $dir"
+  command -v npm >/dev/null || die "npm is required to run the context explorer (Node.js >= 22)"
+  if [ ! -d "$dir/node_modules" ]; then
+    c_grn "-> installing the context explorer's dependencies..."
+    (cd "$dir" && npm ci) || die "failed to install the context explorer's dependencies"
+  fi
+
+  local args=("$CONTEXT_DIR" --port "$port")
+  if [ "$all" = 1 ]; then
+    c_ylw "! --all shows every client's context: keep the page to yourself"
+  else
+    args+=(--project "$key")
+  fi
+  c_grn "-> opening ${key:-all context} at http://127.0.0.1:$port/"
+  (cd "$dir" && npm start --silent -- "${args[@]}")
+}
+
 # Resolve the agent host (Agent-Control) directory: an explicit override wins, then the
 # registry. There is deliberately no fixed checkout path (ADR-0019 §3): the host is a
 # dependency `ws` installs, not a product it knows the location of.
@@ -4759,6 +4825,7 @@ ws — engineering workspace CLI
   ws hours [--month M] [--project k|--client c] [--rollup]   report both, side by side
   ws usage [--month M] [--project k|--client c]  token usage, from a separate optional tool
   ws chat [--dev] [--port N] [--no-brain]  the desk (Agent-Control) and its Agent-Brain gateway
+  ws atlas [<key>|--all] [--port N]  read the context in a browser, locked to one project
   ws ide                           copy the shared VS Code defaults into this clone
   ws hooks [status|install|remove]  Claude Code hooks, merged into .claude/settings.json
   ws guard [status|install|remove]  framework hooks that refuse commits/pushes naming a client
@@ -4824,6 +4891,7 @@ case "${1:-help}" in
   hours) shift; cmd_hours "$@" ;;
   usage) shift; cmd_usage "$@" ;;
   chat|ai|control) shift; cmd_chat "$@" ;;
+  atlas) shift; cmd_atlas "$@" ;;
   log) shift; cmd_log "$@" ;;
   note) shift; cmd_note "$@" ;;
   task) shift; cmd_task "$@" ;;
