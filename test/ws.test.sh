@@ -1798,7 +1798,10 @@ check "human clock out" ws clock out
 OUT="$(ws hours --client acme 2>&1)"
 printf '%s' "$OUT" | grep -q 'client acme' && ok "ws hours --client scopes to that client's projects" \
   || bad "ws hours --client scopes to that client's projects" "$OUT"
-printf '%s' "$OUT" | grep -qE '1\.0[0-9]' && ok "the hour is counted under the client" \
+# The "two clocks" section already left a one-hour api session today, and overlapping
+# sessions are merged, so today's total is one hour plus however long the sections in
+# between took to run. Accept any 1.xx rather than assume a fast machine.
+printf '%s' "$OUT" | grep -qE ' 1\.[0-9]{2} ' && ok "the hour is counted under the client" \
   || bad "the hour is counted under the client" "$OUT"
 check_fails "ws hours refuses an unknown client" ws hours --client no-such-client
 check_fails "ws hours refuses --project and --client together" ws hours --project api --client acme
