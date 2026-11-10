@@ -818,6 +818,29 @@ not_exists "$gdir/ws-agent-sessions/wt1.lock" "session lock is removed"
 [ -e "$WS/.local/worktrees/api/wt1" ] && ok "worktree is kept after stop" \
   || bad "worktree is kept after stop"
 
+section "unborn repositories get isolated agent worktrees"
+check "registers an unborn product repository" \
+  ws new seedless projects/acme/seedless --client acme
+UNBORN="$WS/projects/acme/seedless"
+UNBORN_WT="$WS/.local/worktrees/seedless/seedless-agent"
+printf 'unborn baseline\n' > "$UNBORN/snapshot-source.txt"
+mkdir -p "$UNBORN/suite/apps"
+git -C "$UNBORN/suite/apps" init -q -b main
+printf 'nested unborn baseline\n' > "$UNBORN/suite/apps/nested-source.txt"
+WS_SESSION_ID=seedless-agent check "starts an agent from an unborn repository" \
+  ws agent start seedless "unborn isolation"
+[ -f "$UNBORN_WT/.git" ] && ok "unborn agent has a real worktree" \
+  || bad "unborn agent has a real worktree"
+[ -f "$UNBORN_WT/snapshot-source.txt" ] && ok "unborn worktree contains the product snapshot" \
+  || bad "unborn worktree contains the product snapshot"
+[ -f "$UNBORN_WT/suite/apps/nested-source.txt" ] && ok "nested unborn repository content is copied" \
+  || bad "nested unborn repository content is copied"
+[ -d "$UNBORN_WT/suite/apps/.git" ] && ok "nested repository metadata is isolated" \
+  || bad "nested repository metadata is isolated"
+printf 'snapshot-only\n' > "$UNBORN_WT/snapshot-change.txt"
+not_exists "$UNBORN/snapshot-change.txt" "unborn worktree changes do not reach the primary checkout"
+WS_SESSION_ID=seedless-agent check "stops the unborn agent" ws agent stop
+
 # Stopped sessions leave their worktrees behind, each with its own dependencies and
 # build output. `ws agent clean` removes only the ones git itself calls clean, and
 # never one a live session, uncommitted work, or a branchless commit still needs.

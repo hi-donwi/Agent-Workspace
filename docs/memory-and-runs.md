@@ -94,6 +94,13 @@ ws agent start uidl-runtime "native widgets"
 # → cd .local/worktrees/uidl-runtime/<session>
 ```
 
+If a product repository has no commit yet, `ws agent start` creates a local snapshot
+baseline from its current non-ignored files before adding the worktree. This keeps the
+primary checkout untouched and does not require a remote. The baseline is local-only; review
+the agent branch before applying its changes to the repository's first shared commit. Nested
+repositories are copied into the snapshot with independent metadata; linked-worktree `.git`
+files are omitted so the snapshot cannot point back at another checkout.
+
 A session that is not using a worktree still binds:
 
 ```bash
