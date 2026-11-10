@@ -1122,6 +1122,26 @@ contains "$WS/.local/sessions/owncx/pack.json" "OWN_RUN_BRIEF" "the external run
 WS_SESSION_ID=owncx check_fails "a run in neither tree is still refused" \
   ws session bind api --run nosuch-run
 
+# An append-only log.md outgrows the 32 KiB file limit on its own. The pack carries its
+# newest whole lines and says so, instead of refusing the bind; every other file still
+# has to fit as it is.
+cp "$PCTX/log.md" "$TMP/own-log.bak"
+python3 - "$PCTX/log.md" <<'PYEOF'
+import sys
+rows = [f"| 2026-09-{1 + i % 28:02d} | milestone {i} {'x' * 60} |" for i in range(600)]
+open(sys.argv[1], "w").write("# api - log\n\nOLDEST_LOG_ROW\n" + "\n".join(rows) + "\nNEWEST_LOG_ROW\n")
+PYEOF
+WS_SESSION_ID=owncx check "a log.md over 32 KiB still binds" ws session bind api
+contains "$WS/.local/sessions/owncx/pack.json" "NEWEST_LOG_ROW" "the pack keeps the newest log lines"
+lacks "$WS/.local/sessions/owncx/pack.json" "OLDEST_LOG_ROW" "the pack leaves out the oldest log lines"
+contains "$WS/.local/sessions/owncx/pack.json" "earlier lines of log.md omitted" \
+  "the pack says the log was cut and how much"
+cp "$TMP/own-log.bak" "$PCTX/log.md"
+cp "$PCTX/decisions.md" "$TMP/own-decisions.bak"
+python3 -c "print('x' * 40000)" > "$PCTX/decisions.md"
+WS_SESSION_ID=owncx check_fails "a non-log file over 32 KiB is still refused" ws session bind api
+cp "$TMP/own-decisions.bak" "$PCTX/decisions.md"
+
 # A project without the column must behave exactly as before.
 WS_SESSION_ID=nocx check "a project with no context repo packs unchanged" ws session bind otherp
 lacks "$WS/.local/sessions/nocx/pack.json" "OWN_REPO_ACTIVE" \
