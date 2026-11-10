@@ -238,6 +238,35 @@ def registered_scope(context, matches):
     return client, group, scope, selected, external
 
 
+LOG_TAIL_BYTES = 8192
+
+
+def pack_content(path):
+    """The bytes a context pack carries for one file.
+
+    A log.md is append-only, so it outgrows any fixed limit on its own: a long one is packed
+    as its newest whole lines, up to LOG_TAIL_BYTES, after a comment saying how many earlier
+    lines were left out. Every other file must fit in 32 KiB as it is, because curating it
+    is a person's decision, not the pack's.
+    """
+    data = path.read_bytes()
+    if path.name != "log.md" or len(data) <= LOG_TAIL_BYTES:
+        if len(data) > 32768:
+            raise ValueError("context file exceeds 32 KiB; curate it before packing")
+        return data
+    lines = data.decode().splitlines(keepends=True)
+    kept, size = [], 0
+    for line in reversed(lines):
+        size += len(line.encode())
+        if size > LOG_TAIL_BYTES:
+            break
+        kept.append(line)
+    kept.reverse()
+    marker = (f"<!-- ws context pack: {len(lines) - len(kept)} earlier lines of log.md omitted;"
+              " read the file for the whole log -->\n")
+    return (marker + "".join(kept)).encode()
+
+
 def context_pack(root, context, project, *args):
     root, context = Path(root).resolve(), Path(context).resolve()
     key(project)
@@ -284,9 +313,7 @@ def context_pack(root, context, project, *args):
         path = contained(base, relative)
         if not path.exists():
             continue
-        if path.stat().st_size > 32768:
-            raise ValueError("context file exceeds 32 KiB; curate it before packing")
-        data = path.read_bytes()
+        data = pack_content(path)
         total += len(data)
         if total > 131072:
             raise ValueError("context exceeds 128 KiB")
