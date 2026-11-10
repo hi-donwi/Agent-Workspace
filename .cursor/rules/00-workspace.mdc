@@ -39,8 +39,11 @@ not product code.
 6. **Say who you are.** Every shell that runs `ws` exports `WS_AGENT=<your tool>` and
    `WS_SESSION_ID=<unique id>`; otherwise your work is logged as `dev` on a shared
    `default` session.
-7. **English** in engineering sources, canonical documents, and commit messages. Localized
-   UI text and clearly labeled, source-linked derived translations may use other languages.
+7. **English is the default, not a requirement.** Follow an explicit user or project language
+   choice for engineering sources, canonical documents, and commit messages; it may make
+   another language canonical for that repository. Preserve technical identifiers and exact
+   source terms. Label derived translations with source/version and freshness, and respect
+   access boundaries.
 
 The full contract is `AGENTS.md`. Where it and this list differ, this list wins.
 <!-- hard-rules:end -->

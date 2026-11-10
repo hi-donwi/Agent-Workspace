@@ -28,6 +28,8 @@ Shared instructions for all agents live in AGENTS.md. Claude Code loads them via
 - **`.local/` is never a source for committed output.** It holds raw client material
   (proposal PDFs, data dumps, screenshots). Reading it for reference is fine; copying its
   contents into a tracked file is not.
-- **Use English for engineering sources, canonical documents, and commit messages.**
-  Localized UI text and labeled, source-linked derived translations may use other languages.
-  A domain glossary belongs in its context repo, never in the framework.
+- **English is the default, not a requirement.** Follow an explicit user or project language
+  choice for engineering sources, canonical documents, and commit messages; it may make
+  another language canonical for that repository. Preserve technical identifiers and exact
+  source terms. Label derived translations with source/version and freshness, and respect
+  access boundaries. A domain glossary belongs in its context repo, never in the framework.
