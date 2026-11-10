@@ -732,7 +732,14 @@ HELP
     args+=(--project "$key")
   fi
   c_grn "-> opening ${key:-all context} at http://127.0.0.1:$port/"
-  (cd "$dir" && npm start --silent -- "${args[@]}")
+  # 130 and 143 are Ctrl+C and a plain kill: a stop, not a failure. Anything else would
+  # otherwise end silently, since --silent also hides npm's own errors.
+  local status=0
+  (cd "$dir" && npm start --silent -- "${args[@]}") || status=$?
+  case "$status" in
+    0|130|143) ;;
+    *) die "the context explorer exited with status $status; run 'npm start' in $dir to see why" ;;
+  esac
 }
 
 # Resolve the agent host (Agent-Control) directory: an explicit override wins, then the
