@@ -1,7 +1,8 @@
 # ADR-0004: English as the workspace language
 
 - **Date:** 2026-09-12
-- **Status:** Partially superseded by [ADR-0026](0026-source-linked-localization.md)
+- **Status:** Partially superseded by [ADR-0027](0027-language-default-not-mandate.md); see
+  [ADR-0026](0026-source-linked-localization.md) for derived-translation safeguards.
 - **Project:** workspace
 
 ## Context

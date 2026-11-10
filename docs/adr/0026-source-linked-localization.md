@@ -1,7 +1,8 @@
 # ADR-0026: Source-linked localization
 
 - **Date:** 2026-11-09
-- **Status:** Accepted
+- **Status:** Partially superseded by [ADR-0027](0027-language-default-not-mandate.md); source,
+  freshness, and access-boundary safeguards remain in force for derived translations.
 - **Decider:** Workspace owner
 - **Partially supersedes:** [ADR-0004](0004-english-as-workspace-language.md)
 

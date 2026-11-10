@@ -20,7 +20,7 @@ An ADR with no rejected alternatives records a preference, not a decision.
 |---|---|---|---|
 | [0001](0001-nested-independent-project-repos.md) | Nested independent project repos, not submodules | Accepted | 2026-09-12 |
 | 0002–0003 | Moved to the organisation's context repository (stack pin and namespace are not framework decisions) | — | 2026-09-12 |
-| [0004](0004-english-as-workspace-language.md) | English as the workspace language | Partially superseded by 0026 | 2026-09-12 |
+| [0004](0004-english-as-workspace-language.md) | English as the workspace language | Partially superseded by 0026 and 0027 | 2026-09-12 |
 | [0005](0005-workspace-portability-and-guard-rails.md) | Workspace portability and isolation guard rails | Accepted | 2026-09-12 |
 | [0006](0006-framework-context-product-split.md) | Framework, context, and product as three repositories | Accepted | 2026-09-12 |
 | [0007](0007-skills-in-their-own-repository.md) | Skills in their own repository, fetched by manifest | Accepted | 2026-09-12 |
@@ -42,4 +42,5 @@ An ADR with no rejected alternatives records a preference, not a decision.
 | [0023](0023-the-desk-is-the-agent-host-ui.md) | The desk is the agent host's UI | Accepted | 2026-10-16 |
 | [0024](0024-project-management-records.md) | Project management records | Accepted | 2026-10-17 |
 | [0025](0025-project-kinds.md) | Project kinds | Accepted | 2026-10-18 |
-| [0026](0026-source-linked-localization.md) | Source-linked localization | Accepted | 2026-11-09 |
+| [0026](0026-source-linked-localization.md) | Source-linked localization | Partially superseded by 0027 | 2026-11-09 |
+| [0027](0027-language-default-not-mandate.md) | English as a default, not a requirement | Accepted | 2026-11-09 |
