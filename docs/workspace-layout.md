@@ -142,6 +142,23 @@ containing generated pointers. The exclude entry keeps them out of `git status`;
 stops `git add -f`. An existing hook that is not ours is never overwritten — `ws link` says so and
 leaves it alone.
 
+### Local agent preferences
+
+Machine-local instructions that should not be published belong under `.local/rules/`:
+
+| File | Scope | Delivery |
+|---|---|---|
+| `user-preferences.md` | Every bound session in this workspace | Appended to that session's `CONTEXT.md` |
+| `projects/<project-key>.md` | Only the named bound project | Appended only when that project is bound |
+
+These files are read when `ws session bind` creates the session pack. They work for every
+agent that follows the workspace bind contract, without requiring a tool-specific
+`CLAUDE.md`, `GEMINI.md`, or other instruction file inside the product repository. The
+`.local/` directory is ignored by the framework and is never copied into `context/` or
+`projects/`. Do not put secrets or client records in these files: their contents become part
+of the agent session context. A machine-wide fallback for global preferences is also read from
+`~/.gemini/config/rules/user-preferences.md` when the workspace-local global file is absent.
+
 If the workspace is later moved or renamed, those paths go stale. `ws doctor` detects that
 and names the fix (`ws link <key>`). `ws where` does not depend on them: it finds the root
 by looking for a directory that has both `AGENTS.md` and `.agents/standards/`, and only

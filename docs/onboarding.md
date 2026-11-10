@@ -101,6 +101,8 @@ it — `ws route --project <key> "<task>"` will point you at it.
 | An architecture decision about the workspace itself | `docs/adr/` |
 | An architecture decision about a project | `context/docs/adr/` |
 | A client PDF, a data dump, a screenshot | `.local/` — **always**, it is git-ignored |
+| A preference for every bound session | `.local/rules/user-preferences.md` — local-only |
+| Project-specific private instructions | `.local/rules/projects/<project-key>.md` — local-only and session-scoped |
 | A secret | Nowhere in any repo. Environment variables only. |
 
 ---
