@@ -1042,6 +1042,18 @@ rm -rf "$WS/.local/rules"
 WS_SESSION_ID=prefs check "bind still succeeds with neither preferences file"   ws session bind api
 lacks "$WS/.local/sessions/prefs/CONTEXT.md" "## User preferences"   "no preferences section is added when neither file exists"
 
+section "project-local user preferences stay scoped"
+mkdir -p "$WS/.local/rules/projects"
+printf 'PROJECT_PREFS_CANARY
+' > "$WS/.local/rules/projects/api.md"
+WS_SESSION_ID=project-prefs check "bind includes project-local preferences" ws session bind api
+contains "$WS/.local/sessions/project-prefs/CONTEXT.md" "PROJECT_PREFS_CANARY" \
+  "project-local preferences reach the bound project only"
+WS_SESSION_ID=project-prefs-other check "other project bind still succeeds" ws session bind otherp
+lacks "$WS/.local/sessions/project-prefs-other/CONTEXT.md" "PROJECT_PREFS_CANARY" \
+  "project-local preferences do not cross project boundaries"
+rm -rf "$WS/.local/rules"
+
 section "overlap is merged, not summed"
 # Two agent sessions covering the same hour are one hour of elapsed work.
 M="$(date +%Y-%m)"; F="$WS/context/works/agent/overlap/$M.jsonl"; mkdir -p "${F%/*}"
