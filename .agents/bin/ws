@@ -2552,6 +2552,99 @@ agent_git_dir() {
   git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null
 }
 
+agent_nested_repositories() {
+  python3 - "$1" <<'PY'
+import os
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1]).resolve()
+for directory, names, files in os.walk(root):
+    current = pathlib.Path(directory)
+    if ".git" not in names and ".git" not in files:
+        continue
+    if current == root:
+        if ".git" in names:
+            names.remove(".git")
+        continue
+    print(current.relative_to(root))
+    names[:] = []
+PY
+}
+
+agent_copy_nested_repositories() {
+  python3 - "$1" "$2" <<'PY'
+import os
+import pathlib
+import shutil
+import sys
+
+source = pathlib.Path(sys.argv[1]).resolve()
+target = pathlib.Path(sys.argv[2]).resolve()
+nested = []
+for directory, names, files in os.walk(source):
+    current = pathlib.Path(directory)
+    if ".git" not in names and ".git" not in files:
+        continue
+    if current == source:
+        if ".git" in names:
+            names.remove(".git")
+        continue
+    nested.append(current.relative_to(source))
+    names[:] = []
+
+def ignore_linked_git_file(path, names):
+    metadata = pathlib.Path(path) / ".git"
+    return [".git"] if ".git" in names and metadata.is_file() else []
+
+for relative in nested:
+    shutil.copytree(
+        source / relative,
+        target / relative,
+        dirs_exist_ok=True,
+        symlinks=True,
+        ignore=ignore_linked_git_file,
+    )
+PY
+}
+
+agent_snapshot_commit() {
+  local dst="$1" gdir index tree commit name email nested
+  local add_paths=(.)
+  gdir="$(agent_git_dir "$dst")" || return 1
+  index="$(mktemp "$gdir/ws-agent-snapshot-index.XXXXXX")" || return 1
+  rm -f "$index"
+
+  while IFS= read -r nested; do
+    [ -n "$nested" ] && add_paths+=(":(exclude)$nested")
+  done < <(agent_nested_repositories "$dst")
+  if ! GIT_INDEX_FILE="$index" git -C "$dst" add -A -- "${add_paths[@]}"; then
+    rm -f "$index"
+    return 1
+  fi
+  if ! tree="$(GIT_INDEX_FILE="$index" git -C "$dst" write-tree)"; then
+    rm -f "$index"
+    return 1
+  fi
+
+  name="$(git -C "$dst" config user.name 2>/dev/null || true)"
+  email="$(git -C "$dst" config user.email 2>/dev/null || true)"
+  [ -n "$name" ] || name="Workspace Agent"
+  [ -n "$email" ] || email="workspace-agent@localhost"
+  if ! commit="$(
+    printf '%s\n' 'chore: create local agent baseline' \
+      'This local baseline is used only to isolate an unborn repository.' \
+      | GIT_AUTHOR_NAME="$name" GIT_AUTHOR_EMAIL="$email" \
+        GIT_COMMITTER_NAME="$name" GIT_COMMITTER_EMAIL="$email" \
+        git -C "$dst" commit-tree "$tree"
+  )"; then
+    rm -f "$index"
+    return 1
+  fi
+  rm -f "$index"
+  printf '%s' "$commit"
+}
+
 agent_start() {
   local key="${1:-}"; shift || true
   local note="${*:-}"
@@ -2578,8 +2671,16 @@ agent_start() {
     local br; br="$(slug "agent-$session-$key")"
     if git -C "$dst" show-ref --verify --quiet "refs/heads/$br"; then
       git -C "$dst" worktree add "$wt" "$br"
-    else
+    elif git -C "$dst" rev-parse --verify HEAD^{commit} >/dev/null 2>&1; then
       git -C "$dst" worktree add -b "$br" "$wt"
+    else
+      local baseline; baseline="$(agent_snapshot_commit "$dst")" \
+        || die "could not create a local baseline for the unborn repository: $dst"
+      git -C "$dst" worktree add -b "$br" "$wt" "$baseline"
+      agent_copy_nested_repositories "$dst" "$wt" \
+        || die "could not copy nested repositories into the isolated worktree: $dst"
+      c_ylw "! $key has no commit history - isolated worktree uses a local snapshot baseline"
+      c_dim "  the baseline is not published; review and apply changes explicitly"
     fi
   fi
 
