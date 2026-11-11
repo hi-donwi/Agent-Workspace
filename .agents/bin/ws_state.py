@@ -12,6 +12,9 @@ import sys
 import time
 import uuid
 
+# The run table's format is ws_compact's; the pack reads it the same way compaction does.
+from ws_compact import newest_first, run_table
+
 
 # The run key for work on the framework itself, which has no registry row. Matches
 # FRAMEWORK_KEY in ws.
@@ -239,20 +242,51 @@ def registered_scope(context, matches):
 
 
 LOG_TAIL_BYTES = 8192
+RUN_TABLE_BYTES = 8192
+FILE_LIMIT = 32768
+PACK_LIMIT = 131072
 
 
-def pack_content(path):
-    """The bytes a context pack carries for one file.
+def packed_active(data):
+    """active.md as packed: its run table cut to the newest rows that fit RUN_TABLE_BYTES.
+
+    `ws run` adds a row to that table for every run and nothing removes an open one, so
+    the table outgrows any fixed limit by itself, and active.md is shared: the agent that
+    the refusal stops is told not to curate it. A comment above the table says how many
+    rows were left out. The text around the table is what people wrote; it is packed whole.
+    """
+    lines = data.decode().splitlines(keepends=True)
+    table = run_table(lines)
+    if not table:
+        return data
+    header, first, end = table
+    rows = [i for i in range(first, end) if lines[i].startswith("|")]
+    if sum(len(lines[i].encode()) for i in rows) <= RUN_TABLE_BYTES:
+        return data
+    kept, size = set(), 0
+    for i in newest_first(lines, rows):
+        size += len(lines[i].encode())
+        if size > RUN_TABLE_BYTES:
+            break
+        kept.add(i)
+    marker = (f"<!-- ws context pack: {len(rows) - len(kept)} older rows of the Active runs table omitted;"
+              " read the file for every run -->\n")
+    body = [lines[i] for i in rows if i in kept]
+    return "".join(lines[:header] + [marker] + lines[header:first] + body + lines[end:]).encode()
+
+
+def packed(path):
+    """The bytes a context pack carries for one file, before any limit is applied.
 
     A log.md is append-only, so it outgrows any fixed limit on its own: a long one is packed
     as its newest whole lines, up to LOG_TAIL_BYTES, after a comment saying how many earlier
-    lines were left out. Every other file must fit in 32 KiB as it is, because curating it
-    is a person's decision, not the pack's.
+    lines were left out. An active.md's run table is cut the same way (packed_active). Every
+    other file is packed as it is.
     """
     data = path.read_bytes()
+    if path.name == "active.md":
+        return packed_active(data)
     if path.name != "log.md" or len(data) <= LOG_TAIL_BYTES:
-        if len(data) > 32768:
-            raise ValueError("context file exceeds 32 KiB; curate it before packing")
         return data
     lines = data.decode().splitlines(keepends=True)
     kept, size = [], 0
@@ -265,6 +299,26 @@ def pack_content(path):
     marker = (f"<!-- ws context pack: {len(lines) - len(kept)} earlier lines of log.md omitted;"
               " read the file for the whole log -->\n")
     return (marker + "".join(kept)).encode()
+
+
+def pack_content(path, shown):
+    """packed(path), refused when it is still over FILE_LIMIT: curating what people wrote is
+    a person's decision, not the pack's. `shown` names the file in the refusal, because an
+    agent told only that some file is too large cannot tell which one, or whose it is."""
+    data = packed(path)
+    if len(data) > FILE_LIMIT:
+        raise ValueError(f"context file {shown} exceeds 32 KiB ({len(data)} bytes as packed);"
+                         " curate it before packing")
+    return data
+
+
+def packed_size(*paths):
+    """`<bytes>\t<path>` for each existing file: what ws doctor compares with FILE_LIMIT, so
+    that its "bind will fail" is the pack's own verdict."""
+    for name in paths:
+        path = Path(name)
+        if path.is_file():
+            print(f"{len(packed(path))}\t{name}")
 
 
 def context_pack(root, context, project, *args):
@@ -313,10 +367,11 @@ def context_pack(root, context, project, *args):
         path = contained(base, relative)
         if not path.exists():
             continue
-        data = pack_content(path)
+        shown = path.relative_to(root)
+        data = pack_content(path, shown)
         total += len(data)
-        if total > 131072:
-            raise ValueError("context exceeds 128 KiB")
+        if total > PACK_LIMIT:
+            raise ValueError(f"context exceeds 128 KiB once {shown} is added; curate the largest files")
         files.append(dict(path=str(path.relative_to(root)), sha256=hashlib.sha256(data).hexdigest(),
                           content=data.decode(), classification="private-context"))
     print(json.dumps(dict(version=1, project=project, client=client, group=group, scope=scope,
@@ -336,6 +391,8 @@ def main():
         hours(*args)
     elif command == "context-pack":
         context_pack(*args)
+    elif command == "packed-size":
+        packed_size(*args)
     else:
         raise ValueError("unknown state operation")
 
