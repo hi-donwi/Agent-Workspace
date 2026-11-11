@@ -717,6 +717,39 @@ lacks "$CM/log.md" "| 2026-09-05 |" "older milestones leave log.md"
 contains "$CM/log-archive.md" "| 2026-09-05 |" "and are archived, not deleted"
 contains "$CM/log.md" "COMPACT_FOOTER_CANARY" "text after the log table is kept"
 check_fails "ws compact refuses something that is not a project key" ws compact memory ../api
+# A blank line inside the run table ends it as Markdown, but the rows after it are still
+# runs. Reading only the first fragment reported "Clean" over a table full of done runs.
+cat > "$CM/active.md" <<'MD'
+# compactdemo - active
+
+## Active runs
+
+| Run | Owner | State |
+|---|---|---|
+| `2026-09-09-090000-a-x-new` | a (claude-code) | open |
+
+| `2026-09-05-090000-a-x-d5` | a (claude-code) | done |
+| `2026-09-04-090000-a-x-d4` | a (claude-code) | done |
+
+| `2026-09-03-090000-a-x-d3` | a (claude-code) | done |
+| `2026-09-02-090000-a-x-d2` | a (claude-code) | done |
+
+## Next up
+
+- COMPACT_SPLIT_CANARY
+MD
+check "ws compact memory --apply reads a run table split by blank lines" ws compact memory compactdemo --apply
+contains "$CM/active.md" "x-new" "an open run after the split is kept"
+contains "$CM/active.md" "x-d3" "the newest done runs across fragments are kept"
+lacks "$CM/active.md" "x-d2" "an older done run in a later fragment is dropped"
+contains "$CM/active.md" "COMPACT_SPLIT_CANARY" "the section after a split table is kept"
+python3 - "$CM/active.md" <<'PYEOF' && ok "the compacted rows form one table again" || bad "the compacted rows form one table again" "$(cat "$CM/active.md")"
+import sys
+lines = open(sys.argv[1]).read().splitlines()
+start = lines.index("| Run | Owner | State |")
+rows = [line for line in lines[start:] if line.startswith("| `")]
+sys.exit(0 if lines[start + 2:start + 2 + len(rows)] == rows else 1)
+PYEOF
 rm -rf "$CM"
 check "ws compact exec runs command with condensation" ws compact exec -- echo "compact-ok"
 
