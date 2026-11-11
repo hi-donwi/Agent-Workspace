@@ -3703,24 +3703,25 @@ cmd_identifiers() {
 doctor_project_memory() {
   local key="$1"
   if [ -d "$MEM/$key" ]; then
-    # ws_state.py context-pack refuses any single file over 32 KiB (and the
-    # pack as a whole over 128 KiB), so a file creeping up on that is a future
-    # `ws session bind` failure, not just a slow read today. ws compact memory
-    # exists for exactly active.md/log.md; this is the nudge to run it before
-    # the hard refusal does.
+    # ws_state.py context-pack carries project.md, active.md and decisions.md from
+    # here and refuses any of them over 32 KiB as packed, so a file creeping up on
+    # that is a future `ws session bind` failure. The size that counts is the packed
+    # one: active.md's run table is cut to its newest rows, and log.md is not packed
+    # from here at all, so measuring the files themselves both cried wolf over a long
+    # log and missed a decisions.md that does refuse the bind.
     local f size
-    for f in active.md log.md; do
-      [ -f "$MEM/$key/$f" ] || continue
-      size="$(wc -c < "$MEM/$key/$f" | tr -d ' ')"
+    while IFS=$'\t' read -r size f; do
+      f="$(basename "$f")"
       if [ "$size" -gt 32768 ]; then
-        c_red "  x memory/projects/$key/$f is ${size}B - over the 32 KiB pack limit; ws session bind $key will fail"
-        c_dim "      ws compact memory $key --apply"
+        c_red "  x memory/projects/$key/$f is ${size}B as packed - over the 32 KiB pack limit; ws session bind $key will fail"
+        c_dim "      curate it: move settled detail into a note (ws note $key \"title\" -)"
         fail=1
       elif [ "$size" -gt 16384 ]; then
-        c_ylw "  ! memory/projects/$key/$f is ${size}B - past half the 32 KiB pack limit"
-        c_dim "      ws compact memory $key --apply"
+        c_ylw "  ! memory/projects/$key/$f is ${size}B as packed - past half the 32 KiB pack limit"
+        c_dim "      curate it: move settled detail into a note (ws note $key \"title\" -)"
       fi
-    done
+    done < <(python3 "$ROOT/.agents/bin/ws_state.py" packed-size \
+      "$MEM/$key/project.md" "$MEM/$key/active.md" "$MEM/$key/decisions.md")
   else
     c_ylw "  ! no memory at context/memory/projects/$key/"
   fi

@@ -99,12 +99,16 @@ cover the other.
 2. **`ws compact memory <key> [--apply]`** — an explicit, operator-run command, never
    fired by a hook, that archives milestones past the newest 15 out of `log.md` (to
    `log-archive.md`) and drops closed runs past the newest 3 out of `active.md`'s table.
-   It exists because `context-pack` (what `ws session bind` builds) refuses any single
-   memory file over 32 KiB and the whole pack over 128 KiB. The one exception is the
-   `log.md` of a project's own context repository: it is packed as its newest whole
-   lines, up to 8 KiB, under a comment that says how many lines were left out. `ws doctor`
-   warns once a project's `active.md`/`log.md` passes 16 KiB and fails once one is actually
-   over the limit, naming this command as the fix. It only touches closed/done/dropped/merged/
+   `context-pack` (what `ws session bind` builds) refuses any single memory file over
+   32 KiB as packed and the whole pack over 128 KiB, naming the file. Two files are cut
+   rather than refused, because they grow by themselves: the `log.md` of a project's own
+   context repository is packed as its newest whole lines, up to 8 KiB, and `active.md`'s
+   run table (one row per `ws run`) as its newest rows, up to 8 KiB, each under a comment
+   that says how much was left out. Everything people wrote around that table is packed
+   whole. `ws doctor` measures `project.md`, `active.md`, and `decisions.md` as packed:
+   it warns past 16 KiB and fails over 32 KiB, and the fix is curating that file, not
+   this command. This command reads every row under `## Active runs`, including rows
+   after a blank line inside the table. It only touches closed/done/dropped/merged/
    abandoned/superseded rows, including annotations separated by ` - `, ` – `, ` — `,
    or `: ` (for example, `done - delivered`). Ambiguous states such as `done pending review`
    remain open. An `active.md` that is large because of genuinely open,

@@ -2172,9 +2172,27 @@ python3 -c "print('x' * 40000)" > "$WS/context/memory/projects/api/active.md"
 check_fails "doctor fails once a memory file is over the 32 KiB pack limit" ws doctor --ci
 DOC="$(ws doctor --ci 2>&1 || true)"
 printf '%s' "$DOC" | grep -q "over the 32 KiB pack limit.*ws session bind api will fail" \
-  && ok "doctor says bind will fail, and names ws compact memory as the fix" \
-  || bad "doctor says bind will fail, and names ws compact memory as the fix" "$DOC"
+  && ok "doctor says bind will fail" \
+  || bad "doctor says bind will fail" "$DOC"
+
+# Doctor measures what the pack carries, not the file: an active.md long only by its run
+# table packs small, and a log.md is never what refuses a bind.
+python3 - "$WS/context/memory/projects/api/active.md" <<'PYEOF'
+import sys
+rows = [f"| `2026-09-{1 + i % 28:02d}-090000-a-x-run-{i:03d}-{'y' * 80}` | a | open |" for i in range(400)]
+open(sys.argv[1], "w").write("# api - active\n\n## Active runs\n\n| Run | Owner | State |\n|---|---|---|\n"
+                             + "\n".join(rows) + "\n")
+PYEOF
+check "an active.md over 32 KiB only by its run table is not a doctor failure" ws doctor --ci
 cp "$TMP/active.bak" "$WS/context/memory/projects/api/active.md"
+cp "$WS/context/memory/projects/api/log.md" "$TMP/log.bak"
+python3 -c "print('| 2026-09-01 | x |\n' * 3000)" >> "$WS/context/memory/projects/api/log.md"
+check "a long log.md is not a doctor failure" ws doctor --ci
+cp "$TMP/log.bak" "$WS/context/memory/projects/api/log.md"
+cp "$WS/context/memory/projects/api/decisions.md" "$TMP/decisions.bak"
+python3 -c "print('x' * 40000)" > "$WS/context/memory/projects/api/decisions.md"
+check_fails "doctor fails once decisions.md is over the 32 KiB pack limit" ws doctor --ci
+cp "$TMP/decisions.bak" "$WS/context/memory/projects/api/decisions.md"
 
 git -C "$WS" add -A >/dev/null 2>&1
 check "doctor passes again once each fault is undone" ws doctor --ci
