@@ -4569,6 +4569,29 @@ cmd_checkpoint() {
   if [ -z "$(git -C "$CONTEXT_DIR" status --porcelain -- "${paths[@]}")" ]; then
     c_dim "- $key: nothing changed since the last checkpoint"; return 0
   fi
+  # A file over 32 KiB as packed refuses the next agent's bind, and that agent did not
+  # write it and may not curate it. So the checkpoint that takes a file there, or grows
+  # one already there, is refused instead, naming the file; one that was over before and
+  # is not grown only warns, since refusing it would stop every checkpoint on the project.
+  local packed=() verdict size rel refused=0
+  for p in "${paths[@]}"; do
+    case "$p" in
+      memory/projects/*) packed+=("$p/project.md" "$p/active.md" "$p/decisions.md") ;;
+      runs/*) packed+=("$p/brief.md" "$p/plan.md" "$p/handoff.md") ;;
+    esac
+  done
+  while IFS=$'\t' read -r verdict size rel; do
+    case "$verdict" in
+      over) c_red "x ${CONTEXT_DIR#$ROOT/}/$rel packs as ${size}B - over the 32 KiB pack limit; ws session bind would refuse it"
+        refused=1 ;;
+      still-over) c_ylw "! ${CONTEXT_DIR#$ROOT/}/$rel packs as ${size}B - already over the 32 KiB pack limit before this checkpoint" ;;
+      near) c_ylw "! ${CONTEXT_DIR#$ROOT/}/$rel packs as ${size}B - past half the 32 KiB pack limit" ;;
+    esac
+  done < <(python3 "$ROOT/.agents/bin/ws_state.py" checkpoint-check "$CONTEXT_DIR" ${packed[@]+"${packed[@]}"})
+  if [ "$refused" = 1 ]; then
+    c_dim "  move settled detail into a note (ws note $key \"title\" -) or link evidence instead of pasting it"
+    die "checkpoint refused - nothing committed"
+  fi
   before_head="$(git -C "$CONTEXT_DIR" rev-parse HEAD)"
   git -C "$CONTEXT_DIR" add -A -- "${paths[@]}"
   git -C "$CONTEXT_DIR" commit -q -m "${msg:-chore($key): checkpoint by $owner}" -- "${paths[@]}"

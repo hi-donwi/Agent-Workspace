@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 import time
 import uuid
@@ -276,17 +277,20 @@ def packed_active(data):
 
 
 def packed(path):
-    """The bytes a context pack carries for one file, before any limit is applied.
+    return packed_bytes(path.name, path.read_bytes())
+
+
+def packed_bytes(name, data):
+    """The bytes a context pack carries for a file called `name`, before any limit is applied.
 
     A log.md is append-only, so it outgrows any fixed limit on its own: a long one is packed
     as its newest whole lines, up to LOG_TAIL_BYTES, after a comment saying how many earlier
     lines were left out. An active.md's run table is cut the same way (packed_active). Every
     other file is packed as it is.
     """
-    data = path.read_bytes()
-    if path.name == "active.md":
+    if name == "active.md":
         return packed_active(data)
-    if path.name != "log.md" or len(data) <= LOG_TAIL_BYTES:
+    if name != "log.md" or len(data) <= LOG_TAIL_BYTES:
         return data
     lines = data.decode().splitlines(keepends=True)
     kept, size = [], 0
@@ -319,6 +323,34 @@ def packed_size(*paths):
         path = Path(name)
         if path.is_file():
             print(f"{len(packed(path))}\t{name}")
+
+
+def checkpoint_check(context, *relatives):
+    """`<verdict>\t<bytes>\t<relative>` for each file, relative to the context repository,
+    that packs past half of FILE_LIMIT, for `ws checkpoint` to act on before it commits:
+
+    over        over the limit, and this checkpoint took it there or grew it: refused, so the
+                writer curates it instead of the next agent being refused its bind
+    still-over  over the limit already at HEAD and not grown: someone else's to curate, and
+                refusing it would stop every checkpoint on the project
+    near        past half the limit: warned, so the writer sees it coming
+    """
+    context = Path(context)
+    for relative in relatives:
+        path = contained(context, relative)
+        if not path.is_file():
+            continue
+        size = len(packed(path))
+        if size <= FILE_LIMIT // 2:
+            continue
+        if size <= FILE_LIMIT:
+            print(f"near\t{size}\t{relative}")
+            continue
+        head = subprocess.run(["git", "-C", str(context), "show", f"HEAD:{relative}"],
+                              capture_output=True)
+        before = len(packed_bytes(path.name, head.stdout)) if head.returncode == 0 else 0
+        verdict = "still-over" if FILE_LIMIT < before and size <= before else "over"
+        print(f"{verdict}\t{size}\t{relative}")
 
 
 def context_pack(root, context, project, *args):
@@ -372,6 +404,10 @@ def context_pack(root, context, project, *args):
         total += len(data)
         if total > PACK_LIMIT:
             raise ValueError(f"context exceeds 128 KiB once {shown} is added; curate the largest files")
+        if len(data) > FILE_LIMIT // 2:
+            # Seen at every bind, weeks before the refusal, by whoever adds to it next.
+            print(f"! {shown} packs as {len(data)} bytes - past half the 32 KiB a context file"
+                  " may carry; curate it before it refuses a bind", file=sys.stderr)
         files.append(dict(path=str(path.relative_to(root)), sha256=hashlib.sha256(data).hexdigest(),
                           content=data.decode(), classification="private-context"))
     print(json.dumps(dict(version=1, project=project, client=client, group=group, scope=scope,
@@ -393,6 +429,8 @@ def main():
         context_pack(*args)
     elif command == "packed-size":
         packed_size(*args)
+    elif command == "checkpoint-check":
+        checkpoint_check(*args)
     else:
         raise ValueError("unknown state operation")
 

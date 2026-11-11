@@ -1,5 +1,8 @@
 # {{KEY}}
 
+> `ws session bind` packs this file and refuses it over 32 KiB: keep what an agent needs
+> to start here, and move settled detail into notes (`ws note`).
+
 - **Kind:** learning
 - **Registered:** {{DATE}}
 - **Records:** `context/memory/projects/{{KEY}}/` and `context/runs/{{KEY}}/` (a product repository is optional)
