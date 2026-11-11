@@ -2455,6 +2455,43 @@ CP="$(git -C "$WS/context" show --name-only --format= HEAD)"
 printf '%s' "$CP" | grep -q 'clients/beta/tasks/task_client_follow_up.md' \
   && ok "the client's own tasks are checkpointed with its project" || bad "the client's own tasks are checkpointed with its project" "$CP"
 
+section "run close and checkpoint close a run's row in active.md"
+# ws run writes every row as open and nothing else changed one, so the table only grew.
+OA="$WS/context/memory/projects/otherp/active.md"
+WS_SESSION_ID=rca ws run otherp "close me" >/dev/null 2>&1
+RC="$(basename "$(WS_SESSION_ID=rca ws run path otherp)")"
+WS_SESSION_ID=rca check "run close closes this session's run" ws run close otherp
+contains "$OA" "\`$RC\` | tester (testagent) | done |" "the run's row says done"
+WS_SESSION_ID=rca check_fails "run close refuses a state that is not a closed one" \
+  ws run close otherp --state finished
+WS_SESSION_ID=rcnone check_fails "run close without --run needs a run of this session" ws run close otherp
+(cd "$WS" && WS_SESSION_ID=rcother WS_AGENT=otheragent ./.agents/bin/ws run otherp "not yours" >/dev/null 2>&1)
+RO="$(ls "$WS/context/runs/otherp" | grep -- '-not-yours$')"
+WS_SESSION_ID=rca check_fails "run close refuses another agent's run" ws run close otherp --run "$RO"
+WS_SESSION_ID=rcb check "run close takes an earlier run of the same agent by name" \
+  ws run close otherp --run "$RC" --state superseded
+contains "$OA" "\`$RC\` | tester (testagent) | superseded |" "the named run's row says superseded"
+for n in 1 2 3 4; do
+  WS_SESSION_ID=rcd ws run otherp "trim $n" >/dev/null 2>&1
+  WS_SESSION_ID=rcd ws run close otherp >/dev/null 2>&1
+done
+contains "$OA" "trim-4\` | tester (testagent) | done |" "the newest closed run stays in the table"
+contains "$OA" "trim-2\` | tester (testagent) | done |" "up to three closed runs stay"
+lacks "$OA" "\`$RC\`" "older closed runs leave the table when a run closes"
+contains "$OA" "$RO" "an open run stays"
+# The owner already says the run is done in its handoff; the checkpoint takes that.
+WS_SESSION_ID=rce ws run otherp "finish me" >/dev/null 2>&1
+RE="$(WS_SESSION_ID=rce ws run path otherp)"
+printf '# Handoff\n\n## State\n\n`done` - shipped\n\n## What is finished\n\n- it\n' > "$WS/$RE/handoff.md"
+WS_SESSION_ID=rce check "a checkpoint after the handoff says done" ws checkpoint otherp -m "done"
+contains "$OA" "\`$(basename "$RE")\` | tester (testagent) | done |" \
+  "the checkpoint closes the row of a run whose handoff says done"
+WS_SESSION_ID=rcf ws run otherp "still going" >/dev/null 2>&1
+RF="$(WS_SESSION_ID=rcf ws run path otherp)"
+WS_SESSION_ID=rcf check "a checkpoint of a run whose handoff is still the template" ws checkpoint otherp -m "going"
+contains "$OA" "\`$(basename "$RF")\` | tester (testagent) | open |" \
+  "the template's list of every state does not close the row"
+
 section "hard rules reach every agent"
 # One block, repeated in every tool's entry file: a copy that drifts is a rule
 # some agent never sees. Checked against this repository itself.
