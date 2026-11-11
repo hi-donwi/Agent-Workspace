@@ -1173,7 +1173,41 @@ cp "$TMP/own-log.bak" "$PCTX/log.md"
 cp "$PCTX/decisions.md" "$TMP/own-decisions.bak"
 python3 -c "print('x' * 40000)" > "$PCTX/decisions.md"
 WS_SESSION_ID=owncx check_fails "a non-log file over 32 KiB is still refused" ws session bind api
+WS_SESSION_ID=owncx ws session bind api >"$TMP/bind-refused.txt" 2>&1
+contains "$TMP/bind-refused.txt" "projects/acme/api-context/decisions.md" \
+  "the refusal names the file that is too large"
 cp "$TMP/own-decisions.bak" "$PCTX/decisions.md"
+
+# ws run adds a row to active.md's run table for every run and nothing removes an open
+# one, so that table outgrows 32 KiB by itself - and every agent on the project is then
+# refused a bind it cannot fix, since active.md is shared. The pack carries the newest
+# rows; what people wrote around the table is packed whole. A blank line inside the
+# table (a hand edit or a merge leaves them) does not hide the rows after it.
+cp "$PCTX/active.md" "$TMP/own-active.bak"
+python3 - "$PCTX/active.md" <<'PYEOF'
+import sys
+row = lambda i, state: f"| `2026-{1 + i // 28 % 12:02d}-{1 + i % 28:02d}-{i % 24:02d}0000-a-x-run-{i:03d}-{'y' * 60}` | a (claude-code) | {state} |"
+newer = [row(i, "open") for i in range(299, 150, -1)]
+older = [row(i, "done") for i in range(150, -1, -1)]
+open(sys.argv[1], "w").write(
+    "# api - active\n\n- **Current focus:** OWN_ACTIVE_FOCUS\n\n## Active runs\n\n"
+    "| Run | Owner | State |\n|---|---|---|\n" + "\n".join(newer) + "\n\n" + "\n".join(older)
+    + "\n\n## Next up\n\n- OWN_ACTIVE_NEXT\n")
+PYEOF
+WS_SESSION_ID=owncx check "an active.md over 32 KiB only by its run table still binds" ws session bind api
+contains "$WS/.local/sessions/owncx/pack.json" "x-run-299" "the pack keeps the newest runs"
+lacks "$WS/.local/sessions/owncx/pack.json" "x-run-000" "the pack leaves out the oldest runs"
+contains "$WS/.local/sessions/owncx/pack.json" "older rows of the Active runs table omitted" \
+  "the pack says the run table was cut"
+contains "$WS/.local/sessions/owncx/pack.json" "OWN_ACTIVE_FOCUS" "text above the run table is packed"
+contains "$WS/.local/sessions/owncx/pack.json" "OWN_ACTIVE_NEXT" "sections after the run table are packed"
+python3 -c "print('# api - active\n\n## Active runs\n\n| Run | Owner | State |\n|---|---|---|\n| \`2026-09-01-090000-a-x-one\` | a | open |\n\n## Notes\n\n' + 'x' * 40000)" \
+  > "$PCTX/active.md"
+WS_SESSION_ID=owncx check_fails "an active.md whose own text is over 32 KiB is still refused" ws session bind api
+cp "$TMP/own-active.bak" "$PCTX/active.md"
+WS_SESSION_ID=owncx check "a short run table binds again" ws session bind api
+lacks "$WS/.local/sessions/owncx/pack.json" "older rows of the Active runs table omitted" \
+  "a run table under the limit is packed as it is"
 
 # A project without the column must behave exactly as before.
 WS_SESSION_ID=nocx check "a project with no context repo packs unchanged" ws session bind otherp
