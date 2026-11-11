@@ -32,7 +32,9 @@ Ownership rules:
    prints the newest run this session created; `ws run write <key> handoff [--append] < text`
    writes one of its files and refuses a run another session made. A folder name carries
    person and tool, which every parallel session of the same tool shares, so "the newest
-   run with my name in it" can be someone else's.
+   run with my name in it" can be someone else's. `ws run close <key> [--run <id>]
+   [--state done]` marks the run closed in `active.md`'s table and drops closed rows past
+   the newest three; `--run` also takes an earlier run of the same human and tool.
 
 ## Compaction — the transcript folds, the repo does not
 

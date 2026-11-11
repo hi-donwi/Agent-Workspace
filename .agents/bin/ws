@@ -1565,7 +1565,7 @@ cmd_run() {
   # `path` and `write` are subcommands unless a project is registered under that key,
   # so an existing `ws run <key> "title"` never changes meaning.
   case "${1:-}" in
-    path|write)
+    path|write|close)
       if [ -z "$(reg_get "$1")" ]; then
         local sub="$1"; shift
         "run_$sub" "$@"; return
@@ -1635,6 +1635,42 @@ run_path() {
   local entry; entry="$(session_run "${1:-}")"
   [ -n "$entry" ] || die "session $(session_id) created no run${1:+ for $1} - ws run <project-key> \"title\""
   printf '%s\n' "${RUNS#$ROOT/}/$entry"
+}
+
+# Marks a run closed in active.md's run table and drops closed rows past the newest three.
+# ws run writes every row as open, so without this the table only grows. The run is this
+# session's newest, or one named with --run that this session made or whose folder carries
+# this agent's owner id: runs from before sessions were recorded, or from an earlier session
+# of the same agent, which no later session could otherwise close.
+run_close() {
+  local usage='usage: ws run close <project-key> [--run <run-id>] [--state done|dropped|superseded|abandoned|merged|closed]'
+  [ $# -ge 1 ] || die "$usage"
+  local key="$1" run="" state="done"
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --run) [ -n "${2:-}" ] || die "$usage"; run="$2"; shift 2 ;;
+      --state) [ -n "${2:-}" ] || die "$usage"; state="$2"; shift 2 ;;
+      *) die "$usage" ;;
+    esac
+  done
+  validate_key "$key"
+  case "$state" in done|dropped|superseded|abandoned|merged|closed) ;; *) die "$usage" ;; esac
+  if [ -n "$run" ]; then
+    validate_key "$run"
+    if ! grep -qxF "$key/$run" "$(session_dir)/runs" 2>/dev/null; then
+      case "$run" in
+        *-"$(owner_id)"-*) ;;
+        *) die "run $run is not $(owner_id)'s - only its owner closes it" ;;
+      esac
+    fi
+  else
+    run="$(session_run "$key")" || true
+    [ -n "$run" ] || die "session $(session_id) created no run for $key - name one with --run <run-id>"
+    run="${run#$key/}"
+  fi
+  [ -d "$RUNS/$key/$run" ] || die "no run $run in $key"
+  WS_CONTEXT_DIR="$CONTEXT_DIR" python3 "$ROOT/.agents/bin/ws_compact.py" close "$key" "$run" --state "$state"
 }
 
 # Writes stdin to one file of a run this session created, so an agent never edits a
@@ -4520,6 +4556,16 @@ cmd_checkpoint() {
     paths+=("runs/$key/$run")
   done
   [ "${#paths[@]}" -gt 0 ] || { c_dim "- nothing of $owner to checkpoint for $key"; return 0; }
+  # A run whose owner wrote `done` under its handoff's State is closed in active.md's
+  # table here, so the row does not stay `open` for good because nobody ran ws run close.
+  local p closing=()
+  for p in "${paths[@]}"; do
+    case "$p" in runs/*) closing+=("$(basename "$p")") ;; esac
+  done
+  if [ "${#closing[@]}" -gt 0 ]; then
+    WS_CONTEXT_DIR="$CONTEXT_DIR" python3 "$ROOT/.agents/bin/ws_compact.py" close "$key" "${closing[@]}" \
+      || c_ylw "! active.md's run table was left as it was"
+  fi
   if [ -z "$(git -C "$CONTEXT_DIR" status --porcelain -- "${paths[@]}")" ]; then
     c_dim "- $key: nothing changed since the last checkpoint"; return 0
   fi
@@ -4919,6 +4965,9 @@ ws — engineering workspace CLI
   ws run write <key> <file> [--append] [--run <id>] < text
                                     write brief|plan|progress|decisions|evidence|handoff
                                     of a run this session created; others are refused
+  ws run close <key> [--run <id>] [--state <state>]
+                                    mark this agent's run closed in active.md (default
+                                    done); ws checkpoint does it when the handoff says done
   ws log <key> "milestone"         append one row to the project log
   ws note <key> "title" [body|-]   write a project note (notes/<date>-<slug>.md); - reads stdin
   ws task list|add|show|edit|comment|check|status|block|unblock <key>|@<client> ... tasks; --json, --revision

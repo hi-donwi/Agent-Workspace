@@ -115,6 +115,90 @@ def compact_log(text: str, keep: int):
     return '\n'.join(lines[:first] + kept + lines[end:]) + '\n', archived
 
 
+def state_word(value: str) -> str:
+    """The state a State cell or a handoff's State line names: `done - delivered` is done.
+
+    Historical tables annotate terminal states with an explicit separator. Ambiguous
+    phrases such as "done pending review" are not a closed state.
+    """
+    value = value.strip().strip('`* ').lower()
+    return re.split(r'\s+[-–—]\s+|:\s+', value, maxsplit=1)[0].strip('`* ')
+
+
+def close_row(text: str, run: str, state: str, keep_closed: int, overwrite_closed: bool = True):
+    """(new active.md text, dropped rows) with run's row set to `state` and closed rows past
+    the newest keep_closed dropped, or (None, []) when the table has no row for run.
+
+    Without overwrite_closed, a row already closed keeps what it says (`done - delivered`
+    is not rewritten to `done`) and the text comes back unchanged.
+    """
+    lines = text.splitlines()
+    table = run_table(lines)
+    if not table:
+        return None, []
+    _, first, end = table
+    for i in range(first, end):
+        if lines[i].startswith('|') and cells(lines[i])[0].strip('`') == run:
+            row = cells(lines[i])
+            if not overwrite_closed and state_word(row[-1]) in CLOSED_STATES:
+                return text, []
+            row[-1] = state
+            lines[i] = '| ' + ' | '.join(row) + ' |'
+            break
+    else:
+        return None, []
+    text = '\n'.join(lines) + '\n'
+    compacted, dropped = compact_active(text, keep_closed)
+    return (compacted or text), dropped
+
+
+def handoff_state(handoff: Path) -> str:
+    """The state a run's owner left under `## State` in handoff.md, or '' when it still
+    lists every state, as the template does, or names none."""
+    if not handoff.is_file():
+        return ''
+    lines = handoff.read_text(encoding='utf-8').splitlines()
+    start = next((i for i, line in enumerate(lines) if line.strip().lower() == '## state'), None)
+    if start is None:
+        return ''
+    for line in lines[start + 1:]:
+        if line.startswith('## '):
+            return ''
+        if line.strip():
+            return '' if '·' in line else state_word(line)
+    return ''
+
+
+def close_runs(project: str, runs: list, state: str = '', keep_closed: int = 3) -> bool:
+    """Close each run's row in active.md: as `state`, or, with no state, as its handoff's
+    State when that is a closed one (what `ws checkpoint` does for the runs it commits)."""
+    active = CONTEXT / 'memory' / 'projects' / project / 'active.md'
+    if not active.is_file():
+        return True
+    for run in runs:
+        wanted = state or handoff_state(CONTEXT / 'runs' / project / run / 'handoff.md')
+        if wanted not in CLOSED_STATES:
+            continue
+        original = active.read_text(encoding='utf-8')
+        new_text, dropped = close_row(original, run, wanted, keep_closed, overwrite_closed=bool(state))
+        if new_text is None:
+            if state:
+                print(f"- {run} has no row in active.md; nothing to close")
+            continue
+        if new_text == original:
+            continue
+        try:
+            replace_if_unchanged(active, original, new_text)
+        except Changed:
+            print(f"Error: {active} changed while {run} was being closed; run it again.", file=sys.stderr)
+            return False
+        how = '' if state else ' (its handoff says so)'
+        print(f"-> {run} is {wanted} in active.md{how}")
+        if dropped:
+            print(f"   {len(dropped)} older closed run(s) left the table")
+    return True
+
+
 def compact_active(text: str, keep_closed: int):
     """New active.md text and the dropped rows, or (None, []) when nothing changes.
 
@@ -129,14 +213,7 @@ def compact_active(text: str, keep_closed: int):
         return None, []
     _, first, end = table
     rows = [line for line in lines[first:end] if line.startswith('|')]
-
-    def state(row):
-        value = cells(row)[-1].strip('`* ').lower()
-        # Historical tables annotate terminal states with an explicit separator.
-        # Do not treat ambiguous phrases such as "done pending review" as closed.
-        return re.split(r'\s+[-–—]\s+|:\s+', value, maxsplit=1)[0].strip('`* ')
-
-    closed = [i for i, row in enumerate(rows) if state(row) in CLOSED_STATES]
+    closed = [i for i, row in enumerate(rows) if state_word(cells(row)[-1]) in CLOSED_STATES]
     if len(closed) <= keep_closed:
         return None, []
     newest = set(newest_first(rows, closed)[:keep_closed])
@@ -271,6 +348,13 @@ def main():
     p_mem.add_argument("--max-closed-runs", type=int, default=3, help="Number of closed runs to keep in active table")
     p_mem.add_argument("--apply", action="store_true", help="Write the changes (default: dry run)")
 
+    # close command: `ws run close` and `ws checkpoint` call it; ws checks ownership first
+    p_close = subparsers.add_parser("close", help="Close runs' rows in active.md's run table")
+    p_close.add_argument("project", help="Project key")
+    p_close.add_argument("runs", nargs="+", help="Run ids")
+    p_close.add_argument("--state", default="",
+                         help="Closed state to set; without it, each run's handoff State if closed")
+
     # exec command
     p_exec = subparsers.add_parser("exec", help="Run a command with smart output condensation")
     p_exec.add_argument("--max-lines", type=int, default=60, help="Max output lines before condensing")
@@ -282,6 +366,9 @@ def main():
 
     if args.command == "memory":
         ok = compact_memory(args.project, args.max_milestones, args.max_closed_runs, args.apply)
+        sys.exit(0 if ok else 1)
+    elif args.command == "close":
+        ok = KEY_RE.fullmatch(args.project) and close_runs(args.project, args.runs, args.state)
         sys.exit(0 if ok else 1)
     elif args.command == "exec":
         if not args.cmd:
