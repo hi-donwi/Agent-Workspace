@@ -107,7 +107,11 @@ cover the other.
    that says how much was left out. Everything people wrote around that table is packed
    whole. `ws doctor` measures `project.md`, `active.md`, and `decisions.md` as packed:
    it warns past 16 KiB and fails over 32 KiB, and the fix is curating that file, not
-   this command. This command reads every row under `## Active runs`, including rows
+   this command. The same limit stops the writer earlier: `ws session bind` names any
+   packed file past 16 KiB, and `ws checkpoint` refuses the change that takes a packed
+   file over 32 KiB (see `docs/memory-and-runs.md`). `ws run close`, and `ws checkpoint`
+   for a run whose handoff says `done`, close a run's row and drop older closed ones, so
+   the table no longer grows by one `open` row per run for good. This command reads every row under `## Active runs`, including rows
    after a blank line inside the table. It only touches closed/done/dropped/merged/
    abandoned/superseded rows, including annotations separated by ` - `, ` – `, ` — `,
    or `: ` (for example, `done - delivered`). Ambiguous states such as `done pending review`

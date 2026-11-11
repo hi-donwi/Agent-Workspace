@@ -1,11 +1,15 @@
 # Handoff — {{TITLE}}
 
 **This is the first file the next agent or developer reads.** Keep it current; it is the
-run's deliverable as much as the code.
+run's deliverable as much as the code. `ws session bind --run` packs it and refuses it
+over 32 KiB, so link evidence (`evidence.md`) instead of pasting it.
 
 ## State
 
 `not started` · `in progress` · `blocked` · `ready for review` · `done`
+
+Replace the line above with the one state that holds. `done` closes this run's row in
+active.md at the next `ws checkpoint`.
 
 ## What is finished
 

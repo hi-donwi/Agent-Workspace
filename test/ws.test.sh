@@ -1208,6 +1208,13 @@ cp "$TMP/own-active.bak" "$PCTX/active.md"
 WS_SESSION_ID=owncx check "a short run table binds again" ws session bind api
 lacks "$WS/.local/sessions/owncx/pack.json" "older rows of the Active runs table omitted" \
   "a run table under the limit is packed as it is"
+# Past half the limit, the bind still works and says which file is on its way to a refusal.
+python3 -c "print('x' * 20000)" > "$PCTX/decisions.md"
+WS_SESSION_ID=owncx check "a file past half the pack limit still binds" ws session bind api
+WS_SESSION_ID=owncx ws session bind api >"$TMP/bind-near.txt" 2>&1
+contains "$TMP/bind-near.txt" "projects/acme/api-context/decisions.md packs as" \
+  "the bind names a file past half the pack limit"
+cp "$TMP/own-decisions.bak" "$PCTX/decisions.md"
 
 # A project without the column must behave exactly as before.
 WS_SESSION_ID=nocx check "a project with no context repo packs unchanged" ws session bind otherp
@@ -2454,6 +2461,42 @@ WS_SESSION_ID=cpa check "a checkpoint after adding a client task" ws checkpoint 
 CP="$(git -C "$WS/context" show --name-only --format= HEAD)"
 printf '%s' "$CP" | grep -q 'clients/beta/tasks/task_client_follow_up.md' \
   && ok "the client's own tasks are checkpointed with its project" || bad "the client's own tasks are checkpointed with its project" "$CP"
+
+section "checkpoint stops the writer of a file the context pack would refuse"
+# A file over 32 KiB as packed refuses the next agent's bind, and that agent neither wrote
+# it nor may curate it. The checkpoint that puts it there is the one refused instead.
+WS_SESSION_ID=cpz ws run otherp "grow a file" >/dev/null 2>&1
+RZ="$(WS_SESSION_ID=cpz ws run path otherp)"
+python3 -c "print('x' * 20000)" > "$WS/$RZ/handoff.md"
+OUT="$(WS_SESSION_ID=cpz ws checkpoint otherp -m 'near' 2>&1)"
+printf '%s' "$OUT" | grep -q "> checkpoint " \
+  && ok "a file past half the pack limit is still checkpointed" \
+  || bad "a file past half the pack limit is still checkpointed" "$OUT"
+printf '%s' "$OUT" | grep -q "$RZ/handoff.md.*past half the 32 KiB pack limit" \
+  && ok "the checkpoint warns about it by name" || bad "the checkpoint warns about it by name" "$OUT"
+HEAD_BEFORE="$(git -C "$WS/context" rev-parse HEAD)"
+python3 -c "print('x' * 40000)" > "$WS/$RZ/handoff.md"
+WS_SESSION_ID=cpz check_fails "a checkpoint that takes a packed file over 32 KiB is refused" \
+  ws checkpoint otherp -m "over"
+OUT="$(WS_SESSION_ID=cpz ws checkpoint otherp -m 'over' 2>&1)"
+printf '%s' "$OUT" | grep -q "$RZ/handoff.md.*over the 32 KiB pack limit" \
+  && ok "the refusal names the file" || bad "the refusal names the file" "$OUT"
+equals "$(git -C "$WS/context" rev-parse HEAD)" "$HEAD_BEFORE" "a refused checkpoint commits nothing"
+# A file already over at HEAD that this checkpoint does not grow is someone else's to
+# curate: refusing it would stop every checkpoint on the project, which is the bind
+# failure moved, not fixed.
+git -C "$WS/context" add -A -- "${RZ#context/}" && git -C "$WS/context" commit -qm "oversize fixture" -- "${RZ#context/}"
+printf 'more plan\n' >> "$WS/$RZ/plan.md"
+OUT="$(WS_SESSION_ID=cpz ws checkpoint otherp -m 'not grown' 2>&1)"
+printf '%s' "$OUT" | grep -q "already over" \
+  && ok "a file already over, not grown, is a warning" || bad "a file already over, not grown, is a warning" "$OUT"
+[ "$(git -C "$WS/context" rev-parse HEAD)" != "$HEAD_BEFORE" ] \
+  && ok "and the checkpoint goes through" || bad "and the checkpoint goes through" "$OUT"
+printf 'yyyy\n' >> "$WS/$RZ/handoff.md"
+WS_SESSION_ID=cpz check_fails "a checkpoint that grows a file already over is refused" \
+  ws checkpoint otherp -m "grown"
+printf '# small\n' > "$WS/$RZ/handoff.md"
+WS_SESSION_ID=cpz check "a curated file checkpoints again" ws checkpoint otherp -m "curated"
 
 section "run close and checkpoint close a run's row in active.md"
 # ws run writes every row as open and nothing else changed one, so the table only grew.
