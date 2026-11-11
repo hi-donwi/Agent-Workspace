@@ -54,6 +54,42 @@ def find_table(lines: list, header: str, start: int = 0, section: bool = False):
     return None
 
 
+def run_table(lines: list):
+    """(header, first_row, end) of the run table under active.md's `## Active runs`, or None.
+
+    Rows run on past blank lines until the section ends or prose begins. A blank line ends
+    a Markdown table, but hand edits and merges leave them inside this one, and the rows
+    after it are still runs: reading only the first fragment once reported a table full of
+    done runs as clean. Lines may keep their line endings.
+    """
+    heading = next((i for i, line in enumerate(lines) if line.strip().lower() == '## active runs'), None)
+    if heading is None:
+        return None
+    table = find_table(lines, 'run', heading + 1, section=True)
+    if not table:
+        return None
+    first, end = table
+    i = end
+    while i < len(lines) and not lines[i].startswith('## '):
+        if lines[i].startswith('|'):
+            end = i + 1
+        elif lines[i].strip():
+            break
+        i += 1
+    return first - 2, first, end
+
+
+def run_stamp(row: str) -> str:
+    found = RUN_STAMP_RE.search(cells(row)[0])
+    return found.group(0) if found else ''
+
+
+def newest_first(lines: list, indices) -> list:
+    """The indices of run rows, newest first: by the run id's timestamp, then position,
+    because `ws run` inserts new rows at the top."""
+    return sorted(indices, key=lambda i: (run_stamp(lines[i]), -i), reverse=True)
+
+
 def compact_log(text: str, keep: int):
     """New log.md text and the archived rows, or (None, []) when nothing changes.
 
@@ -84,17 +120,15 @@ def compact_active(text: str, keep_closed: int):
 
     Only rows whose State column is a closed state are candidates; the newest
     `keep_closed` of them stay. Newest is the run id's timestamp, then position:
-    `ws run` inserts new rows at the top. Every line outside the table stays.
+    `ws run` inserts new rows at the top. Every line outside the table stays; blank lines
+    between its rows go, so the rows that stay form one table again.
     """
     lines = text.splitlines()
-    heading = next((i for i, line in enumerate(lines) if line.strip().lower() == '## active runs'), None)
-    if heading is None:
-        return None, []
-    table = find_table(lines, 'run', heading + 1, section=True)
+    table = run_table(lines)
     if not table:
         return None, []
-    first, end = table
-    rows = lines[first:end]
+    _, first, end = table
+    rows = [line for line in lines[first:end] if line.startswith('|')]
 
     def state(row):
         value = cells(row)[-1].strip('`* ').lower()
@@ -102,14 +136,10 @@ def compact_active(text: str, keep_closed: int):
         # Do not treat ambiguous phrases such as "done pending review" as closed.
         return re.split(r'\s+[-–—]\s+|:\s+', value, maxsplit=1)[0].strip('`* ')
 
-    def stamp(i):
-        found = RUN_STAMP_RE.search(cells(rows[i])[0])
-        return found.group(0) if found else ''
-
     closed = [i for i, row in enumerate(rows) if state(row) in CLOSED_STATES]
     if len(closed) <= keep_closed:
         return None, []
-    newest = set(sorted(closed, key=lambda i: (stamp(i), -i), reverse=True)[:keep_closed])
+    newest = set(newest_first(rows, closed)[:keep_closed])
     gone = {i for i in closed if i not in newest}
     kept = [row for i, row in enumerate(rows) if i not in gone]
     return '\n'.join(lines[:first] + kept + lines[end:]) + '\n', [rows[i] for i in sorted(gone)]
