@@ -106,7 +106,8 @@ def load_source(source_id: str, root: str | Path, *, writable: bool = True) -> T
     return TaskSource(source_id, base, writable)
 
 
-def load_tasks(source: TaskSource) -> tuple[list[TaskRecord], list[LegacyCandidate]]:
+def load_tasks(source: TaskSource, *, scopes: Iterable[str] | None = None) -> tuple[list[TaskRecord], list[LegacyCandidate]]:
+    """Load all task records, or only records stored in the requested project/client scopes."""
     tasks: list[TaskRecord] = []
     legacy: list[LegacyCandidate] = []
     seen: dict[str, TaskRecord] = {}
@@ -114,17 +115,28 @@ def load_tasks(source: TaskSource) -> tuple[list[TaskRecord], list[LegacyCandida
     clients_root = source.root / "clients"
     # Project tasks under tasks/<key>/; a client's own tasks under clients/<c>/tasks/ (ADR-0024).
     paths: list[Path] = []
-    if tasks_root.exists():
-        for candidate in tasks_root.rglob("*"):
-            if candidate.is_symlink():
-                raise TaskError("symlinks are not allowed in task source")
-        paths.extend(tasks_root.glob("**/*.md"))
-    if clients_root.exists():
-        for folder in clients_root.glob("*/tasks"):
-            for candidate in [folder, *folder.rglob("*")]:
+    if scopes is None:
+        if tasks_root.exists():
+            for candidate in tasks_root.rglob("*"):
                 if candidate.is_symlink():
                     raise TaskError("symlinks are not allowed in task source")
-            paths.extend(folder.glob("*.md"))
+            paths.extend(tasks_root.glob("**/*.md"))
+        if clients_root.exists():
+            for folder in clients_root.glob("*/tasks"):
+                for candidate in [folder, *folder.rglob("*")]:
+                    if candidate.is_symlink():
+                        raise TaskError("symlinks are not allowed in task source")
+                paths.extend(folder.glob("*.md"))
+    else:
+        for scope in sorted(set(scopes)):
+            folder = _scope_dir(source, scope)
+            if folder.is_symlink():
+                raise TaskError("symlinks are not allowed in task source")
+            if not folder.exists():
+                continue
+            if any(candidate.is_symlink() for candidate in folder.rglob("*")):
+                raise TaskError("symlinks are not allowed in task source")
+            paths.extend(folder.glob("*.md") if scope.startswith("@") else folder.glob("**/*.md"))
     for path in sorted(paths):
         if not path.is_file():
             continue
@@ -617,8 +629,21 @@ def registry_clients(source: TaskSource) -> dict[str, str]:
 def project_tasks(source: TaskSource, project: str) -> list[TaskRecord]:
     """The tasks of one scope: a project key, or @<client> for the client's own tasks."""
     key, client = parse_scope(project)
-    tasks, _ = load_tasks(source)
+    tasks, _ = load_tasks(source, scopes=[project])
     return sorted((task for task in tasks if task.project == key and task.client == client), key=lambda task: task.id)
+
+
+def task_scopes(source: TaskSource, project: str | None = None, client: str = "") -> list[str] | None:
+    """Filesystem scopes needed for a query; None means an intentional all-source query."""
+    if project is not None:
+        parse_scope(project)
+        return [project]
+    if client:
+        if not _is_key(client):
+            raise TaskError(f"invalid client key '{client}'")
+        owners = registry_clients(source)
+        return sorted([f"@{client}", *(key for key, owner in owners.items() if owner == client)])
+    return None
 
 
 def create_task(
@@ -946,7 +971,7 @@ def list_tasks(source: TaskSource, project: str | None = None, *, status: Iterab
     statuses = set(status)
     owners = registry_clients(source) if client else {}
     found = [
-        task for task in load_tasks(source)[0]
+        task for task in load_tasks(source, scopes=task_scopes(source, project, client))[0]
         if (project is None or _scope_of(task) == project)
         and (not client or task.client == client or owners.get(task.project) == client)
         and (not statuses or task.status in statuses)
@@ -1085,7 +1110,8 @@ def main(argv: list[str]) -> int:
         if opts.kind:
             found = [task for task in found if task.kind == opts.kind]
         if opts.json:
-            owners, everything = registry_clients(source), load_tasks(source)[0]
+            owners = registry_clients(source)
+            everything = load_tasks(source, scopes=task_scopes(source, project, opts.client))[0]
             print(json.dumps({"tasks": [task_json(task, owners, everything) for task in found]}, indent=2, sort_keys=True))
         else:
             for task in found:

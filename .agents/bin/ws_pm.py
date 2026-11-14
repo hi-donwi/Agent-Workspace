@@ -17,7 +17,9 @@ import re
 import sys
 import tempfile
 
-from ws_tasks import ACTIVITY_RE, TaskError, TaskRecord, activity, load_source, load_tasks, registry_clients, task_json
+from ws_tasks import (
+    ACTIVITY_RE, TaskError, TaskRecord, activity, load_source, load_tasks, registry_clients, task_json, task_scopes,
+)
 
 DEFAULTS = {
     "stale_days": 5,
@@ -169,7 +171,7 @@ def compute_alerts(context_root: str | Path, workspace_root: str | Path, now: da
     owners = registry_clients(source)
     limits = thresholds(context_root)
     alerts: list[Alert] = []
-    for task in load_tasks(source)[0]:
+    for task in load_tasks(source, scopes=task_scopes(source, scope, client))[0]:
         alerts.extend(_task_alerts(task, task.client or owners.get(task.project, ""), now, limits))
     alerts.extend(_approval_alerts(Path(workspace_root), owners, now))
     alerts.extend(_agent_alerts(Path(workspace_root), owners, now, limits))
@@ -225,7 +227,7 @@ def today(context_root: str | Path, workspace_root: str | Path, now: datetime, *
     owners = registry_clients(source)
     scope, client = filters.get("scope"), filters.get("client", "")
     in_hand = [
-        task_json(task, owners) for task in load_tasks(source)[0]
+        task_json(task, owners) for task in load_tasks(source, scopes=task_scopes(source, scope, client))[0]
         if task.status == "in_progress"
         and (not scope or (task.project or f"@{task.client}") == scope)
         and (not client or (task.client or owners.get(task.project, "")) == client)
@@ -307,7 +309,7 @@ def client_dossier(context_root: str | Path, workspace_root: str | Path, client:
     fields = {m.group(1).strip(): m.group(2).strip() for m in (FIELD_RE.fullmatch(line.strip()) for line in text.splitlines()) if m}
     source = load_source("context", context_root)
     owners = registry_clients(source)
-    tasks = load_tasks(source)[0]
+    tasks = load_tasks(source, scopes=task_scopes(source, client=client))[0]
     today_ = now.date().isoformat()
     open_tasks = [t for t in tasks if t.status != "done" and (t.client == client or owners.get(t.project) == client)]
     projects = [
@@ -359,7 +361,8 @@ def digest(context_root: str | Path, workspace_root: str | Path, project: str, n
     source = load_source("context", context_root)
     owners = registry_clients(source)
     client = owners.get(project, "")
-    everything = load_tasks(source)[0]
+    scopes = [project, *([f"@{client}"] if client and client != "-" else [])]
+    everything = load_tasks(source, scopes=scopes)[0]
     mine = [t for t in everything if t.status != "done" and (t.project == project or (client and t.client == client))]
     soon = (now.date() + timedelta(days=7)).isoformat()
     groups = [

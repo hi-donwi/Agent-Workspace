@@ -103,6 +103,21 @@ class Alerts(unittest.TestCase):
         self.assertEqual([a.ref for a in compute_alerts(self.context, self.root, NOW, scope="api")], ["task_a"])
         self.assertEqual(sorted(a.ref for a in compute_alerts(self.context, self.root, NOW, client="acme")), ["task_a", "task_c"])
 
+    def test_scoped_alerts_and_digest_ignore_an_unrelated_malformed_task(self):
+        self.task("task_scoped", "api", "Scoped", status="in_progress", extra="due: 2026-10-15\n")
+        self.task("task_other", "web", "Unrelated")
+        other = self.context / "tasks" / "web" / "task_other.md"
+        other.write_text(other.read_text().replace("git_links:\n", "git_links: invalid\n"))
+
+        alerts = compute_alerts(self.context, self.root, NOW, scope="api")
+        day = today(self.context, self.root, NOW, scope="api")
+        work = digest(self.context, self.root, "api", NOW)
+
+        self.assertEqual([alert.ref for alert in alerts], ["task_scoped"])
+        self.assertEqual(day["signals"]["overdue"], 1)
+        self.assertIn("Scoped", work)
+        self.assertNotIn("Unrelated", work)
+
     def test_a_snooze_hides_an_alert_until_its_time(self):
         self.task("task_late", "api", "Late", extra="due: 2026-10-15\n")
         snooze(self.root, "overdue:api:task_late", datetime.fromisoformat("2026-10-17T12:00:00+07:00"), NOW)
@@ -158,6 +173,9 @@ class ClientDossier(unittest.TestCase):
         (acme / "tasks/task_report.md").write_text(task_doc("task_report", "@acme", "Send the report", extra="due: 2026-10-20\n"))
 
     def test_the_dossier_carries_profile_work_and_interactions_but_never_restricted_records(self):
+        other = self.context / "tasks" / "web" / "task_bad_links.md"
+        other.parent.mkdir(parents=True, exist_ok=True)
+        other.write_text(task_doc("task_bad_links", "web", "Unrelated").replace("git_links:\n", "git_links: invalid\n"))
         log_interaction(self.context, "acme", "Call: agreed phase 2 scope", actor="dw-cli")
         dossier = client_dossier(self.context, self.root, "acme", NOW)
         self.assertEqual(dossier["profile"]["fields"]["Full name"], "Acme Logistics")
