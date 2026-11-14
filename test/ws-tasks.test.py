@@ -324,6 +324,23 @@ class TaskSchemaVersion2(unittest.TestCase):
         self.assertEqual([t.title for t in list_tasks(self.source, label="copy")], ["Landing copy"])
         self.assertEqual([t.title for t in list_tasks(self.source, due_before="2026-10-25")], ["Export CSV"])
 
+    def test_scoped_project_list_does_not_parse_an_unrelated_malformed_task(self):
+        task = create_task(self.source, "api", "Export CSV", "normal", "dw-cli", actor="x")
+        invalid = VALID_TASK.replace("project: workspace", "project: web").replace(
+            "git_links:\n  - workspace@abcdef1", "git_links: invalid"
+        )
+        bad_path = self.root / "tasks" / "web" / "task_bad_links.md"
+        bad_path.parent.mkdir(parents=True, exist_ok=True)
+        bad_path.write_text(invalid)
+
+        self.assertEqual([item.id for item in list_tasks(self.source, "api")], [task.id])
+        with self.assertRaisesRegex(TaskError, "git_links must be a list"):
+            list_tasks(self.source, "web")
+        with self.assertRaisesRegex(TaskError, "git_links must be a list"):
+            load_tasks(self.source)
+        with self.assertRaisesRegex(TaskError, "git_links must be a list"):
+            list_tasks(self.source)
+
     def test_show_and_list_print_json_for_agents(self):
         task = create_task(self.source, "api", "Export CSV", "high", "dw-cli", due="2026-10-20", actor="x")
         script = str(SOURCE / ".agents/bin/ws_tasks.py")
@@ -377,6 +394,16 @@ class ClientTasksAndReminders(unittest.TestCase):
         import json as _json
         clients = {t["title"]: t["client"] for t in _json.loads(listed.stdout)["tasks"]}
         self.assertEqual(clients, {"Export CSV": "acme", "Landing copy": "beta", "Invoice pack": "acme"})
+
+    def test_client_filter_ignores_malformed_other_clients_project_tasks(self):
+        task = create_task(self.source, "api", "Export CSV", "normal", "dw-cli", actor="x")
+        invalid = VALID_TASK.replace("project: workspace", "project: web").replace(
+            "git_links:\n  - workspace@abcdef1", "git_links: invalid"
+        )
+        path = self.root / "tasks" / "web" / "task_bad_links.md"
+        path.write_text(invalid)
+
+        self.assertEqual([item.id for item in list_tasks(self.source, client="acme")], [task.id])
 
     def test_a_reminder_is_a_task_with_a_time(self):
         reminder = create_reminder(self.source, "@beta", "Call about phase 2", "2026-10-20 14:00", actor="x")

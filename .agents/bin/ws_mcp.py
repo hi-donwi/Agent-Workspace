@@ -23,7 +23,7 @@ from typing import Any
 from ws_pm import active_alerts, client_dossier, today
 from ws_tasks import (
     TaskError, _task, change_status, check_item, comment_task, create_task, edit_task, list_tasks, load_source,
-    load_tasks, parse_scope, registry_clients, set_blocked, task_json,
+    load_tasks, parse_scope, project_tasks, registry_clients, set_blocked, task_json,
 )
 
 SUPPORTED = ("2025-06-18", "2025-03-26", "2024-11-05")
@@ -123,7 +123,8 @@ class Session:
 
     def task(self, scope: str, task_id: str) -> dict[str, object]:
         source = load_source("context", self.context)
-        return task_json(_task(source, scope, task_id, None), registry_clients(source), load_tasks(source)[0])
+        everything = project_tasks(source, scope)
+        return task_json(_task(source, scope, task_id, None), registry_clients(source), everything)
 
     def client(self) -> str:
         default, allowed = self.scopes()
@@ -152,7 +153,7 @@ def call_tool(session: Session, name: str, args: dict[str, Any]) -> object:
                            label=args.get("label", ""), due_before=args.get("due_before", ""))
         if args.get("kind"):
             found = [task for task in found if task.kind == args["kind"]]
-        owners, everything = registry_clients(source), load_tasks(source)[0]
+        owners, everything = registry_clients(source), load_tasks(source, scopes=[scope])[0]
         return {"tasks": [task_json(task, owners, everything) for task in found]}
     if name == "pm_get_task":
         return session.task(scope, args["task_id"])

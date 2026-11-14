@@ -134,6 +134,16 @@ class McpServer(unittest.TestCase):
         self.assertEqual(profile["client"], "acme")
         self.assertEqual(profile["restricted"]["contacts"], True)
 
+    def test_scoped_reads_ignore_a_malformed_task_from_an_unrelated_client(self):
+        other = self.context / "tasks" / "web" / "task_other.md"
+        other.write_text(other.read_text().replace("git_links:\n", "git_links: invalid\n"))
+        server = self.server()
+
+        for tool, args in (("pm_list_tasks", {}), ("pm_get_task", {"task_id": "task_fix_login"}),
+                           ("pm_today", {}), ("pm_alerts", {}), ("client_profile", {})):
+            error, result = server.call(tool, args)
+            self.assertFalse(error, f"{tool}: {result}")
+
     def test_without_a_bind_it_refuses_and_a_fixed_project_overrides(self):
         (self.session / "bind").unlink()
         error, message = self.server().call("pm_list_tasks")
